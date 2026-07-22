@@ -12,31 +12,47 @@ import (
 // present, returning its remote path. Checksum-named paths make version
 // handshakes unnecessary: a new build is a new filename.
 func Bootstrap(ctx context.Context, conn Connection, remoteTmp string) (string, error) {
-	res, err := conn.Exec(ctx, "uname -sm", ExecOptions{})
+	// One probe resolves platform and the concrete home/user (candidate
+	// paths must be literal so quoting is consistent everywhere).
+	res, err := conn.Exec(ctx, `uname -sm && echo "$HOME" && echo "$USER"`, ExecOptions{})
 	if err != nil {
 		return "", err
 	}
-	goos, goarch, err := parseUname(strings.TrimSpace(string(res.Stdout)))
+	lines := strings.Split(strings.TrimSpace(string(res.Stdout)), "\n")
+	if len(lines) < 3 {
+		return "", fmt.Errorf("unexpected platform-probe output %q", string(res.Stdout))
+	}
+	goos, goarch, err := parseUname(strings.TrimSpace(lines[0]))
 	if err != nil {
 		return "", err
 	}
+	home := strings.TrimSpace(lines[1])
+	user := strings.TrimSpace(lines[2])
 	ag, err := embedded.Agent(goos, goarch)
 	if err != nil {
 		return "", err
 	}
 
 	name := fmt.Sprintf("agent-%s-%s-%s", ag.Sha12, goos, goarch)
-	candidates := []string{`"$HOME"/.understudy`, `/tmp/.understudy-"$USER"`, "/var/tmp/.understudy"}
+	var candidates []string
 	if remoteTmp != "" {
-		candidates = append([]string{remoteTmp}, candidates...)
+		candidates = append(candidates, remoteTmp)
 	}
+	if home != "" {
+		candidates = append(candidates, home+"/.understudy")
+	}
+	if user != "" {
+		candidates = append(candidates, "/tmp/.understudy-"+user)
+	}
+	candidates = append(candidates, "/var/tmp/.understudy")
 
 	var lastErr error
 	for _, dir := range candidates {
 		path := dir + "/" + name
+		q := ShellQuote(path)
 		// Present and executable? The checksum in the name vouches for
 		// integrity (verified at upload time).
-		probe, err := conn.Exec(ctx, fmt.Sprintf(`test -x %s && %s version`, path, path), ExecOptions{})
+		probe, err := conn.Exec(ctx, fmt.Sprintf(`test -x %s && %s version`, q, q), ExecOptions{})
 		if err != nil {
 			return "", err
 		}
@@ -50,7 +66,7 @@ func Bootstrap(ctx context.Context, conn Connection, remoteTmp string) (string, 
 		}
 		// The real proof: it executes (catches noexec mounts that accept
 		// writes happily).
-		probe, err = conn.Exec(ctx, path+" version", ExecOptions{})
+		probe, err = conn.Exec(ctx, q+" version", ExecOptions{})
 		if err != nil {
 			return "", err
 		}
