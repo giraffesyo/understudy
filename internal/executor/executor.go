@@ -210,17 +210,39 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 		r.Store.AddVarsFile(m)
 	}
 
-	playHosts, err := r.resolvePlayHosts(play)
+	allHosts, err := r.resolvePlayHosts(play)
 	if err != nil {
 		return err
 	}
-	if len(playHosts) == 0 {
+	if len(allHosts) == 0 {
 		fmt.Println("skipping: no hosts matched")
 		return nil
 	}
 
-	// Ansible runs pre_tasks, tasks, post_tasks as separate sections with a
-	// handler flush after each.
+	// serial: batches roll through the play; the whole play runs for each
+	// batch before the next starts. A batch that breaches
+	// max_fail_percentage aborts the play.
+	batches := batchHosts(allHosts, play.Serial)
+	for bi, batch := range batches {
+		if len(batches) > 1 && bi > 0 {
+			r.Callback.PlayStart(play) // Ansible reprints the banner per batch
+		}
+		err := r.runPlayBatch(ctx, play, batch)
+		if err == errBatchAborted || r.batchBreached(batch, play.MaxFailPercentage) {
+			fmt.Printf("NO MORE HOSTS LEFT: batch failure exceeded max_fail_percentage (%.0f%%); aborting play\n",
+				play.MaxFailPercentage)
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// runPlayBatch runs the full play (facts + sections + handler flushes) for
+// one batch of hosts.
+func (r *Runner) runPlayBatch(ctx context.Context, play *playbook.Play, playHosts []string) error {
 	r.resetNotified()
 	r.mu.Lock()
 	r.blockFailed = map[string]map[int]bool{}
@@ -244,6 +266,83 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 		}
 	}
 	return nil
+}
+
+// batchHosts splits hosts into serial batches. An empty spec yields one
+// batch of all hosts. Numeric entries are host counts; "N%" entries are
+// percentages (rounded down, minimum 1). The last size repeats until all
+// hosts are consumed.
+func batchHosts(hosts []string, serial []any) [][]string {
+	if len(serial) == 0 {
+		return [][]string{hosts}
+	}
+	total := len(hosts)
+	sizeAt := func(i int) int {
+		spec := serial[i]
+		var n int
+		switch t := spec.(type) {
+		case string:
+			if pct, ok := parsePercent(t, total); ok {
+				n = pct
+			}
+		case int64:
+			n = int(t)
+		case int:
+			n = t
+		case float64:
+			n = int(t)
+		}
+		if n < 1 {
+			n = 1
+		}
+		return n
+	}
+
+	var batches [][]string
+	pos := 0
+	idx := 0
+	for pos < total {
+		size := sizeAt(min(idx, len(serial)-1))
+		end := min(pos+size, total)
+		batches = append(batches, hosts[pos:end])
+		pos = end
+		idx++
+	}
+	return batches
+}
+
+func parsePercent(s string, total int) (int, bool) {
+	s = strings.TrimSpace(s)
+	if !strings.HasSuffix(s, "%") {
+		return 0, false
+	}
+	var pct float64
+	if _, err := fmt.Sscanf(strings.TrimSuffix(s, "%"), "%f", &pct); err != nil {
+		return 0, false
+	}
+	n := int(float64(total) * pct / 100.0)
+	if n < 1 {
+		n = 1
+	}
+	return n, true
+}
+
+// batchBreached reports whether a batch's failure/unreachable count exceeds
+// max_fail_percentage (>=0). Ansible aborts when failures are STRICTLY
+// greater than the threshold.
+func (r *Runner) batchBreached(batch []string, maxFailPct float64) bool {
+	if maxFailPct < 0 || len(batch) == 0 {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	failed := 0
+	for _, h := range batch {
+		if st := r.stats[h]; st != nil && (st.Failed > 0 || st.Unreachable > 0) {
+			failed++
+		}
+	}
+	return float64(failed)/float64(len(batch))*100.0 > maxFailPct
 }
 
 const maxIncludeDepth = 100
@@ -285,9 +384,19 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 			continue
 		}
 		r.runTaskAcrossHosts(ctx, play, task, active, playHosts, false)
+
+		// max_fail_percentage is evaluated after each task: too many failed
+		// hosts in the batch aborts the play immediately.
+		if r.batchBreached(playHosts, play.MaxFailPercentage) {
+			return errBatchAborted
+		}
 	}
 	return nil
 }
+
+// errBatchAborted signals that max_fail_percentage was breached; it is not
+// a real error, just a stop signal handled in runPlay.
+var errBatchAborted = fmt.Errorf("batch aborted (max_fail_percentage exceeded)")
 
 func intersect(a, b []string) []string {
 	keep := make(map[string]bool, len(b))

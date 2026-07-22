@@ -5,6 +5,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -853,4 +854,105 @@ func inventoryMust(t *testing.T) *inventory.Inventory {
 		t.Fatal(err)
 	}
 	return inv
+}
+
+// runMulti runs a playbook across N local hosts (h0..hN-1).
+func runMulti(t *testing.T, n int, src string, opts executor.Options) (int, string, map[string]*executor.HostStats) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.yml")
+	os.WriteFile(path, []byte(src), 0o644)
+	plays, err := playbook.LoadFile(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if opts.BaseDir == "" {
+		opts.BaseDir = dir
+	}
+	opts.Connection = "local"
+	var hosts []string
+	for i := 0; i < n; i++ {
+		hosts = append(hosts, fmt.Sprintf("h%d,", i))
+	}
+	inv, err := inventory.Load([]string{strings.Join(hosts, "")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	cb := &callback.Default{Out: &buf, NoColor: true}
+	r := executor.NewRunner(inv, cb, opts)
+	code, err := r.Run(context.Background(), plays)
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, buf.String())
+	}
+	return code, buf.String(), r.Stats()
+}
+
+func TestSerialBatching(t *testing.T) {
+	// 5 hosts, serial 2 -> batches [h0,h1] [h2,h3] [h4]. The play banner
+	// reprints per batch, so 3 PLAY banners appear.
+	code, out, stats := runMulti(t, 5, `
+- name: rolling
+  hosts: all
+  gather_facts: false
+  serial: 2
+  tasks:
+    - debug: {msg: "on {{ inventory_hostname }}"}
+`, executor.Options{})
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s", code, out)
+	}
+	if got := strings.Count(out, "PLAY [rolling]"); got != 3 {
+		t.Errorf("expected 3 play banners (3 batches), got %d:\n%s", got, out)
+	}
+	for i := 0; i < 5; i++ {
+		if st := stats[fmt.Sprintf("h%d", i)]; st == nil || st.OK != 1 {
+			t.Errorf("h%d stats = %+v", i, st)
+		}
+	}
+}
+
+func TestMaxFailPercentageAborts(t *testing.T) {
+	// 4 hosts; h1 fails; max_fail_percentage 20 (>20% of a batch aborts).
+	// serial 4 = one batch of 4, 1/4 = 25% > 20% -> the play aborts before
+	// the second task, so "second task" never runs on the survivors.
+	code, out, _ := runMulti(t, 4, `
+- hosts: all
+  gather_facts: false
+  serial: 4
+  max_fail_percentage: 20
+  tasks:
+    - name: maybe fail
+      shell: "test '{{ inventory_hostname }}' != 'h1'"
+    - name: second task
+      debug: {msg: "reached second on {{ inventory_hostname }}"}
+`, executor.Options{})
+	if code != 2 {
+		t.Errorf("exit=%d, want 2 (a host failed)\n%s", code, out)
+	}
+	if strings.Contains(out, "reached second") {
+		t.Errorf("play should have aborted after the failing batch:\n%s", out)
+	}
+}
+
+func TestMaxFailPercentageTolerated(t *testing.T) {
+	// Same failure but threshold 50: 25% <= 50%, play continues.
+	code, out, _ := runMulti(t, 4, `
+- hosts: all
+  gather_facts: false
+  serial: 4
+  max_fail_percentage: 50
+  tasks:
+    - name: maybe fail
+      shell: "test '{{ inventory_hostname }}' != 'h1'"
+    - name: second task
+      debug: {msg: "reached second on {{ inventory_hostname }}"}
+`, executor.Options{})
+	if code != 2 {
+		t.Errorf("exit=%d, want 2 (h1 still failed)\n%s", code, out)
+	}
+	// The 3 survivors continue to the second task.
+	if strings.Count(out, "reached second") != 3 {
+		t.Errorf("survivors should reach the second task (want 3):\n%s", out)
+	}
 }
