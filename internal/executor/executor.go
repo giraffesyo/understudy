@@ -67,11 +67,13 @@ type Runner struct {
 	Opts     Options
 	Limit    string // --limit pattern, intersected with each play's hosts
 
-	stats    map[string]*HostStats
-	order    []string
-	failed   map[string]bool
-	notified map[string]map[string]bool // handler name -> hosts to run on
-	mu       sync.Mutex
+	stats       map[string]*HostStats
+	order       []string
+	failed      map[string]bool
+	notified    map[string]map[string]bool // handler name -> hosts to run on
+	blockFailed map[string]map[int]bool    // host -> block ID -> failure caught by rescue
+	failedIn    map[string]map[int]bool    // host -> blocks it was inside when it failed hard
+	mu          sync.Mutex
 }
 
 // NewRunner builds a runner over a loaded inventory.
@@ -197,6 +199,10 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 	// Ansible runs pre_tasks, tasks, post_tasks as separate sections with a
 	// handler flush after each.
 	r.resetNotified()
+	r.mu.Lock()
+	r.blockFailed = map[string]map[int]bool{}
+	r.failedIn = map[string]map[int]bool{}
+	r.mu.Unlock()
 	if play.GatherFacts == nil || *play.GatherFacts {
 		gather := &playbook.Task{
 			Name:    "Gathering Facts",
@@ -211,14 +217,20 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 			if !r.tagsMatch(task, play) {
 				continue
 			}
-			active := r.activeOf(playHosts)
-			if len(active) == 0 {
-				break
-			}
 			if task.Module == "meta" {
 				if err := r.runMeta(ctx, play, task, playHosts); err != nil {
 					return err
 				}
+				continue
+			}
+			// Block routing: skip hosts whose enclosing block state says no
+			// (failed block sections skip; rescue runs only after failure).
+			// Hard-failed hosts are re-admitted for the always sections of
+			// blocks they failed inside — so no early break on empty active.
+			active := r.activeOf(playHosts)
+			active = append(active, r.alwaysEligible(playHosts, task)...)
+			active = r.blockEligible(active, task)
+			if len(active) == 0 {
 				continue
 			}
 			r.runTaskAcrossHosts(ctx, play, task, active, playHosts, false)
@@ -292,6 +304,91 @@ func (r *Runner) wantsTag(tags []string) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+// blockEligible filters hosts by their block state for this task.
+func (r *Runner) blockEligible(hosts []string, task *playbook.Task) []string {
+	if len(task.Blocks) == 0 {
+		return hosts
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, host := range hosts {
+		hb := r.blockFailed[host]
+		ok := true
+		for _, ref := range task.Blocks {
+			switch ref.Section {
+			case playbook.SectionBlock:
+				if hb[ref.ID] {
+					ok = false
+				}
+			case playbook.SectionRescue:
+				if !hb[ref.ID] {
+					ok = false
+				}
+			}
+			// SectionAlways runs regardless of the block's failure state.
+		}
+		if ok {
+			out = append(out, host)
+		}
+	}
+	return out
+}
+
+// alwaysEligible returns failed hosts that must still run this task because
+// it is in the always section of a block they failed inside.
+func (r *Runner) alwaysEligible(playHosts []string, task *playbook.Task) []string {
+	inAlways := false
+	for _, ref := range task.Blocks {
+		if ref.Section == playbook.SectionAlways {
+			inAlways = true
+			break
+		}
+	}
+	if !inAlways {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, host := range playHosts {
+		if !r.failed[host] {
+			continue
+		}
+		for _, ref := range task.Blocks {
+			if ref.Section == playbook.SectionAlways && r.failedIn[host][ref.ID] {
+				out = append(out, host)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// catchInRescue routes a failure to the nearest enclosing block that has a
+// rescue section and hasn't already failed. Returns true when caught.
+func (r *Runner) catchInRescue(host string, task *playbook.Task) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := len(task.Blocks) - 1; i >= 0; i-- {
+		ref := task.Blocks[i]
+		// Only a failure in a block's main section is catchable by that
+		// block; rescue/always failures propagate outward.
+		if ref.Section != playbook.SectionBlock || !ref.HasRescue {
+			continue
+		}
+		if r.blockFailed[host] == nil {
+			r.blockFailed[host] = map[int]bool{}
+		}
+		if r.blockFailed[host][ref.ID] {
+			continue // this block already failed once; propagate outward
+		}
+		r.blockFailed[host][ref.ID] = true
+		return true
 	}
 	return false
 }
@@ -694,6 +791,18 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	if res.Changed && !res.Failed && len(task.Notify) > 0 {
 		r.notifyHandlers(host, task.Notify)
 	}
+	if res.Failed && !ignored && r.catchInRescue(host, task) {
+		// Rescued: the fatal line printed, but the host stays in the play
+		// and the failure details flow into the rescue section's vars.
+		r.Store.SetHostFact(host, "ansible_failed_result", res.ToVars())
+		r.Store.SetHostFact(host, "ansible_failed_task", map[string]any{
+			"name": task.Name, "action": task.Module,
+		})
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.stats[host].Rescued++
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	st := r.stats[host]
@@ -704,6 +813,14 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	case res.Failed:
 		st.Failed++
 		r.failed[host] = true
+		// Remember the blocks this host was inside so their always
+		// sections still run for it.
+		for _, ref := range task.Blocks {
+			if r.failedIn[host] == nil {
+				r.failedIn[host] = map[int]bool{}
+			}
+			r.failedIn[host][ref.ID] = true
+		}
 	case res.Skipped:
 		st.Skipped++
 	case res.Changed:

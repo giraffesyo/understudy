@@ -200,7 +200,14 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 	return play, nil
 }
 
+// blockCounter hands out unique block IDs within one Load call.
+type blockCounter struct{ next int }
+
 func parseTaskList(node *yaml.Node, file string, handlers bool) ([]*Task, error) {
+	return parseTaskListIn(node, file, handlers, &blockCounter{}, nil)
+}
+
+func parseTaskListIn(node *yaml.Node, file string, handlers bool, bc *blockCounter, enclosing []BlockRef) ([]*Task, error) {
 	if s, ok := node.Str(); ok && s == "" {
 		return nil, nil // tasks: (empty)
 	}
@@ -210,13 +217,150 @@ func parseTaskList(node *yaml.Node, file string, handlers bool) ([]*Task, error)
 	}
 	var tasks []*Task
 	for _, item := range items {
+		if item.MapGet("block") != nil {
+			flat, err := parseBlock(item, file, handlers, bc, enclosing)
+			if err != nil {
+				return nil, err
+			}
+			tasks = append(tasks, flat...)
+			continue
+		}
 		task, err := parseTask(item, file, handlers)
 		if err != nil {
 			return nil, err
 		}
+		task.Blocks = enclosing
 		tasks = append(tasks, task)
 	}
 	return tasks, nil
+}
+
+// blockKeywords are the keys legal on a block entry.
+var blockKeywords = map[string]bool{
+	"block": true, "rescue": true, "always": true, "name": true,
+	"when": true, "become": true, "become_user": true, "become_method": true,
+	"vars": true, "tags": true, "environment": true, "no_log": true,
+	"ignore_errors": true, "check_mode": true, "delegate_to": true, "any_errors_fatal": true,
+}
+
+// parseBlock flattens a block/rescue/always entry: block-level keywords are
+// inherited into contained tasks, and each task records its block refs so
+// the executor can route failures to rescue.
+func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, enclosing []BlockRef) ([]*Task, error) {
+	for _, key := range node.MapKeys() {
+		if !blockKeywords[key] {
+			return nil, errAt(file, node.MapGet(key), "unknown block keyword %q", key)
+		}
+	}
+
+	// The inheritable keywords, parsed once.
+	var inh Task
+	inh.LoopVar = "item"
+	for _, key := range node.MapKeys() {
+		val := node.MapGet(key)
+		var err error
+		switch key {
+		case "when":
+			inh.When = decodeExprList(val)
+		case "become":
+			var b bool
+			if b, err = decodeBool(val, file, "become"); err == nil {
+				inh.Become.Become = &b
+			}
+		case "become_user":
+			inh.Become.BecomeUser, _ = val.Str()
+		case "vars":
+			inh.Vars, err = decodeMap(val, file, "vars")
+		case "tags":
+			inh.Tags = decodeStringList(val)
+		case "environment":
+			inh.Environment, err = decodeMap(val, file, "environment")
+		case "no_log":
+			inh.NoLog, err = decodeBool(val, file, "no_log")
+		case "ignore_errors":
+			inh.IgnoreErrors, err = decodeBool(val, file, "ignore_errors")
+		case "delegate_to":
+			inh.Delegate, _ = val.Str()
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	id := bc.next
+	bc.next++
+	hasRescue := node.MapGet("rescue") != nil
+
+	var out []*Task
+	for _, sec := range []struct {
+		key     string
+		section int
+	}{
+		{"block", SectionBlock},
+		{"rescue", SectionRescue},
+		{"always", SectionAlways},
+	} {
+		secNode := node.MapGet(sec.key)
+		if secNode == nil {
+			continue
+		}
+		refs := append(append([]BlockRef{}, enclosing...),
+			BlockRef{ID: id, Section: sec.section, HasRescue: hasRescue})
+		tasks, err := parseTaskListIn(secNode, file, handlers, bc, refs)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range tasks {
+			applyBlockInheritance(t, &inh)
+		}
+		out = append(out, tasks...)
+	}
+	if len(out) == 0 {
+		return nil, errAt(file, node, "a block must contain at least one task")
+	}
+	return out, nil
+}
+
+// applyBlockInheritance merges block-level keywords into a task: when
+// clauses AND together; task-level settings win on conflicts.
+func applyBlockInheritance(t *Task, inh *Task) {
+	if len(inh.When) > 0 {
+		t.When = append(append([]string{}, inh.When...), t.When...)
+	}
+	if t.Become.Become == nil {
+		t.Become.Become = inh.Become.Become
+	}
+	if t.Become.BecomeUser == "" {
+		t.Become.BecomeUser = inh.Become.BecomeUser
+	}
+	if len(inh.Vars) > 0 {
+		merged := make(map[string]any, len(inh.Vars)+len(t.Vars))
+		for k, v := range inh.Vars {
+			merged[k] = v
+		}
+		for k, v := range t.Vars {
+			merged[k] = v
+		}
+		t.Vars = merged
+	}
+	if len(inh.Tags) > 0 {
+		t.Tags = append(append([]string{}, inh.Tags...), t.Tags...)
+	}
+	if len(inh.Environment) > 0 {
+		merged := make(map[string]any, len(inh.Environment)+len(t.Environment))
+		for k, v := range inh.Environment {
+			merged[k] = v
+		}
+		for k, v := range t.Environment {
+			merged[k] = v
+		}
+		t.Environment = merged
+	}
+	t.NoLog = t.NoLog || inh.NoLog
+	t.IgnoreErrors = t.IgnoreErrors || inh.IgnoreErrors
+	if t.Delegate == "" {
+		t.Delegate = inh.Delegate
+	}
 }
 
 func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {

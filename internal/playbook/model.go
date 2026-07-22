@@ -30,6 +30,21 @@ type BecomeFields struct {
 	BecomeUser string
 }
 
+// Block sections, recorded on tasks via BlockRef.
+const (
+	SectionBlock = iota
+	SectionRescue
+	SectionAlways
+)
+
+// BlockRef ties a task to one enclosing block. Blocks are flattened at
+// parse time; the executor uses these refs for rescue/always semantics.
+type BlockRef struct {
+	ID        int
+	Section   int // the section of this block the task sits in
+	HasRescue bool
+}
+
 // Task is one task (or handler).
 type Task struct {
 	Name         string
@@ -53,5 +68,6 @@ type Task struct {
 	Tags         []string
 	NoLog        bool
 	Delegate     string
+	Blocks       []BlockRef // enclosing blocks, outermost first
 	Src          Pos
 }
