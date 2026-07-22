@@ -488,3 +488,29 @@ func TestRescueFailurePropagates(t *testing.T) {
 		t.Errorf("stats = %+v, want failed=1 rescued=1", st)
 	}
 }
+
+func TestDelegateToLocalhost(t *testing.T) {
+	code, out, _ := run(t, `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: delegated command
+      command: echo on-control-node
+      delegate_to: localhost
+      register: d
+    - assert:
+        that:
+          - d.stdout == "on-control-node"
+          - inventory_hostname == "localhost"
+    - name: unsupported delegate target errors clearly
+      command: echo nope
+      delegate_to: otherhost
+      ignore_errors: true
+      register: bad
+    - assert:
+        that: "'not supported yet' in bad.msg"
+`, executor.Options{})
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s", code, out)
+	}
+}

@@ -665,7 +665,20 @@ func registerOverlay(task *playbook.Task, res *agentproto.Result) map[string]any
 
 func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.Task, play *playbook.Play, vctx *vars.Context) (*actions.Context, error) {
 	become := r.effectiveBecome(play, task)
-	conn, inProcess, err := r.Conns.Get(ctx, host)
+	var conn connection.Connection
+	var inProcess bool
+	var err error
+	switch task.Delegate {
+	case "":
+		conn, inProcess, err = r.Conns.Get(ctx, host)
+	case "localhost", "127.0.0.1":
+		// delegate_to: localhost — run on the control node while keeping
+		// this host's variable view (inventory_hostname stays the host).
+		conn, inProcess = connection.NewLocal(), true
+	default:
+		return nil, fmt.Errorf("%s:%d: delegate_to %q is not supported yet (only localhost)",
+			task.Src.File, task.Src.Line, task.Delegate)
+	}
 	if err != nil {
 		return nil, &unreachableError{host: host, err: err}
 	}
