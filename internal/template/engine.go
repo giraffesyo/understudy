@@ -138,40 +138,33 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 	}
 	ec := &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: pos, src: src}
 
-	// Native-types rule: exactly one output node and nothing else.
-	if len(nodes) == 1 {
-		if out, ok := nodes[0].(outputNode); ok {
-			v, err := ec.eval(out.expr)
+	// Native-types rule: exactly one output expression and nothing that
+	// renders text. {% set %} nodes are allowed before it — they only bind
+	// locals — so `{% set x = [1] %}{{ x }}` returns a native list, matching
+	// Ansible's native-Jinja behavior.
+	single, sets := singleOutput(nodes)
+	if single != nil {
+		for _, s := range sets {
+			v, err := ec.eval(s.val)
 			if err != nil {
 				return nil, err
 			}
-			if u, ok := v.(Undefined); ok {
-				return nil, &UndefinedError{Pos: pos, Name: u.Name}
-			}
-			return v, nil
+			ec.locals[s.name] = v
 		}
+		v, err := ec.eval(single.expr)
+		if err != nil {
+			return nil, err
+		}
+		if u, ok := v.(Undefined); ok {
+			return nil, &UndefinedError{Pos: pos, Name: u.Name}
+		}
+		return v, nil
 	}
 
 	var b strings.Builder
-	for _, n := range nodes {
-		switch t := n.(type) {
-		case textNode:
-			b.WriteString(t.text)
-		case outputNode:
-			v, err := ec.eval(t.expr)
-			if err != nil {
-				return nil, err
-			}
-			if u, ok := v.(Undefined); ok {
-				return nil, &UndefinedError{Pos: pos, Name: u.Name}
-			}
-			if _, ok := v.(Omit); ok {
-				// Omit in a mixed template renders as the omit placeholder;
-				// the executor treats a pure-Omit value specially instead.
-				return nil, &TemplateError{Pos: pos, Msg: "'omit' can only be used as the entire value of a module argument", Src: src}
-			}
-			b.WriteString(toStr(v))
-		}
+	out := &renderOutput{b: &b, pos: pos, src: src}
+	if err := ec.execNodes(nodes, out); err != nil {
+		return nil, err
 	}
 	return b.String(), nil
 }
@@ -217,45 +210,39 @@ func (e *Engine) EvalBool(src string, vars VarGetter, pos Position) (bool, error
 	return truthy(v), nil
 }
 
-// parseTemplate lexes and parses a template into its node list.
-// Statements ({% if %}, {% for %}, ...) land in M4; for now they are a
-// clear parse error rather than a silent misrender.
+// singleOutput reports whether nodes are exactly one output expression plus
+// optional preceding {% set %} statements (and nothing else).
+func singleOutput(nodes []tmplNode) (*outputNode, []*setNode) {
+	var out *outputNode
+	var sets []*setNode
+	for i := range nodes {
+		switch t := nodes[i].(type) {
+		case outputNode:
+			if out != nil {
+				return nil, nil
+			}
+			out = &t
+		case *setNode:
+			if out != nil {
+				return nil, nil // set after output: order matters, string path
+			}
+			sets = append(sets, t)
+		default:
+			return nil, nil
+		}
+	}
+	return out, sets
+}
+
+// parseTemplate lexes and parses a template into its node list, including
+// {% if %}, {% for %}, and {% set %} statements.
 func (e *Engine) parseTemplate(src string, pos Position) ([]tmplNode, error) {
 	toks, err := lex(src, e.Opts, pos)
 	if err != nil {
 		return nil, err
 	}
 	p := &parser{tokens: toks, src: src, tplPos: pos}
-	var nodes []tmplNode
-	for {
-		t := p.peek()
-		switch t.kind {
-		case tokEOF:
-			return nodes, nil
-		case tokText:
-			p.next()
-			nodes = append(nodes, textNode{text: t.val})
-		case tokVarStart:
-			p.next()
-			expr, err := p.parseExpression()
-			if err != nil {
-				return nil, err
-			}
-			if _, err := p.expect(tokVarEnd); err != nil {
-				return nil, err
-			}
-			nodes = append(nodes, outputNode{expr: expr})
-		case tokBlockStart:
-			p.next()
-			name := "statement"
-			if p.kind() == tokName {
-				name = "'{% " + p.peek().val + " %}'"
-			}
-			return nil, p.errf("template statements are not supported yet (%s); coming in a later milestone", name)
-		default:
-			return nil, p.errf("unexpected %s at template top level", p.describe(t))
-		}
-	}
+	return p.parseBody()
 }
 
 // Sentinel used by the yaml package's UnsafeString: rendering leaves it
