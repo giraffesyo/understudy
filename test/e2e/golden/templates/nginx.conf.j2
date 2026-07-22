@@ -1,0 +1,13 @@
+# Managed file
+worker_processes {{ workers }};
+{% if ssl_enabled %}
+ssl on;
+{% endif %}
+upstream backend {
+{% for server in servers %}
+    server {{ server.host }}:{{ server.port }}{% if server.backup | default(false) %} backup{% endif %};
+{% endfor %}
+}
+{% for name, value in settings.items() %}
+{{ name }} = {{ value }};
+{% endfor %}

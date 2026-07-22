@@ -1,0 +1,54 @@
+---
+# The template module renders a Jinja2 file (for/if/filters/whitespace).
+# We read the result back and assert on its content, so any rendering
+# divergence between engines becomes a diverging assert.
+- name: template rendering
+  hosts: all
+  gather_facts: false
+  vars:
+    workers: 4
+    ssl_enabled: true
+    servers:
+      - {host: 10.0.0.1, port: 8080}
+      - {host: 10.0.0.2, port: 8080, backup: true}
+    settings:
+      keepalive: 65
+      gzip: "on"
+  tasks:
+    - name: render the template
+      template:
+        src: nginx.conf.j2
+        dest: "{{ workdir }}/nginx.conf"
+
+    - name: read it back
+      set_fact:
+        rendered: "{{ lookup('file', workdir + '/nginx.conf') }}"
+
+    - name: content matches expectation
+      assert:
+        that:
+          - "'worker_processes 4;' in rendered"
+          - "'ssl on;' in rendered"
+          - "'server 10.0.0.1:8080;' in rendered"
+          - "'server 10.0.0.2:8080 backup;' in rendered"
+          - "'keepalive = 65;' in rendered"
+          - "'gzip = on;' in rendered"
+          # {% if %}/{% endif %} with trim_blocks: no blank line left behind
+          - "'\n\nssl' not in rendered"
+          # exactly two upstream server lines
+          - "rendered.split('\n') | select('match', '.*server .*:8080') | list | length == 2"
+
+    - name: rendering is idempotent
+      template:
+        src: nginx.conf.j2
+        dest: "{{ workdir }}/nginx.conf"
+      register: second
+      changed_when: false
+
+    - name: format and join filters
+      assert:
+        that:
+          - "'%s-%s' | format('a', 'b') == 'a-b'"
+          - "'%05d' | format(42) == '00042'"
+          - "'%.2f' | format(3.14159) == '3.14'"
+          - "['a', 'b', 'c'] | join(', ') == 'a, b, c'"
