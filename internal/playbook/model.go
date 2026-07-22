@@ -23,6 +23,13 @@ type Play struct {
 	Tags        []string
 	Environment map[string]any
 
+	// Serial batches the play across hosts (rolling execution). Entries are
+	// host counts or "N%" strings; nil runs all hosts in one batch.
+	Serial []any
+	// MaxFailPercentage aborts the play when more than this percent of a
+	// batch fails. -1 means unset (any failure removes only that host).
+	MaxFailPercentage float64
+
 	// Filled by ResolveRoles: per-role vars for the store's role layers.
 	RoleDefaults []map[string]any
 	RoleVars     []map[string]any

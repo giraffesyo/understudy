@@ -38,7 +38,6 @@ var playKeywords = map[string]bool{
 
 // Deferred play keys that must fail loudly rather than be ignored.
 var unsupportedPlayKeys = map[string]string{
-	"serial":      "'serial' is not supported yet",
 	"strategy":    "only the linear strategy is supported",
 	"vars_prompt": "'vars_prompt' is not supported yet",
 }
@@ -101,7 +100,10 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 	if keys == nil {
 		return nil, errAt(file, node, "a play must be a mapping")
 	}
-	play := &Play{Src: Pos{File: file, Line: node.Line, Col: node.Column}}
+	play := &Play{
+		Src:               Pos{File: file, Line: node.Line, Col: node.Column},
+		MaxFailPercentage: -1,
+	}
 	if node.MapGet("hosts") == nil {
 		return nil, errAt(file, node, "a play requires a 'hosts' field")
 	}
@@ -199,8 +201,33 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 				return nil, err
 			}
 			play.Environment = v
-		case "remote_user", "connection", "max_fail_percentage",
-			"any_errors_fatal", "force_handlers":
+		case "serial":
+			v, err := val.Decode()
+			if err != nil {
+				return nil, err
+			}
+			switch t := v.(type) {
+			case []any:
+				play.Serial = t
+			case nil:
+				// absent
+			default:
+				play.Serial = []any{t}
+			}
+		case "max_fail_percentage":
+			v, err := val.Decode()
+			if err != nil {
+				return nil, err
+			}
+			switch t := v.(type) {
+			case int64:
+				play.MaxFailPercentage = float64(t)
+			case float64:
+				play.MaxFailPercentage = t
+			default:
+				return nil, errAt(file, val, "max_fail_percentage must be a number")
+			}
+		case "remote_user", "connection", "any_errors_fatal", "force_handlers":
 			// Parsed but handled elsewhere (or benignly ignored in v0.1).
 		}
 	}
