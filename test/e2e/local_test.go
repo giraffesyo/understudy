@@ -701,3 +701,79 @@ func TestAsyncFireAndForget(t *testing.T) {
 	}
 	t.Error("background process never completed")
 }
+
+func TestNewModulesRegistered(t *testing.T) {
+	// Every surveyed module must at least resolve (parse without
+	// "couldn't resolve module/action").
+	mods := []string{
+		"group", "pip", "get_url", "blockinfile", "wait_for", "mount",
+		"sysctl", "tempfile", "find", "modprobe", "script", "firewalld",
+		"selinux", "parted", "filesystem", "yum_repository", "sudoers",
+		"openssh_keypair", "mysql_db", "mysql_user",
+	}
+	for _, m := range mods {
+		src := "- hosts: all\n  gather_facts: false\n  tasks:\n    - " + m + ": {}\n"
+		dir := t.TempDir()
+		path := filepath.Join(dir, "p.yml")
+		os.WriteFile(path, []byte(src), 0o644)
+		if _, err := playbook.LoadFile(path); err != nil {
+			t.Errorf("module %q does not resolve: %v", m, err)
+		}
+	}
+}
+
+func TestBlockinfileAndFind(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "app.conf")
+	code, out, _ := run(t, `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: add managed block
+      blockinfile:
+        path: `+conf+`
+        create: true
+        block: |
+          option one
+          option two
+      register: b1
+    - name: block idempotent
+      blockinfile:
+        path: `+conf+`
+        block: |
+          option one
+          option two
+      register: b2
+    - name: find the conf
+      find:
+        paths: `+dir+`
+        patterns: "*.conf"
+      register: found
+    - assert:
+        that:
+          - b1.changed
+          - not b2.changed
+          - found.matched == 1
+          - found.files[0].path == "`+conf+`"
+    - name: make a temp dir
+      tempfile:
+        state: directory
+      register: tmp
+    - name: group check-mode reports would-change
+      group:
+        name: understudy-nonexistent-grp
+      check_mode: true
+      register: g
+    - assert:
+        that:
+          - tmp.path is defined
+          - g.changed
+`, executor.Options{})
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s", code, out)
+	}
+	data, _ := os.ReadFile(conf)
+	if !strings.Contains(string(data), "ANSIBLE MANAGED BLOCK") || !strings.Contains(string(data), "option one") {
+		t.Errorf("block content wrong:\n%s", data)
+	}
+}

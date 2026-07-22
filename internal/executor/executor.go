@@ -857,7 +857,7 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		Vars:       vctx,
 		Conn:       conn,
 		Become:     become,
-		CheckMode:  r.Opts.CheckMode,
+		CheckMode:  r.effectiveCheckMode(task),
 		Diff:       r.Opts.Diff,
 		Background: task.Async > 0 && task.Poll == 0,
 		BaseDir:    r.Opts.BaseDir,
@@ -879,6 +879,16 @@ type unreachableError struct {
 }
 
 func (e *unreachableError) Error() string { return e.err.Error() }
+
+// effectiveCheckMode resolves the run-level flag against a task's
+// check_mode: override (check_mode: false forces execution during a
+// --check run; true forces a dry run of that task).
+func (r *Runner) effectiveCheckMode(task *playbook.Task) bool {
+	if task.CheckMode != nil {
+		return *task.CheckMode
+	}
+	return r.Opts.CheckMode
+}
 
 func (r *Runner) effectiveBecome(play *playbook.Play, task *playbook.Task) *connection.BecomeSpec {
 	on := r.Opts.Become
