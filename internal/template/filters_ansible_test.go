@@ -1,0 +1,211 @@
+package template
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestSequenceFilters(t *testing.T) {
+	vars := map[string]any{
+		"nums":   []any{int64(3), int64(1), int64(2)},
+		"nested": []any{[]any{int64(1)}, []any{int64(2), []any{int64(3)}}},
+		"users": []any{
+			map[string]any{"name": "alice", "uid": int64(1), "admin": true},
+			map[string]any{"name": "bob", "uid": int64(2), "admin": false},
+			map[string]any{"name": "carol", "uid": int64(3), "admin": true},
+		},
+	}
+	cases := []struct {
+		expr string
+		want any
+	}{
+		{"nums | min", int64(1)},
+		{"nums | max", int64(3)},
+		{"nums | sum", int64(6)},
+		{"[1, 1, 2, 2, 3] | unique", []any{int64(1), int64(2), int64(3)}},
+		{"nums | sort", []any{int64(1), int64(2), int64(3)}},
+		{"nums | sort(reverse=true)", []any{int64(3), int64(2), int64(1)}},
+		{"nums | reverse", []any{int64(2), int64(1), int64(3)}},
+		{"'abc' | reverse", "cba"},
+		{"nested | flatten", []any{int64(1), int64(2), int64(3)}},
+		{"nested | flatten(levels=1)", []any{int64(1), int64(2), []any{int64(3)}}},
+		{"[1, 2] | zip(['a', 'b']) | list", []any{[]any{int64(1), "a"}, []any{int64(2), "b"}}},
+		{"users | map(attribute='name') | list", []any{"alice", "bob", "carol"}},
+		{"['a', 'b'] | map('upper') | list", []any{"A", "B"}},
+		{"[0, 1, '', 'x'] | select | list", []any{int64(1), "x"}},
+		{"[0, 1, '', 'x'] | reject | list", []any{int64(0), ""}},
+		{"[1, 2, 3, 4] | select('gt', 2) | list", []any{int64(3), int64(4)}},
+		{"users | selectattr('admin') | map(attribute='name') | list", []any{"alice", "carol"}},
+		{"users | rejectattr('admin') | map(attribute='name') | list", []any{"bob"}},
+		{"users | selectattr('uid', 'eq', 2) | map(attribute='name') | list", []any{"bob"}},
+		{"users | sort(attribute='uid', reverse=true) | map(attribute='name') | list", []any{"carol", "bob", "alice"}},
+		{"[1, 2, 3] | union([3, 4])", []any{int64(1), int64(2), int64(3), int64(4)}},
+		{"[1, 2, 3] | intersect([2, 3, 4])", []any{int64(2), int64(3)}},
+		{"[1, 2, 3] | difference([2])", []any{int64(1), int64(3)}},
+		{"[1, 2] | symmetric_difference([2, 3])", []any{int64(1), int64(3)}},
+	}
+	for _, c := range cases {
+		expectEq(t, evalExpr(t, c.expr, vars), c.want, c.expr)
+	}
+}
+
+func TestDictFilters(t *testing.T) {
+	vars := map[string]any{
+		"d": map[string]any{"b": int64(2), "a": int64(1)},
+		"defaults": map[string]any{
+			"opts": map[string]any{"x": int64(1), "y": int64(2)},
+			"name": "base",
+		},
+		"override": map[string]any{
+			"opts": map[string]any{"y": int64(99)},
+		},
+	}
+	cases := []struct {
+		expr string
+		want any
+	}{
+		{"d | dict2items", []any{
+			map[string]any{"key": "a", "value": int64(1)},
+			map[string]any{"key": "b", "value": int64(2)},
+		}},
+		{"d | dict2items(key_name='k', value_name='v') | map(attribute='k') | list", []any{"a", "b"}},
+		{"[{'key': 'x', 'value': 1}] | items2dict", map[string]any{"x": int64(1)}},
+		{"d | combine({'c': 3})", map[string]any{"a": int64(1), "b": int64(2), "c": int64(3)}},
+		// Top-level replace: opts is wholly replaced.
+		{"defaults | combine(override)", map[string]any{
+			"name": "base",
+			"opts": map[string]any{"y": int64(99)},
+		}},
+		// recursive=True deep-merges.
+		{"defaults | combine(override, recursive=true)", map[string]any{
+			"name": "base",
+			"opts": map[string]any{"x": int64(1), "y": int64(99)},
+		}},
+	}
+	for _, c := range cases {
+		expectEq(t, evalExpr(t, c.expr, vars), c.want, c.expr)
+	}
+}
+
+func TestSerializationFilters(t *testing.T) {
+	cases := []struct {
+		expr string
+		want any
+	}{
+		{"{'b': 1, 'a': [2]} | to_json", `{"a":[2],"b":1}`},
+		{`'{"x": 5}' | from_json`, map[string]any{"x": int64(5)}},
+		{`'a: 1' | from_yaml`, map[string]any{"a": int64(1)}},
+		{"'hello' | b64encode", "aGVsbG8="},
+		{"'aGVsbG8=' | b64decode", "hello"},
+		{"'abc' | hash('sha256')", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+		{"'x' | quote", "'x'"},
+		{"\"it's\" | quote", `'it'"'"'s'`},
+	}
+	for _, c := range cases {
+		expectEq(t, evalExpr(t, c.expr, nil), c.want, c.expr)
+	}
+	// to_yaml round-trips through our own parser.
+	out := evalExpr(t, "{'a': [1, 2]} | to_yaml", nil).(string)
+	back := evalExpr(t, "v | from_yaml", map[string]any{"v": out})
+	expectEq(t, back, map[string]any{"a": []any{int64(1), int64(2)}}, "to_yaml round trip")
+}
+
+func TestPathAndMiscFilters(t *testing.T) {
+	cases := []struct {
+		expr string
+		want any
+	}{
+		{"'/etc/nginx/nginx.conf' | basename", "nginx.conf"},
+		{"'/etc/nginx/nginx.conf' | dirname", "/etc/nginx"},
+		{"'file.tar.gz' | splitext", []any{"file.tar", ".gz"}},
+		{"['/etc', 'nginx', 'conf.d'] | path_join", "/etc/nginx/conf.d"},
+		{"true | ternary('yes', 'no')", "yes"},
+		{"false | ternary('yes', 'no')", "no"},
+		{"-5 | abs", int64(5)},
+		{"2.567 | round(2)", 2.57},
+		{"2.5 | round", 3.0},
+		{"'a' | extract({'a': 42})", int64(42)},
+		{"'x\\ny' | indent(2)", "x\n  y"},
+	}
+	for _, c := range cases {
+		expectEq(t, evalExpr(t, c.expr, nil), c.want, c.expr)
+	}
+	// The famous cross-host pattern: extract over hostvars-like maps.
+	vars := map[string]any{
+		"hv":    map[string]any{"h1": map[string]any{"ip": "10.0.0.1"}, "h2": map[string]any{"ip": "10.0.0.2"}},
+		"names": []any{"h1", "h2"},
+	}
+	expectEq(t,
+		evalExpr(t, "names | map('extract', hv, 'ip') | list", vars),
+		[]any{"10.0.0.1", "10.0.0.2"},
+		"map extract hostvars")
+}
+
+func TestRegexFilters(t *testing.T) {
+	cases := []struct {
+		expr string
+		want any
+	}{
+		{`'ansible-2.16' | regex_replace('^ansible-', '')`, "2.16"},
+		{`'hello world' | regex_replace('(\\w+) (\\w+)', '\\2 \\1')`, "world hello"},
+		{`'server01' | regex_search('\\d+')`, "01"},
+		{`'no digits here' | regex_search('\\d+')`, nil},
+		{`'a1b2c3' | regex_findall('\\d')`, []any{"1", "2", "3"}},
+		{`'key=val' | regex_search('(\\w+)=(\\w+)', '\\1', '\\2')`, []any{"key", "val"}},
+		{`'a.b' | regex_escape`, `a\.b`},
+		{`'Version 1.2' | regex_replace('(?i)version', 'v')`, "v 1.2"},
+	}
+	for _, c := range cases {
+		expectEq(t, evalExpr(t, c.expr, nil), c.want, c.expr)
+	}
+	// RE2-unsupported constructs fail loudly.
+	e := New()
+	for _, expr := range []string{
+		`'x' | regex_search('(?=lookahead)')`,
+		`'x' | regex_replace('(a)\\1', 'b')`,
+	} {
+		_, err := e.EvalExpression(expr, nil, testPos)
+		if err == nil || !strings.Contains(err.Error(), "not supported") {
+			t.Errorf("%s: expected loud rejection, got %v", expr, err)
+		}
+	}
+}
+
+func TestVersionAndResultTests(t *testing.T) {
+	vars := map[string]any{
+		"okRes":   map[string]any{"failed": false, "changed": true, "skipped": false},
+		"badRes":  map[string]any{"failed": true, "changed": false},
+		"skipRes": map[string]any{"skipped": true, "changed": false, "failed": false},
+	}
+	cases := []struct {
+		expr string
+		want bool
+	}{
+		{"'2.16.0' is version('2.10', '>=')", true},
+		{"'1.9' is version('1.10', '<')", true}, // numeric segments: 9 < 10
+		{"'1.10' is version('1.9', '>')", true},
+		{"'20.04' is version('18.04', '>=')", true},
+		{"'1.0.0' is version('1.0', '==')", true}, // missing segment = 0
+		{"okRes is success", true},
+		{"okRes is succeeded", true},
+		{"okRes is changed", true},
+		{"okRes is not failed", true},
+		{"badRes is failed", true},
+		{"badRes is not success", true},
+		{"skipRes is skipped", true},
+		{"'web01' is match('web')", true},
+		{"'web01' is match('01')", false}, // match anchors at start
+		{"'web01' is search('01')", true},
+		{"[1, 2] is subset([1, 2, 3])", true},
+		{"[1, 2, 3] is superset([1, 2])", true},
+		{"[false, true] is any", true},
+		{"[true, true] is all", true},
+		{"[true, false] is not all", true},
+	}
+	for _, c := range cases {
+		got := evalExpr(t, c.expr, vars)
+		if got != c.want {
+			t.Errorf("%s = %v, want %v", c.expr, got, c.want)
+		}
+	}
+}
