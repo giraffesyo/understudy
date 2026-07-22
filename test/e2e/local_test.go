@@ -217,3 +217,83 @@ func TestFailedWhenOverride(t *testing.T) {
 		t.Errorf("failed_when did not trip: %+v", st)
 	}
 }
+
+func TestHandlersNotifyAndFlush(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "handler-ran")
+	code, out, _ := run(t, `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: change something
+      command: touch `+filepath.Join(dir, "x")+`
+      notify: record handler
+    - name: change again (handler must still run once)
+      command: touch `+filepath.Join(dir, "y")+`
+      notify: record handler
+  handlers:
+    - name: record handler
+      command: touch `+marker+`
+`, executor.Options{})
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s", code, out)
+	}
+	if !strings.Contains(out, "RUNNING HANDLER [record handler]") {
+		t.Errorf("missing handler banner:\n%s", out)
+	}
+	if strings.Count(out, "RUNNING HANDLER") != 1 {
+		t.Errorf("handler ran more than once:\n%s", out)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Error("handler did not run")
+	}
+}
+
+func TestHandlerNotRunWithoutChange(t *testing.T) {
+	_, out, _ := run(t, `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - command: echo hi
+      changed_when: false
+      notify: never runs
+  handlers:
+    - name: never runs
+      debug:
+        msg: should not appear
+`, executor.Options{})
+	if strings.Contains(out, "RUNNING HANDLER") {
+		t.Errorf("handler ran without a change:\n%s", out)
+	}
+}
+
+func TestTagsFiltering(t *testing.T) {
+	src := `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: {msg: tagged-a}
+      tags: [a]
+    - debug: {msg: tagged-b}
+      tags: [b]
+    - debug: {msg: always-on}
+      tags: [always]
+    - debug: {msg: never-on}
+      tags: [never]
+`
+	_, out, _ := run(t, src, executor.Options{Tags: []string{"a"}})
+	for _, want := range []string{"tagged-a", "always-on"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("--tags a: missing %s:\n%s", want, out)
+		}
+	}
+	for _, not := range []string{"tagged-b", "never-on"} {
+		if strings.Contains(out, not) {
+			t.Errorf("--tags a: should not run %s:\n%s", not, out)
+		}
+	}
+	_, out2, _ := run(t, src, executor.Options{SkipTags: []string{"a"}})
+	if strings.Contains(out2, "tagged-a") || !strings.Contains(out2, "tagged-b") {
+		t.Errorf("--skip-tags a wrong:\n%s", out2)
+	}
+}

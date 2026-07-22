@@ -51,6 +51,8 @@ type Options struct {
 	BecomePass string
 	Connection string // "" = per-host behavioral vars; "local" forces local
 	BaseDir    string // playbook directory
+	Tags       []string
+	SkipTags   []string
 }
 
 // Runner executes playbooks.
@@ -62,10 +64,11 @@ type Runner struct {
 	Opts     Options
 	Limit    string // --limit pattern, intersected with each play's hosts
 
-	stats  map[string]*HostStats
-	order  []string
-	failed map[string]bool
-	mu     sync.Mutex
+	stats    map[string]*HostStats
+	order    []string
+	failed   map[string]bool
+	notified map[string]map[string]bool // handler name -> hosts to run on
+	mu       sync.Mutex
 }
 
 // NewRunner builds a runner over a loaded inventory.
@@ -185,34 +188,142 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 		return nil
 	}
 
-	// Task sections run in order; handlers flush after each section (M5
-	// completes handler semantics — the flush points are already correct).
-	for _, task := range flattenSections(play) {
-		active := r.activeOf(playHosts)
-		if len(active) == 0 {
-			break
+	// Ansible runs pre_tasks, tasks, post_tasks as separate sections with a
+	// handler flush after each.
+	r.resetNotified()
+	for _, section := range [][]*playbook.Task{play.PreTasks, play.Tasks, play.PostTasks} {
+		for _, task := range section {
+			if !r.tagsMatch(task, play) {
+				continue
+			}
+			active := r.activeOf(playHosts)
+			if len(active) == 0 {
+				break
+			}
+			if task.Module == "meta" {
+				if err := r.runMeta(ctx, play, task, playHosts); err != nil {
+					return err
+				}
+				continue
+			}
+			r.runTaskAcrossHosts(ctx, play, task, active, playHosts, false)
 		}
-		r.Callback.TaskStart(task, false)
-		g, gctx := errgroup.WithContext(ctx)
-		g.SetLimit(r.Opts.Forks)
-		for _, host := range active {
-			g.Go(func() error {
-				r.runTaskOnHost(gctx, play, task, host, playHosts)
-				return nil
-			})
+		if err := r.flushHandlers(ctx, play, playHosts); err != nil {
+			return err
 		}
-		g.Wait()
 	}
 	return nil
 }
 
-func flattenSections(play *playbook.Play) []*playbook.Task {
-	out := make([]*playbook.Task, 0,
-		len(play.PreTasks)+len(play.Tasks)+len(play.PostTasks))
-	out = append(out, play.PreTasks...)
-	out = append(out, play.Tasks...)
-	out = append(out, play.PostTasks...)
-	return out
+// runTaskAcrossHosts executes one task on all active hosts with forks
+// parallelism (one errgroup per task = the linear-strategy barrier).
+func (r *Runner) runTaskAcrossHosts(ctx context.Context, play *playbook.Play, task *playbook.Task, active, playHosts []string, handler bool) {
+	r.Callback.TaskStart(task, handler)
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(r.Opts.Forks)
+	for _, host := range active {
+		g.Go(func() error {
+			r.runTaskOnHost(gctx, play, task, host, playHosts)
+			return nil
+		})
+	}
+	g.Wait()
+}
+
+// runMeta handles meta: tasks (flush_handlers in v0.1).
+func (r *Runner) runMeta(ctx context.Context, play *playbook.Play, task *playbook.Task, playHosts []string) error {
+	switch task.FreeForm {
+	case "flush_handlers":
+		return r.flushHandlers(ctx, play, playHosts)
+	case "noop", "":
+		return nil
+	default:
+		return fmt.Errorf("%s:%d: meta: %s is not supported yet", task.Src.File, task.Src.Line, task.FreeForm)
+	}
+}
+
+// tagsMatch applies --tags/--skip-tags with the special always/never tags.
+func (r *Runner) tagsMatch(task *playbook.Task, play *playbook.Play) bool {
+	tags := append(append([]string{}, play.Tags...), task.Tags...)
+	has := func(t string) bool {
+		for _, x := range tags {
+			if x == t {
+				return true
+			}
+		}
+		return false
+	}
+	for _, skip := range r.Opts.SkipTags {
+		if has(skip) {
+			return false
+		}
+	}
+	if has("never") && !r.wantsTag(tags) {
+		return false
+	}
+	if len(r.Opts.Tags) == 0 {
+		return true
+	}
+	if has("always") {
+		return true
+	}
+	return r.wantsTag(tags)
+}
+
+func (r *Runner) wantsTag(tags []string) bool {
+	for _, want := range r.Opts.Tags {
+		for _, t := range tags {
+			if t == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// resetNotified clears handler notification state (per play).
+func (r *Runner) resetNotified() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.notified = map[string]map[string]bool{}
+}
+
+// notifyHandlers marks handlers notified by one host (called on change).
+func (r *Runner) notifyHandlers(host string, names []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, name := range names {
+		if r.notified[name] == nil {
+			r.notified[name] = map[string]bool{}
+		}
+		r.notified[name][host] = true
+	}
+}
+
+// flushHandlers runs notified handlers in definition order across the hosts
+// that notified them, clearing the notification set.
+func (r *Runner) flushHandlers(ctx context.Context, play *playbook.Play, playHosts []string) error {
+	for _, handler := range play.Handlers {
+		key := handler.Name
+		r.mu.Lock()
+		hosts := r.notified[key]
+		delete(r.notified, key)
+		r.mu.Unlock()
+		if len(hosts) == 0 {
+			continue
+		}
+		var active []string
+		for _, h := range r.activeOf(playHosts) {
+			if hosts[h] {
+				active = append(active, h)
+			}
+		}
+		if len(active) == 0 {
+			continue
+		}
+		r.runTaskAcrossHosts(ctx, play, handler, active, playHosts, true)
+	}
+	return nil
 }
 
 // activeOf filters a play's host list down to hosts that have not failed.
@@ -549,6 +660,9 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	}
 	if task.Register != "" {
 		r.Store.SetHostFact(host, task.Register, res.ToVars())
+	}
+	if res.Changed && !res.Failed && len(task.Notify) > 0 {
+		r.notifyHandlers(host, task.Notify)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
