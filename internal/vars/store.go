@@ -254,6 +254,13 @@ func (c *Context) TemplateString(s string) (out any, err error) {
 	return c.store.engine.RenderTemplate(s, c, c.pos)
 }
 
+// RenderFile renders template-file content: output is always text and the
+// given position (the template file itself) is used for errors.
+func (c *Context) RenderFile(src string, pos template.Position) (out string, err error) {
+	defer capturePanic(&err)
+	return c.store.engine.RenderString(src, c, pos)
+}
+
 // EvalWhen evaluates a when: clause list (implicit AND).
 func (c *Context) EvalWhen(exprs []string) (ok bool, err error) {
 	defer capturePanic(&err)

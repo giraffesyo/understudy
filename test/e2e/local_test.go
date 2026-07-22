@@ -297,3 +297,81 @@ func TestTagsFiltering(t *testing.T) {
 		t.Errorf("--skip-tags a wrong:\n%s", out2)
 	}
 }
+
+func TestCopyTemplateFileStat(t *testing.T) {
+	dir := t.TempDir()
+	tpl := filepath.Join(dir, "templates")
+	os.MkdirAll(tpl, 0o755)
+	os.WriteFile(filepath.Join(tpl, "greeting.j2"),
+		[]byte("Hello {{ target_name }} from {{ inventory_hostname }}\n"), 0o644)
+	dest := filepath.Join(dir, "out")
+
+	code, out, _ := run(t, `
+- hosts: all
+  gather_facts: false
+  vars:
+    target_name: world
+  tasks:
+    - name: render template
+      template:
+        src: greeting.j2
+        dest: `+dest+`/greeting.txt
+        mode: "0600"
+      register: t1
+    - name: render again (idempotent)
+      template:
+        src: greeting.j2
+        dest: `+dest+`/greeting.txt
+      register: t2
+    - assert:
+        that:
+          - t1.changed
+          - not t2.changed
+    - name: copy inline content
+      copy:
+        content: "static\n"
+        dest: `+dest+`/static.txt
+    - name: stat the rendered file
+      stat:
+        path: `+dest+`/greeting.txt
+      register: st
+    - assert:
+        that:
+          - st.stat.exists
+          - st.stat.mode == "0600"
+          - st.stat.isreg
+    - name: manage a directory
+      file:
+        path: `+dest+`/subdir
+        state: directory
+        mode: "0755"
+    - name: symlink
+      file:
+        src: `+dest+`/greeting.txt
+        dest: `+dest+`/link.txt
+        state: link
+    - name: remove it
+      file:
+        path: `+dest+`/static.txt
+        state: absent
+      register: rm
+    - assert:
+        that: rm.changed
+`, executor.Options{BaseDir: dir})
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s", code, out)
+	}
+	data, err := os.ReadFile(filepath.Join(dest, "greeting.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "Hello world from localhost\n" {
+		t.Errorf("rendered content = %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "static.txt")); !os.IsNotExist(err) {
+		t.Error("static.txt should have been removed")
+	}
+	if target, err := os.Readlink(filepath.Join(dest, "link.txt")); err != nil || target != filepath.Join(dest, "greeting.txt") {
+		t.Errorf("symlink target = %q, %v", target, err)
+	}
+}
