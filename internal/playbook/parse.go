@@ -684,7 +684,13 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			task.NoLog = b
 		case "delegate_to":
 			task.Delegate, _ = val.Str()
-		case "check_mode", "diff", "run_once", "any_errors_fatal":
+		case "check_mode":
+			b, err := decodeBool(val, file, "check_mode")
+			if err != nil {
+				return nil, err
+			}
+			task.CheckMode = &b
+		case "diff", "run_once", "any_errors_fatal":
 			// Accepted; wired in later milestones.
 		case "async":
 			// Async with poll > 0 runs synchronously (same outcome; the
