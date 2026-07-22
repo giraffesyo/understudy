@@ -1,0 +1,85 @@
+---
+# String filters and methods — broad coverage to surface Python/Jinja2
+# semantic divergences.
+- name: string ops
+  hosts: all
+  gather_facts: false
+  vars:
+    path: "/var/log/app/service.log"
+    sentence: "the quick brown fox"
+    mixed: "Hello World"
+    csv: "a, b ,c,  d"
+  tasks:
+    - name: case filters
+      assert:
+        that:
+          - "'hELLO' | capitalize == 'Hello'"
+          - "sentence | title == 'The Quick Brown Fox'"
+          - "mixed | upper == 'HELLO WORLD'"
+          - "mixed | lower == 'hello world'"
+
+    - name: replace and counts
+      assert:
+        that:
+          - "'aaa' | replace('a', 'b') == 'bbb'"
+          - "'aaa' | replace('a', 'b', 2) == 'bba'"
+          - "sentence | regex_replace('(\\w+) (\\w+)', '\\2 \\1') == 'quick the brown fox'"
+          - "'2024-01-15' | regex_replace('(\\d+)-(\\d+)-(\\d+)', '\\3/\\2/\\1') == '15/01/2024'"
+
+    - name: split and join
+      assert:
+        that:
+          - "'a,b,c' | split(',') == ['a', 'b', 'c']"
+          - "'a b  c' | split == ['a', 'b', 'c']"
+          - "'a-b-c-d' | split('-', 1) == ['a', 'b-c-d']"
+          - "['x', 'y'] | join == 'xy'"
+          - "['x', 'y'] | join('/') == 'x/y'"
+
+    - name: trim and strip
+      assert:
+        that:
+          - "'  hi  ' | trim == 'hi'"
+          - "'xxhixx' | regex_replace('^x+|x+$', '') == 'hi'"
+
+    - name: string methods
+      assert:
+        that:
+          - "mixed.startswith('Hello')"
+          - "mixed.endswith('World')"
+          - "mixed.split(' ') == ['Hello', 'World']"
+          - "mixed.replace('World', 'There') == 'Hello There'"
+          - "mixed.upper() == 'HELLO WORLD'"
+          - "'a,b,c'.split(',') | length == 3"
+          - "path.split('/') | last == 'service.log'"
+
+    - name: length and slicing
+      assert:
+        that:
+          - "mixed | length == 11"
+          - "mixed[0:5] == 'Hello'"
+          - "mixed[-5:] == 'World'"
+          - "mixed[::-1] == 'dlroW olleH'"
+          - "sentence.split(' ') | first == 'the'"
+
+    - name: encoding and hashing
+      assert:
+        that:
+          - "'password' | b64encode == 'cGFzc3dvcmQ='"
+          - "'cGFzc3dvcmQ=' | b64decode == 'password'"
+          - "'test' | hash('sha1') == 'a94a8fe5ccb19ba61c4c0873d391e987982fbbd3'"
+
+    - name: concatenation and types
+      assert:
+        that:
+          - "'v' ~ 1 ~ '.' ~ 2 == 'v1.2'"
+          - "42 | string == '42'"
+          - "'3' | int + '4' | int == 7"
+          - "'/' ~ ['etc', 'app'] | join('/') == '/etc/app'"
+
+    - name: default and mandatory-safe access
+      assert:
+        that:
+          - "undefined | default('d') == 'd'"
+          - "'' | default('d', true) == 'd'"
+          - "'x' | default('d') == 'x'"
+          - "0 | default('d') == 0"

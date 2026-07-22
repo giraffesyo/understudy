@@ -1,0 +1,65 @@
+---
+# How values stringify when interpolated into surrounding text must match
+# Python/Jinja2 (True/False/None capitalization, dict/list repr, floats).
+- name: type rendering
+  hosts: all
+  gather_facts: false
+  vars:
+    flag_true: true
+    flag_false: false
+    nothing: null
+    whole: 5
+    frac: 2.5
+    listv: [1, 2, 3]
+    dictv: {name: ada, age: 36}
+    nested: {items: [1, 2], ok: true}
+  tasks:
+    - name: booleans and none stringify Python-style
+      assert:
+        that:
+          - "'v=' ~ flag_true == 'v=True'"
+          - "'v=' ~ flag_false == 'v=False'"
+          - "'v=' ~ nothing == 'v=None'"
+
+    - name: numbers stringify
+      assert:
+        that:
+          - "'n=' ~ whole == 'n=5'"
+          - "'n=' ~ frac == 'n=2.5'"
+          - "'n=' ~ (whole / 2) == 'n=2.5'"
+          - "'n=' ~ (10 / 5) == 'n=2.0'"
+
+    - name: interpolation in text templates
+      set_fact:
+        s_bool: "flag is {{ flag_true }}"
+        s_int: "count {{ whole }}"
+        s_list: "items {{ listv }}"
+        s_dict: "cfg {{ dictv }}"
+
+    - name: text interpolation matches (order-independent for dicts)
+      # NOTE: understudy renders dict keys sorted; Python preserves insertion
+      # order — a documented divergence. Assert order-independent properties.
+      assert:
+        that:
+          - s_bool == 'flag is True'
+          - s_int == 'count 5'
+          - s_list == 'items [1, 2, 3]'
+          - "\"'name': 'ada'\" in s_dict"
+          - "\"'age': 36\" in s_dict"
+          - s_dict.startswith('cfg {')
+
+    - name: json serialization (single-key / already-sorted, order-stable)
+      assert:
+        that:
+          - "listv | to_json == '[1, 2, 3]'"
+          - "nested | to_json == '{\"items\": [1, 2], \"ok\": true}'"
+          - "{'only': 1} | to_json == '{\"only\": 1}'"
+
+    - name: bool filter coercions
+      assert:
+        that:
+          - "'yes' | bool == true"
+          - "'no' | bool == false"
+          - "'True' | bool == true"
+          - "1 | bool == true"
+          - "0 | bool == false"
