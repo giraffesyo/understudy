@@ -400,11 +400,17 @@ func TestEvalBool(t *testing.T) {
 	}
 }
 
-func TestStatementsRejectedForNow(t *testing.T) {
+func TestUnsupportedStatementsRejected(t *testing.T) {
 	e := New()
-	_, err := e.RenderTemplate("{% if x %}y{% endif %}", nil, testPos)
-	if err == nil || !strings.Contains(err.Error(), "not supported yet") {
-		t.Errorf("statement error = %v", err)
+	for _, src := range []string{
+		"{% macro f() %}{% endmacro %}",
+		"{% include 'x.j2' %}",
+		"{% extends 'base' %}",
+	} {
+		_, err := e.RenderTemplate(src, nil, testPos)
+		if err == nil || !strings.Contains(err.Error(), "not supported yet") {
+			t.Errorf("%s: error = %v, want 'not supported yet'", src, err)
+		}
 	}
 }
 
