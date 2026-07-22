@@ -82,14 +82,20 @@ func sysctlModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		}
 	}
 
-	if state == "present" && !env.CheckMode {
-		// Live value: set when it differs (sysctl_set) or on reload.
-		current, _ := runOut(env, "sysctl", "-n", name)
-		liveDiffers := strings.TrimSpace(current) != value
-		if liveDiffers && (p.Bool("sysctl_set") || p.Bool("reload")) {
-			if out, err := runOut(env, "sysctl", "-w", fmt.Sprintf("%s=%s", name, value)); err != nil {
+	if state == "present" && !env.CheckMode && (p.Bool("sysctl_set") || p.Bool("reload")) {
+		// The live value lives at /proc/sys/<name with dots as slashes>.
+		// Writing there directly is what `sysctl -w` does, minus the
+		// procps-ng dependency.
+		procPath := "/proc/sys/" + strings.ReplaceAll(name, ".", "/")
+		current, rerr := os.ReadFile(procPath)
+		if rerr != nil {
+			if !p.Bool("ignoreerrors") {
+				return agentproto.Fail("cannot read %s (%v); is %q a valid kernel parameter?", procPath, rerr, name)
+			}
+		} else if normalizeSysctl(string(current)) != normalizeSysctl(value) {
+			if werr := os.WriteFile(procPath, []byte(value+"\n"), 0o644); werr != nil {
 				if !p.Bool("ignoreerrors") {
-					return agentproto.Fail("sysctl -w %s=%s failed: %v: %s", name, value, err, tail(out))
+					return agentproto.Fail("writing %s failed: %v", procPath, werr)
 				}
 			} else {
 				res.Changed = true
@@ -97,4 +103,10 @@ func sysctlModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		}
 	}
 	return res
+}
+
+// normalizeSysctl collapses whitespace so tab- and space-separated values
+// (e.g. "1\t2\t3") compare equal to the requested form.
+func normalizeSysctl(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }

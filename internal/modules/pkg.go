@@ -234,12 +234,16 @@ func pkgOutputShowsChange(mgr, out string) bool {
 }
 
 func runOut(env *RunEnv, name string, argv ...string) (string, error) {
-	cmd := exec.Command(name, argv...)
+	path, err := lookPath(name)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command(path, argv...)
 	applyEnv(cmd, env)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
-	err := cmd.Run()
+	err = cmd.Run()
 	return buf.String(), err
 }
 

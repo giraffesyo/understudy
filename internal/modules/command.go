@@ -95,7 +95,7 @@ func mkCommand(shell bool) ModuleFunc {
 					return agentproto.Fail("no command given")
 				}
 			}
-			path, err := exec.LookPath(argv[0])
+			path, err := lookPath(argv[0])
 			if err != nil {
 				return agentproto.Fail("Cannot find command %q: %v", argv[0], err)
 			}
@@ -167,7 +167,7 @@ func launchDetached(env *RunEnv, shell bool, cmdline string, argv []string, chdi
 				return agentproto.Fail("failed to parse command: %v", err)
 			}
 		}
-		path, err := exec.LookPath(argv[0])
+		path, err := lookPath(argv[0])
 		if err != nil {
 			return agentproto.Fail("Cannot find command %q: %v", argv[0], err)
 		}
