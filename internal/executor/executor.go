@@ -1124,10 +1124,9 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	defer r.mu.Unlock()
 	st := r.stats[host]
 	switch {
-	case res.Failed && ignored:
-		st.Ignored++
-		st.OK++
-	case res.Failed:
+	case res.Skipped:
+		st.Skipped++
+	case res.Failed && !ignored:
 		st.Failed++
 		r.failed[host] = true
 		// Remember the blocks this host was inside so their always
@@ -1138,13 +1137,17 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 			}
 			r.failedIn[host][ref.ID] = true
 		}
-	case res.Skipped:
-		st.Skipped++
-	case res.Changed:
-		st.Changed++
-		st.OK++
 	default:
+		// ok, changed, and failed-but-ignored all count toward ok, matching
+		// Ansible's recap: a changed task is also ok, and an ignored task is
+		// ok+ignored (and changed too, if it changed).
 		st.OK++
+		if res.Changed {
+			st.Changed++
+		}
+		if res.Failed && ignored {
+			st.Ignored++
+		}
 	}
 }
 

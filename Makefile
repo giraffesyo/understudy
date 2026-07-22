@@ -3,7 +3,7 @@ BIN      := bin
 AGENTS   := internal/embedded/agents
 LDFLAGS  := -s -w
 
-.PHONY: build agents test test-e2e depcheck clean
+.PHONY: build agents test test-e2e test-golden depcheck clean
 
 build: agents
 	$(GO) build -trimpath -o $(BIN)/understudy ./cmd/understudy
@@ -23,6 +23,11 @@ test:
 
 test-e2e:
 	$(GO) test -tags e2e ./test/e2e/...
+
+# Differential tests vs. real ansible-playbook (must be on PATH, or set
+# UNDERSTUDY_ANSIBLE_PLAYBOOK). Requires `make build` first.
+test-golden: build
+	$(GO) test -tags golden ./test/e2e/...
 
 clean:
 	rm -rf $(BIN) $(AGENTS)/agent-*

@@ -1,0 +1,34 @@
+---
+# Handler notify/flush + block/rescue/always flow must match Ansible.
+- name: handlers and blocks
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: notify a handler
+      command: echo change
+      notify: touched
+
+    - name: block with a rescue
+      block:
+        - name: fail inside block
+          command: /usr/bin/false
+        - name: unreached in block
+          debug:
+            msg: nope
+      rescue:
+        - name: recover
+          debug:
+            msg: rescued
+      always:
+        - name: cleanup
+          debug:
+            msg: always
+
+    - name: after the block
+      debug:
+        msg: continued
+
+  handlers:
+    - name: touched
+      debug:
+        msg: handler fired
