@@ -169,6 +169,19 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 	return b.String(), nil
 }
 
+// RenderString renders a template and always returns text — the template
+// module's contract (the native-types rule never applies to file content).
+func (e *Engine) RenderString(src string, vars VarGetter, pos Position) (string, error) {
+	v, err := e.RenderTemplate(src, vars, pos)
+	if err != nil {
+		return "", err
+	}
+	if s, ok := v.(string); ok {
+		return s, nil
+	}
+	return toStr(v), nil
+}
+
 // EvalExpression evaluates src as a bare Jinja expression (when:,
 // failed_when:, until: semantics — no {{ }} needed).
 func (e *Engine) EvalExpression(src string, vars VarGetter, pos Position) (any, error) {
