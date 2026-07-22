@@ -79,6 +79,13 @@ func Run(ctx context.Context, pb Playbook, opts Options) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("internal rendering error: %w", err)
 	}
+	roleBase := opts.BaseDir
+	if roleBase == "" {
+		roleBase = "."
+	}
+	if err := playbook.ResolveRoles(plays, roleBase, nil); err != nil {
+		return nil, err
+	}
 
 	cfg, err := config.Load()
 	if err != nil {

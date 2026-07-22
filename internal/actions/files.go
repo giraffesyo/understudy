@@ -117,8 +117,9 @@ func forwardToCopy(ctx context.Context, actx *Context, args map[string]any, cont
 	return res
 }
 
-// resolveSrc finds a source file: absolute, playbook-relative, or under the
-// conventional subdirectory (files/ or templates/).
+// resolveSrc finds a source file: absolute, role-relative (roles/x/files or
+// roles/x/templates), playbook-relative, or under the conventional
+// subdirectory.
 func resolveSrc(actx *Context, src, subdir string) string {
 	if filepath.IsAbs(src) {
 		if _, err := os.Stat(src); err == nil {
@@ -126,10 +127,15 @@ func resolveSrc(actx *Context, src, subdir string) string {
 		}
 		return ""
 	}
-	candidates := []string{
-		filepath.Join(actx.BaseDir, subdir, src),
-		filepath.Join(actx.BaseDir, src),
+	var candidates []string
+	if actx.SrcDir != "" {
+		candidates = append(candidates,
+			filepath.Join(actx.SrcDir, subdir, src),
+			filepath.Join(actx.SrcDir, src))
 	}
+	candidates = append(candidates,
+		filepath.Join(actx.BaseDir, subdir, src),
+		filepath.Join(actx.BaseDir, src))
 	for _, c := range candidates {
 		if _, err := os.Stat(c); err == nil {
 			return c

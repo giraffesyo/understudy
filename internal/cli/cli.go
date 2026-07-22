@@ -353,6 +353,10 @@ func playbookCmd(args []string) int {
 			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
 			return 4
 		}
+		if err := playbook.ResolveRoles(plays, filepath.Dir(path), nil); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+			return 4
+		}
 		if p.syntax {
 			fmt.Printf("playbook: %s\n", path)
 			continue

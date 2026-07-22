@@ -3,6 +3,7 @@ package playbook
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -21,6 +22,7 @@ var taskKeywords = map[string]bool{
 	"vars": true, "environment": true, "notify": true, "tags": true,
 	"no_log": true, "delegate_to": true, "args": true, "listen": true,
 	"check_mode": true, "diff": true, "run_once": true, "any_errors_fatal": true,
+	"async": true, "poll": true,
 }
 
 // playKeywords are recognized play-level keys.
@@ -36,7 +38,6 @@ var playKeywords = map[string]bool{
 
 // Deferred play keys that must fail loudly rather than be ignored.
 var unsupportedPlayKeys = map[string]string{
-	"roles":       "roles are not supported yet",
 	"serial":      "'serial' is not supported yet",
 	"strategy":    "only the linear strategy is supported",
 	"vars_prompt": "'vars_prompt' is not supported yet",
@@ -186,6 +187,12 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 			}
 		case "tags":
 			play.Tags = decodeStringList(val)
+		case "roles":
+			refs, err := parseRoleRefs(val, file)
+			if err != nil {
+				return nil, err
+			}
+			play.Roles = refs
 		case "environment":
 			v, err := decodeMap(val, file, "environment")
 			if err != nil {
@@ -225,6 +232,14 @@ func parseTaskListIn(node *yaml.Node, file string, handlers bool, bc *blockCount
 			tasks = append(tasks, flat...)
 			continue
 		}
+		if node := importTasksNode(item); node != nil {
+			flat, err := parseImportTasks(item, node, file, handlers, bc, enclosing)
+			if err != nil {
+				return nil, err
+			}
+			tasks = append(tasks, flat...)
+			continue
+		}
 		task, err := parseTask(item, file, handlers)
 		if err != nil {
 			return nil, err
@@ -233,6 +248,160 @@ func parseTaskListIn(node *yaml.Node, file string, handlers bool, bc *blockCount
 		tasks = append(tasks, task)
 	}
 	return tasks, nil
+}
+
+func importTasksNode(item *yaml.Node) *yaml.Node {
+	for _, key := range []string{"import_tasks", "ansible.builtin.import_tasks"} {
+		if n := item.MapGet(key); n != nil {
+			return n
+		}
+	}
+	return nil
+}
+
+// parseImportTasks splices a static task-file import inline. The import
+// entry's own keywords (when/vars/tags/become...) inherit into every
+// imported task, like Ansible's static imports.
+func parseImportTasks(item, pathNode *yaml.Node, file string, handlers bool, bc *blockCounter, enclosing []BlockRef) ([]*Task, error) {
+	rel := importPath(pathNode)
+	if rel == "" {
+		return nil, errAt(file, pathNode, "import_tasks requires a file name")
+	}
+	if strings.Contains(rel, "{{") {
+		return nil, errAt(file, pathNode,
+			"import_tasks cannot use templated paths (imports are static); use include_tasks")
+	}
+	path := rel
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(filepath.Dir(file), rel)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, errAt(file, pathNode, "import_tasks: %v", err)
+	}
+	f, err := yaml.Parse(data, path)
+	if err != nil {
+		return nil, err
+	}
+	if len(f.Docs) == 0 {
+		return nil, nil
+	}
+	tasks, err := parseTaskListIn(f.Docs[0], path, handlers, bc, enclosing)
+	if err != nil {
+		return nil, err
+	}
+
+	// Inheritance from the import entry itself.
+	inh := &Task{LoopVar: "item"}
+	for _, key := range item.MapKeys() {
+		val := item.MapGet(key)
+		var err error
+		switch key {
+		case "when":
+			inh.When = decodeExprList(val)
+		case "vars":
+			inh.Vars, err = decodeMap(val, file, "vars")
+		case "tags":
+			inh.Tags = decodeStringList(val)
+		case "become":
+			var b bool
+			if b, err = decodeBool(val, file, "become"); err == nil {
+				inh.Become.Become = &b
+			}
+		case "become_user":
+			inh.Become.BecomeUser, _ = val.Str()
+		case "environment":
+			inh.Environment, err = decodeMap(val, file, "environment")
+		case "no_log":
+			inh.NoLog, err = decodeBool(val, file, "no_log")
+		case "delegate_to":
+			inh.Delegate, _ = val.Str()
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, t := range tasks {
+		applyBlockInheritance(t, inh)
+	}
+	return tasks, nil
+}
+
+// importPath extracts the file path from `import_tasks: x.yml` or the map
+// form {file: x.yml}.
+func importPath(node *yaml.Node) string {
+	if s, ok := node.Str(); ok {
+		return s
+	}
+	if fileNode := node.MapGet("file"); fileNode != nil {
+		s, _ := fileNode.Str()
+		return s
+	}
+	return ""
+}
+
+// parseRoleRefs handles the roles: list forms — bare names, {role: x, ...},
+// and old-style inline params.
+func parseRoleRefs(node *yaml.Node, file string) ([]*RoleRef, error) {
+	items, ok := node.Seq()
+	if !ok {
+		if s, isStr := node.Str(); isStr && s == "" {
+			return nil, nil
+		}
+		return nil, errAt(file, node, "'roles' must be a list")
+	}
+	var refs []*RoleRef
+	for _, item := range items {
+		ref := &RoleRef{Src: Pos{File: file, Line: item.Line, Col: item.Column}}
+		if name, isStr := item.Str(); isStr {
+			ref.Name = name
+			refs = append(refs, ref)
+			continue
+		}
+		keys := item.MapKeys()
+		if keys == nil {
+			return nil, errAt(file, item, "a role entry must be a name or a mapping")
+		}
+		for _, key := range keys {
+			val := item.MapGet(key)
+			switch key {
+			case "role", "name":
+				ref.Name, _ = val.Str()
+			case "when":
+				ref.When = decodeExprList(val)
+			case "tags":
+				ref.Tags = decodeStringList(val)
+			case "vars":
+				m, err := decodeMap(val, file, "vars")
+				if err != nil {
+					return nil, err
+				}
+				if ref.Params == nil {
+					ref.Params = map[string]any{}
+				}
+				for k, v := range m {
+					ref.Params[k] = v
+				}
+			case "become", "become_user", "delegate_to":
+				return nil, errAt(file, val, "role keyword %q is not supported yet", key)
+			default:
+				// Old-style inline parameter: {role: x, port: 8080}.
+				v, err := val.Decode()
+				if err != nil {
+					return nil, err
+				}
+				if ref.Params == nil {
+					ref.Params = map[string]any{}
+				}
+				ref.Params[key] = v
+			}
+		}
+		if ref.Name == "" {
+			return nil, errAt(file, item, "role entry is missing the role name")
+		}
+		refs = append(refs, ref)
+	}
+	return refs, nil
 }
 
 // blockKeywords are the keys legal on a block entry.
@@ -370,13 +539,15 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 	}
 	task := &Task{
 		LoopVar: "item",
+		Poll:    -1, // unset; 0 means fire-and-forget
 		Src:     Pos{File: file, Line: node.Line, Col: node.Column},
 	}
 
-	// Find the module key: exactly one non-keyword key.
+	// Find the module key: exactly one non-keyword key. with_<lookup> keys
+	// are loop forms, not modules.
 	var moduleKeys []string
 	for _, key := range keys {
-		if !taskKeywords[key] {
+		if !taskKeywords[key] && !strings.HasPrefix(key, "with_") {
 			moduleKeys = append(moduleKeys, key)
 		}
 	}
@@ -389,7 +560,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			strings.Join(moduleKeys, ", "))
 	}
 	moduleName := normalizeModuleName(moduleKeys[0])
-	if !ModuleKnown(moduleName) {
+	if !ModuleKnown(moduleName) && !executorStatement(moduleName) {
 		return nil, errAt(file, node.MapGet(moduleKeys[0]),
 			"couldn't resolve module/action %q", moduleKeys[0])
 	}
@@ -419,12 +590,19 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			}
 		case "when":
 			task.When = decodeExprList(val)
-		case "loop", "with_items":
+		case "loop", "with_items", "with_list":
 			v, err := val.Decode()
 			if err != nil {
 				return nil, err
 			}
 			task.Loop = v
+		case "with_dict":
+			v, err := val.Decode()
+			if err != nil {
+				return nil, err
+			}
+			task.Loop = v
+			task.LoopWith = "dict"
 		case "loop_control":
 			m, err := decodeMap(val, file, "loop_control")
 			if err != nil {
@@ -508,6 +686,30 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			task.Delegate, _ = val.Str()
 		case "check_mode", "diff", "run_once", "any_errors_fatal":
 			// Accepted; wired in later milestones.
+		case "async":
+			// Async with poll > 0 runs synchronously (same outcome; the
+			// timeout is not enforced yet). poll: 0 = fire-and-forget.
+			n, err := decodeInt(val, file, "async")
+			if err != nil {
+				return nil, err
+			}
+			task.Async = int(n)
+		case "poll":
+			n, err := decodeInt(val, file, "poll")
+			if err != nil {
+				return nil, err
+			}
+			task.Poll = int(n)
+		default:
+			if strings.HasPrefix(key, "with_") {
+				// with_<lookup>: terms feed the named lookup plugin.
+				v, err := val.Decode()
+				if err != nil {
+					return nil, err
+				}
+				task.Loop = v
+				task.LoopWith = strings.TrimPrefix(key, "with_")
+			}
 		}
 	}
 	return task, nil
@@ -531,6 +733,11 @@ func parseModuleArgs(task *Task, node *yaml.Node, file string) error {
 		task.Args = t
 		return nil
 	case string:
+		if executorStatement(task.Module) {
+			// include_tasks: file.yml — normalize to the map form.
+			task.Args = map[string]any{"file": t}
+			return nil
+		}
 		if freeFormModule(task.Module) {
 			free, kv := splitFreeForm(t, task.Module)
 			task.FreeForm = free
@@ -568,6 +775,16 @@ func ParseAdhocArgs(task *Task, module, raw string) error {
 	}
 	task.Args = kv
 	return nil
+}
+
+// executorStatement names task keys handled by the executor itself rather
+// than a module or action (dynamic includes).
+func executorStatement(name string) bool {
+	switch name {
+	case "include_tasks", "include_vars":
+		return true
+	}
+	return false
 }
 
 func normalizeModuleName(name string) string {

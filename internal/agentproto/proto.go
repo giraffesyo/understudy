@@ -32,6 +32,7 @@ type TaskRequest struct {
 	Env        map[string]string `json:"env,omitempty"` // task environment: for shell-outs
 	PayloadLen int64             `json:"payload_len,omitempty"`
 	BecomeUser string            `json:"become_user,omitempty"` // informational
+	Background bool              `json:"background,omitempty"`  // async poll:0 fire-and-forget
 }
 
 // Diff is a before/after pair rendered by --diff.
