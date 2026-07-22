@@ -394,6 +394,16 @@ func registerAnsibleFilters(e *Engine) {
 		return e.Filters["hash"](ec, in, []any{"sha1"}, nil)
 	}
 
+	f["format"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		s, ok := asString(in)
+		if !ok {
+			return nil, fmt.Errorf("format requires a string, got %s", typeName(in))
+		}
+		// Jinja2's format filter is Python's % operator; Go's fmt verbs
+		// cover the common specifiers (%s %d %f %x %o %e %g, width/precision).
+		return fmt.Sprintf(s, args...), nil
+	}
+
 	f["quote"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
 		if !ok {
