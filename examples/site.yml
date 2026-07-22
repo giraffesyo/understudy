@@ -1,0 +1,57 @@
+---
+# Smoke-test playbook: must always run green with
+#   understudy playbook -i 'localhost,' -c local examples/site.yml
+- name: Understudy smoke test
+  hosts: all
+  gather_facts: false
+  vars:
+    greeting: hello
+    packages:
+      - curl
+      - git
+  tasks:
+    - name: Say hello
+      debug:
+        msg: "{{ greeting }} from {{ inventory_hostname }}"
+
+    - name: Run a command
+      command: echo understudy-works
+      register: echo_out
+
+    - name: Verify command output
+      assert:
+        that:
+          - echo_out.rc == 0
+          - "'understudy-works' in echo_out.stdout"
+
+    - name: Shell pipeline
+      shell: echo one two three | wc -w
+      register: wc_out
+      changed_when: false
+
+    - name: Check word count
+      debug:
+        var: wc_out.stdout
+
+    - name: Loop over packages
+      debug:
+        msg: "would install {{ item }}"
+      loop: "{{ packages }}"
+
+    - name: Conditional task (runs)
+      debug:
+        msg: greeting is hello
+      when: greeting == "hello"
+
+    - name: Conditional task (skipped)
+      debug:
+        msg: never shown
+      when: greeting == "goodbye"
+
+    - name: Set a fact
+      set_fact:
+        derived: "{{ greeting }}-world"
+
+    - name: Use the fact
+      assert:
+        that: derived == "hello-world"

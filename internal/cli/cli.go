@@ -1,0 +1,415 @@
+// Package cli implements argument parsing and the playbook/adhoc
+// subcommands. Flag parsing is hand-rolled: stdlib flag cannot count -vvv,
+// collect repeated -e, or intersperse positionals.
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/giraffesyo/understudy/internal/callback"
+	"github.com/giraffesyo/understudy/internal/executor"
+	"github.com/giraffesyo/understudy/internal/playbook"
+	"github.com/giraffesyo/understudy/internal/yaml"
+)
+
+const version = "0.1.0-dev"
+
+// Main dispatches on argv[0] (multicall) then subcommands.
+func Main() int {
+	args := os.Args[1:]
+	switch filepath.Base(os.Args[0]) {
+	case "ansible-playbook":
+		return playbookCmd(args)
+	case "ansible":
+		return adhocCmd(args)
+	}
+	if len(args) == 0 {
+		usage()
+		return 1
+	}
+	switch args[0] {
+	case "playbook":
+		return playbookCmd(args[1:])
+	case "adhoc":
+		return adhocCmd(args[1:])
+	case "version", "--version":
+		fmt.Printf("understudy %s\n", version)
+		return 0
+	case "help", "--help", "-h":
+		usage()
+		return 0
+	}
+	fmt.Fprintf(os.Stderr, "understudy: unknown command %q\n\n", args[0])
+	usage()
+	return 1
+}
+
+func usage() {
+	fmt.Fprint(os.Stderr, `understudy - an Ansible-compatible automation tool
+
+Usage:
+  understudy playbook [options] <playbook.yml>...   run playbooks
+  understudy adhoc [options] <pattern> -m <module>  run an ad-hoc task
+  understudy version                                print version
+
+Common options:
+  -i INVENTORY      inventory file/dir, or literal list: 'host1,host2,'
+  -l PATTERN        limit hosts
+  -e KEY=VAL|@file  extra variables (repeatable)
+  -f N              parallel forks (default 5)
+  -c CONNECTION     connection type (ssh, local)
+  -b, -K, -u USER   become / ask become pass / remote user
+  --check, --diff   check mode, show diffs
+  -v/-vv/-vvv       verbosity
+`)
+}
+
+// parsedArgs holds common flag values.
+type parsedArgs struct {
+	inventory  []string
+	limit      string
+	extraVars  map[string]any
+	forks      int
+	verbosity  int
+	check      bool
+	diff       bool
+	become     bool
+	becomeUser string
+	askBecome  bool
+	askPass    bool
+	remoteUser string
+	privateKey string
+	connection string
+	tags       string
+	skipTags   string
+	syntax     bool
+	listHosts  bool
+	listTasks  bool
+	module     string // adhoc -m
+	moduleArgs string // adhoc -a
+	positional []string
+}
+
+func parseArgs(args []string) (*parsedArgs, error) {
+	p := &parsedArgs{forks: 5, extraVars: map[string]any{}}
+	i := 0
+	next := func(flag string) (string, error) {
+		i++
+		if i >= len(args) {
+			return "", fmt.Errorf("flag %s requires a value", flag)
+		}
+		return args[i], nil
+	}
+	for ; i < len(args); i++ {
+		a := args[i]
+		var err error
+		switch {
+		case a == "-i" || a == "--inventory":
+			var v string
+			if v, err = next(a); err == nil {
+				p.inventory = append(p.inventory, v)
+			}
+		case strings.HasPrefix(a, "--inventory="):
+			p.inventory = append(p.inventory, a[len("--inventory="):])
+		case a == "-l" || a == "--limit":
+			p.limit, err = next(a)
+		case a == "-e" || a == "--extra-vars":
+			var v string
+			if v, err = next(a); err == nil {
+				err = parseExtraVars(v, p.extraVars)
+			}
+		case strings.HasPrefix(a, "--extra-vars="):
+			err = parseExtraVars(a[len("--extra-vars="):], p.extraVars)
+		case a == "-f" || a == "--forks":
+			var v string
+			if v, err = next(a); err == nil {
+				p.forks, err = strconv.Atoi(v)
+			}
+		case a == "-t" || a == "--tags":
+			p.tags, err = next(a)
+		case a == "--skip-tags":
+			p.skipTags, err = next(a)
+		case a == "--check":
+			p.check = true
+		case a == "--diff":
+			p.diff = true
+		case a == "-b" || a == "--become":
+			p.become = true
+		case a == "--become-user":
+			p.becomeUser, err = next(a)
+		case a == "-K" || a == "--ask-become-pass":
+			p.askBecome = true
+		case a == "-k" || a == "--ask-pass":
+			p.askPass = true
+		case a == "-u" || a == "--user":
+			p.remoteUser, err = next(a)
+		case a == "--private-key" || a == "--key-file":
+			p.privateKey, err = next(a)
+		case a == "-c" || a == "--connection":
+			p.connection, err = next(a)
+		case a == "--syntax-check":
+			p.syntax = true
+		case a == "--list-hosts":
+			p.listHosts = true
+		case a == "--list-tasks":
+			p.listTasks = true
+		case a == "-m" || a == "--module-name":
+			p.module, err = next(a)
+		case a == "-a" || a == "--args":
+			p.moduleArgs, err = next(a)
+		case a == "--version":
+			fmt.Printf("understudy %s\n", version)
+			os.Exit(0)
+		case a == "-h" || a == "--help":
+			usage()
+			os.Exit(0)
+		case strings.HasPrefix(a, "-v") && strings.TrimLeft(a, "-v") == "":
+			p.verbosity += strings.Count(a, "v")
+		case strings.HasPrefix(a, "-"):
+			return nil, fmt.Errorf("unknown flag %q", a)
+		default:
+			p.positional = append(p.positional, a)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return p, nil
+}
+
+// parseExtraVars handles -e k=v, -e '{"json": true}', and -e @file.yml.
+func parseExtraVars(s string, into map[string]any) error {
+	switch {
+	case strings.HasPrefix(s, "@"):
+		data, err := os.ReadFile(s[1:])
+		if err != nil {
+			return fmt.Errorf("extra-vars file: %w", err)
+		}
+		v, err := yaml.Unmarshal(data, s[1:])
+		if err != nil {
+			return err
+		}
+		m, ok := v.(map[string]any)
+		if !ok {
+			return fmt.Errorf("extra-vars file %s must contain a mapping", s[1:])
+		}
+		for k, val := range m {
+			into[k] = val
+		}
+		return nil
+	case strings.HasPrefix(strings.TrimSpace(s), "{"):
+		var m map[string]any
+		if err := json.Unmarshal([]byte(s), &m); err != nil {
+			return fmt.Errorf("extra-vars JSON: %w", err)
+		}
+		for k, val := range m {
+			into[k] = val
+		}
+		return nil
+	default:
+		for _, pair := range strings.Fields(s) {
+			eq := strings.IndexByte(pair, '=')
+			if eq <= 0 {
+				return fmt.Errorf("extra-vars: expected key=value, got %q", pair)
+			}
+			into[pair[:eq]] = pair[eq+1:]
+		}
+		return nil
+	}
+}
+
+// resolveHosts turns -i values into a host list. M3 supports the literal
+// list form ('host1,host2,') and defaults to localhost; inventory files
+// land in M5.
+func resolveHosts(p *parsedArgs) ([]string, error) {
+	var hosts []string
+	for _, inv := range p.inventory {
+		if strings.Contains(inv, ",") {
+			for _, h := range strings.Split(inv, ",") {
+				if h = strings.TrimSpace(h); h != "" {
+					hosts = append(hosts, h)
+				}
+			}
+			continue
+		}
+		if _, err := os.Stat(inv); err == nil {
+			return nil, fmt.Errorf("inventory files are not supported yet (coming in a later milestone); use the literal form: -i %q", inv+",")
+		}
+		hosts = append(hosts, inv)
+	}
+	if len(hosts) == 0 {
+		hosts = []string{"localhost"}
+	}
+	return hosts, nil
+}
+
+func playbookCmd(args []string) int {
+	p, err := parseArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "understudy: %v\n", err)
+		return 1
+	}
+	if len(p.positional) == 0 {
+		fmt.Fprintln(os.Stderr, "understudy playbook: at least one playbook file is required")
+		return 1
+	}
+
+	exit := 0
+	for _, path := range p.positional {
+		plays, err := playbook.LoadFile(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+			return 4
+		}
+		if p.syntax {
+			fmt.Printf("playbook: %s\n", path)
+			continue
+		}
+		if p.listTasks {
+			listTasks(path, plays)
+			continue
+		}
+		hosts, err := resolveHosts(p)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+			return 1
+		}
+		if p.listHosts {
+			for _, play := range plays {
+				name := play.Name
+				if name == "" {
+					name = play.HostPattern
+				}
+				fmt.Printf("\n  play #%d (%s): host count=%d\n", 1, name, len(hosts))
+				for _, h := range hosts {
+					fmt.Printf("    %s\n", h)
+				}
+			}
+			continue
+		}
+
+		cb := callback.New(p.verbosity)
+		runner := executor.NewRunner(hosts, cb, executor.Options{
+			Forks:      p.forks,
+			CheckMode:  p.check,
+			Diff:       p.diff,
+			Verbosity:  p.verbosity,
+			ExtraVars:  p.extraVars,
+			Become:     p.become,
+			BecomeUser: p.becomeUser,
+			Connection: p.connection,
+			BaseDir:    filepath.Dir(path),
+		})
+		code, err := runner.Run(context.Background(), plays)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+			return 1
+		}
+		if code != 0 {
+			exit = code
+		}
+	}
+	return exit
+}
+
+func listTasks(path string, plays []*playbook.Play) {
+	fmt.Printf("\nplaybook: %s\n", path)
+	for i, play := range plays {
+		name := play.Name
+		if name == "" {
+			name = play.HostPattern
+		}
+		fmt.Printf("\n  play #%d (%s):\n", i+1, name)
+		for _, t := range play.PreTasks {
+			printTaskLine(t)
+		}
+		for _, t := range play.Tasks {
+			printTaskLine(t)
+		}
+		for _, t := range play.PostTasks {
+			printTaskLine(t)
+		}
+	}
+}
+
+func printTaskLine(t *playbook.Task) {
+	name := t.Name
+	if name == "" {
+		name = t.Module
+	}
+	if len(t.Tags) > 0 {
+		fmt.Printf("      %s\tTAGS: [%s]\n", name, strings.Join(t.Tags, ", "))
+	} else {
+		fmt.Printf("      %s\n", name)
+	}
+}
+
+// adhocCmd synthesizes a one-task play: `understudy adhoc all -m ping`.
+func adhocCmd(args []string) int {
+	p, err := parseArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "understudy: %v\n", err)
+		return 1
+	}
+	if len(p.positional) != 1 {
+		fmt.Fprintln(os.Stderr, "understudy adhoc: a host pattern is required")
+		return 1
+	}
+	module := p.module
+	if module == "" {
+		module = "command"
+	}
+	task := &playbook.Task{
+		Name:    module,
+		Module:  module,
+		LoopVar: "item",
+		Src:     playbook.Pos{File: "<adhoc>", Line: 1},
+	}
+	if p.moduleArgs != "" {
+		tmp := &playbook.Task{Module: module, LoopVar: "item"}
+		if err := adhocArgs(tmp, module, p.moduleArgs); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+			return 1
+		}
+		task.Args = tmp.Args
+		task.FreeForm = tmp.FreeForm
+	}
+	gather := false
+	play := &playbook.Play{
+		Name:        "understudy Ad-Hoc",
+		HostPattern: p.positional[0],
+		GatherFacts: &gather,
+		Tasks:       []*playbook.Task{task},
+		Src:         playbook.Pos{File: "<adhoc>", Line: 1},
+	}
+
+	hosts, err := resolveHosts(p)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		return 1
+	}
+	cb := callback.New(p.verbosity)
+	runner := executor.NewRunner(hosts, cb, executor.Options{
+		Forks:      p.forks,
+		CheckMode:  p.check,
+		Diff:       p.diff,
+		Verbosity:  p.verbosity,
+		ExtraVars:  p.extraVars,
+		Become:     p.become,
+		BecomeUser: p.becomeUser,
+		Connection: p.connection,
+		BaseDir:    ".",
+	})
+	code, err := runner.Run(context.Background(), []*playbook.Play{play})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		return 1
+	}
+	return code
+}
