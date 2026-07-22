@@ -12,6 +12,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/executor"
 	"github.com/giraffesyo/understudy/internal/inventory"
 	"github.com/giraffesyo/understudy/internal/playbook"
+	"github.com/giraffesyo/understudy/internal/vault"
 )
 
 // Options configure a programmatic run. The zero value targets the
@@ -45,6 +46,10 @@ type Options struct {
 	// BaseDir anchors relative template/copy/vars_files sources.
 	// Defaults to the current working directory.
 	BaseDir string
+
+	// VaultPasswords decrypt !vault values and whole-file-encrypted
+	// vars_files / group_vars. Any listed password may match.
+	VaultPasswords []string
 
 	// Output receives playbook progress in ansible-playbook's format.
 	// Defaults to os.Stdout; use io.Discard to silence.
@@ -82,6 +87,12 @@ func Run(ctx context.Context, pb Playbook, opts Options) (*Result, error) {
 	roleBase := opts.BaseDir
 	if roleBase == "" {
 		roleBase = "."
+	}
+	var secrets *vault.Secrets
+	if len(opts.VaultPasswords) > 0 {
+		secrets = vault.NewSecrets(opts.VaultPasswords...)
+		inventory.Decrypt = secrets.MaybeDecryptFile
+		defer func() { inventory.Decrypt = nil }()
 	}
 	if err := playbook.ResolveRoles(plays, roleBase, nil); err != nil {
 		return nil, err
@@ -136,6 +147,7 @@ func Run(ctx context.Context, pb Playbook, opts Options) (*Result, error) {
 		BaseDir:    baseDir,
 		Tags:       opts.Tags,
 		SkipTags:   opts.SkipTags,
+		Vault:      secrets,
 		ConnOpts: connection.ManagerOptions{
 			RemoteUser:      remoteUser,
 			PrivateKey:      privateKey,

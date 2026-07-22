@@ -38,6 +38,10 @@ type Store struct {
 	mu     sync.RWMutex
 	layers [layerCount]map[string]map[string]any // layer -> scope key -> vars
 	engine *template.Engine
+
+	// VaultDecrypt decrypts a !vault-tagged value at use time. Nil means no
+	// vault password is configured; encountering an encrypted value errors.
+	VaultDecrypt func(yaml.VaultedString) (string, error)
 }
 
 func NewStore(engine *template.Engine) *Store {
@@ -226,6 +230,16 @@ func (c *Context) deepTemplate(v any) (any, error) {
 		return c.store.engine.RenderTemplate(t, c, c.pos)
 	case yaml.UnsafeString:
 		return t, nil // never re-templated
+	case yaml.VaultedString:
+		if c.store.VaultDecrypt == nil {
+			return nil, fmt.Errorf("an encrypted value was found but no vault password was provided (use --vault-password-file or --ask-vault-pass)")
+		}
+		plain, err := c.store.VaultDecrypt(t)
+		if err != nil {
+			return nil, err
+		}
+		// The decrypted value may itself contain templates.
+		return c.store.engine.RenderTemplate(plain, c, c.pos)
 	case []any:
 		out := make([]any, len(t))
 		for i, item := range t {

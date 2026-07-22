@@ -23,6 +23,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/vars"
+	"github.com/giraffesyo/understudy/internal/vault"
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
@@ -55,6 +56,7 @@ type Options struct {
 	Tags       []string
 	SkipTags   []string
 	ConnOpts   connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
+	Vault      *vault.Secrets            // vault passwords for !vault values and encrypted files
 }
 
 // Runner executes playbooks.
@@ -100,6 +102,12 @@ func NewRunner(inv *inventory.Inventory, cb Callback, opts Options) *Runner {
 	connOpts := opts.ConnOpts
 	connOpts.Connection = opts.Connection
 	r.Conns = connection.NewManager(r.Store, connOpts)
+	if opts.Vault != nil && !opts.Vault.Empty() {
+		r.Store.VaultDecrypt = func(v yaml.VaultedString) (string, error) {
+			out, err := opts.Vault.Decrypt(v.Ciphertext)
+			return string(out), err
+		}
+	}
 	r.installLookups()
 	playbook.ModuleKnown = actions.Known
 	return r
@@ -185,6 +193,11 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("could not load vars_files entry %q: %w", vf, err)
+		}
+		if r.Opts.Vault != nil {
+			if data, err = r.Opts.Vault.MaybeDecryptFile(data); err != nil {
+				return fmt.Errorf("vars_files %q: %w", vf, err)
+			}
 		}
 		v, err := yaml.Unmarshal(data, path)
 		if err != nil {

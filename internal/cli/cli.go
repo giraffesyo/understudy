@@ -20,6 +20,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/executor"
 	"github.com/giraffesyo/understudy/internal/inventory"
 	"github.com/giraffesyo/understudy/internal/playbook"
+	"github.com/giraffesyo/understudy/internal/vault"
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
@@ -43,6 +44,8 @@ func Main() int {
 		return playbookCmd(args[1:])
 	case "adhoc":
 		return adhocCmd(args[1:])
+	case "vault":
+		return vaultCmd(args[1:])
 	case "version", "--version":
 		fmt.Printf("understudy %s\n", version)
 		return 0
@@ -88,6 +91,8 @@ type parsedArgs struct {
 	becomeUser string
 	askBecome  bool
 	askPass    bool
+	askVault   bool
+	vaultFiles []string
 	remoteUser string
 	privateKey string
 	connection string
@@ -152,6 +157,26 @@ func parseArgs(args []string) (*parsedArgs, error) {
 			p.askBecome = true
 		case a == "-k" || a == "--ask-pass":
 			p.askPass = true
+		case a == "--ask-vault-pass" || a == "--ask-vault-password":
+			p.askVault = true
+		case a == "--vault-password-file" || a == "--vault-pass-file":
+			var v string
+			if v, err = next(a); err == nil {
+				p.vaultFiles = append(p.vaultFiles, v)
+			}
+		case a == "--vault-id":
+			var v string
+			if v, err = next(a); err == nil {
+				// vault-id form is "label@source"; we use the source path.
+				if at := strings.LastIndexByte(v, '@'); at >= 0 {
+					v = v[at+1:]
+				}
+				if v != "prompt" {
+					p.vaultFiles = append(p.vaultFiles, v)
+				} else {
+					p.askVault = true
+				}
+			}
 		case a == "-u" || a == "--user":
 			p.remoteUser, err = next(a)
 		case a == "--private-key" || a == "--key-file":
@@ -188,9 +213,23 @@ func parseArgs(args []string) (*parsedArgs, error) {
 	return p, nil
 }
 
+// setupVault builds the vault secrets and installs them as the inventory
+// decrypt hook (so group_vars/host_vars decrypt during Load). Call once
+// before loadInventory.
+func setupVault(p *parsedArgs) (*vault.Secrets, error) {
+	secrets, err := buildVaultSecrets(p)
+	if err != nil {
+		return nil, err
+	}
+	if !secrets.Empty() {
+		inventory.Decrypt = secrets.MaybeDecryptFile
+	}
+	return secrets, nil
+}
+
 // buildOptions assembles executor options from CLI flags layered over
 // ansible.cfg (CLI > env > cfg > defaults), running -k/-K prompts once.
-func buildOptions(p *parsedArgs, baseDir string) (executor.Options, error) {
+func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (executor.Options, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return executor.Options{}, err
@@ -244,7 +283,36 @@ func buildOptions(p *parsedArgs, baseDir string) (executor.Options, error) {
 		}
 		opts.BecomePass = pw
 	}
+
+	opts.Vault = secrets
 	return opts, nil
+}
+
+// buildVaultSecrets assembles vault passwords from --vault-password-file,
+// --ask-vault-pass, and the ANSIBLE_VAULT_PASSWORD_FILE env var.
+func buildVaultSecrets(p *parsedArgs) (*vault.Secrets, error) {
+	secrets := vault.NewSecrets()
+	files := p.vaultFiles
+	if len(files) == 0 {
+		if env := os.Getenv("ANSIBLE_VAULT_PASSWORD_FILE"); env != "" {
+			files = append(files, env)
+		}
+	}
+	for _, f := range files {
+		pw, err := vault.LoadPasswordFile(f)
+		if err != nil {
+			return nil, fmt.Errorf("vault password file: %w", err)
+		}
+		secrets.Add(pw)
+	}
+	if p.askVault {
+		pw, err := promptSecret("Vault password")
+		if err != nil {
+			return nil, err
+		}
+		secrets.Add(pw)
+	}
+	return secrets, nil
 }
 
 // promptSecret reads a password without echo.
@@ -365,6 +433,11 @@ func playbookCmd(args []string) int {
 			listTasks(path, plays)
 			continue
 		}
+		secrets, err := setupVault(p)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+			return 1
+		}
 		inv, err := loadInventory(p, filepath.Dir(path))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
@@ -389,7 +462,7 @@ func playbookCmd(args []string) int {
 			continue
 		}
 
-		opts, err := buildOptions(p, filepath.Dir(path))
+		opts, err := buildOptions(p, filepath.Dir(path), secrets)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
 			return 1
@@ -480,12 +553,17 @@ func adhocCmd(args []string) int {
 		Src:         playbook.Pos{File: "<adhoc>", Line: 1},
 	}
 
+	secrets, err := setupVault(p)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		return 1
+	}
 	inv, err := loadInventory(p, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
 		return 1
 	}
-	opts, err := buildOptions(p, ".")
+	opts, err := buildOptions(p, ".", secrets)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
 		return 1
