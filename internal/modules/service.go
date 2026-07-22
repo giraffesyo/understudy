@@ -106,12 +106,16 @@ func serviceModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 }
 
 func systemctl(env *RunEnv, argv ...string) (string, error) {
-	cmd := exec.Command("systemctl", argv...)
+	path, err := lookPath("systemctl")
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command(path, argv...)
 	applyEnv(cmd, env)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
-	err := cmd.Run()
+	err = cmd.Run()
 	return buf.String(), err
 }
 

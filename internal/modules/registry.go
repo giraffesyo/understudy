@@ -7,10 +7,34 @@ package modules
 import (
 	"fmt"
 	"io"
+	"os/exec"
+	"path/filepath"
 	"runtime/debug"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 )
+
+// sbinDirs are searched in addition to PATH when resolving a binary.
+// System tools (sysctl, iptables, setenforce, useradd, ...) live here, and
+// they are often absent from a minimal or sudo-restricted PATH.
+var sbinDirs = []string{"/usr/sbin", "/sbin", "/usr/local/sbin"}
+
+// lookPath resolves a command like exec.LookPath but falls back to the
+// conventional sbin directories, mirroring how Ansible finds system tools.
+func lookPath(name string) (string, error) {
+	if path, err := exec.LookPath(name); err == nil {
+		return path, nil
+	}
+	if !filepath.IsAbs(name) {
+		for _, dir := range sbinDirs {
+			candidate := filepath.Join(dir, name)
+			if info, err := exec.LookPath(candidate); err == nil {
+				return info, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("executable %q not found in PATH or %v", name, sbinDirs)
+}
 
 // RunEnv carries per-invocation context into a module.
 type RunEnv struct {
