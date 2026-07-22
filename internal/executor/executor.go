@@ -17,6 +17,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/actions"
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/connection"
+	"github.com/giraffesyo/understudy/internal/inventory"
 	"github.com/giraffesyo/understudy/internal/modules"
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/template"
@@ -54,11 +55,12 @@ type Options struct {
 
 // Runner executes playbooks.
 type Runner struct {
-	Hosts    []string // resolved host list (inventory integration lands in M5)
+	Inv      *inventory.Inventory
 	Engine   *template.Engine
 	Store    *vars.Store
 	Callback Callback
 	Opts     Options
+	Limit    string // --limit pattern, intersected with each play's hosts
 
 	stats  map[string]*HostStats
 	order  []string
@@ -66,14 +68,14 @@ type Runner struct {
 	mu     sync.Mutex
 }
 
-// NewRunner builds a runner for a resolved host list.
-func NewRunner(hosts []string, cb Callback, opts Options) *Runner {
+// NewRunner builds a runner over a loaded inventory.
+func NewRunner(inv *inventory.Inventory, cb Callback, opts Options) *Runner {
 	if opts.Forks <= 0 {
 		opts.Forks = 5
 	}
 	engine := template.New()
 	r := &Runner{
-		Hosts:    hosts,
+		Inv:      inv,
 		Engine:   engine,
 		Store:    vars.NewStore(engine),
 		Callback: cb,
@@ -81,15 +83,51 @@ func NewRunner(hosts []string, cb Callback, opts Options) *Runner {
 		stats:    map[string]*HostStats{},
 		failed:   map[string]bool{},
 	}
-	for _, h := range hosts {
-		r.stats[h] = &HostStats{}
-		r.order = append(r.order, h)
+	for _, name := range inv.SortedHostNames() {
+		r.Store.SetInventoryVars(name, inv.EffectiveVars(inv.Hosts[name]))
 	}
 	if opts.ExtraVars != nil {
 		r.Store.SetExtraVars(opts.ExtraVars)
 	}
 	playbook.ModuleKnown = actions.Known
 	return r
+}
+
+// resolvePlayHosts matches a play's pattern (∩ --limit) against inventory,
+// initializing stats rows for newly seen hosts.
+func (r *Runner) resolvePlayHosts(play *playbook.Play) ([]string, error) {
+	hosts, err := r.Inv.Match(play.HostPattern)
+	if err != nil {
+		return nil, err
+	}
+	if r.Limit != "" {
+		limited, err := r.Inv.Match(r.Limit)
+		if err != nil {
+			return nil, err
+		}
+		keep := map[string]bool{}
+		for _, h := range limited {
+			keep[h.Name] = true
+		}
+		var filtered []*inventory.Host
+		for _, h := range hosts {
+			if keep[h.Name] {
+				filtered = append(filtered, h)
+			}
+		}
+		hosts = filtered
+	}
+	var names []string
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, h := range hosts {
+		names = append(names, h.Name)
+		if _, ok := r.stats[h.Name]; !ok {
+			r.stats[h.Name] = &HostStats{}
+			r.order = append(r.order, h.Name)
+		}
+	}
+	return names, nil
 }
 
 // Run executes all plays and returns the exit code (0 ok, 2 failures).
@@ -138,15 +176,19 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 		r.Store.AddVarsFile(m)
 	}
 
-	active := r.activeHosts()
-	if len(active) == 0 {
+	playHosts, err := r.resolvePlayHosts(play)
+	if err != nil {
+		return err
+	}
+	if len(playHosts) == 0 {
+		fmt.Println("skipping: no hosts matched")
 		return nil
 	}
 
 	// Task sections run in order; handlers flush after each section (M5
 	// completes handler semantics — the flush points are already correct).
 	for _, task := range flattenSections(play) {
-		active = r.activeHosts()
+		active := r.activeOf(playHosts)
 		if len(active) == 0 {
 			break
 		}
@@ -155,7 +197,7 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 		g.SetLimit(r.Opts.Forks)
 		for _, host := range active {
 			g.Go(func() error {
-				r.runTaskOnHost(gctx, play, task, host)
+				r.runTaskOnHost(gctx, play, task, host, playHosts)
 				return nil
 			})
 		}
@@ -173,16 +215,45 @@ func flattenSections(play *playbook.Play) []*playbook.Task {
 	return out
 }
 
-func (r *Runner) activeHosts() []string {
+// activeOf filters a play's host list down to hosts that have not failed.
+func (r *Runner) activeOf(playHosts []string) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var out []string
-	for _, h := range r.order {
+	for _, h := range playHosts {
 		if !r.failed[h] {
 			out = append(out, h)
 		}
 	}
 	return out
+}
+
+// newHostContext builds a vars context with the play-level magic variables.
+func (r *Runner) newHostContext(host string, pos template.Position, playHosts []string) *vars.Context {
+	c := r.Store.NewContext(host, pos)
+	if r.Inv != nil {
+		c.SetMagic("groups", r.Inv.GroupsMap())
+		if h, ok := r.Inv.Hosts[host]; ok {
+			names := r.Inv.GroupNames(h)
+			list := make([]any, len(names))
+			for i, n := range names {
+				list[i] = n
+			}
+			c.SetMagic("group_names", list)
+		}
+	}
+	if playHosts != nil {
+		list := make([]any, len(playHosts))
+		for i, h := range playHosts {
+			list[i] = h
+		}
+		c.SetMagic("ansible_play_hosts", list)
+		c.SetMagic("play_hosts", list)
+		c.SetMagic("ansible_play_hosts_all", list)
+	}
+	c.SetMagic("playbook_dir", r.Opts.BaseDir)
+	c.SetMagic("ansible_check_mode", r.Opts.CheckMode)
+	return c
 }
 
 func playPos(play *playbook.Play) template.Position {
@@ -191,9 +262,9 @@ func playPos(play *playbook.Play) template.Position {
 
 // runTaskOnHost is the per-host task pipeline: when -> loop -> template args
 // -> retries -> changed_when/failed_when -> register -> stats.
-func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *playbook.Task, host string) {
+func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, playHosts []string) {
 	pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
-	base := r.Store.NewContext(host, pos)
+	base := r.newHostContext(host, pos, playHosts)
 	if len(task.Vars) > 0 {
 		base = base.WithOverlay(task.Vars)
 	}
@@ -291,7 +362,10 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		freeForm = fmt.Sprintf("%v", v)
 	}
 
-	actx := r.actionContext(host, task, play, vctx)
+	actx, err := r.actionContext(host, task, play, vctx)
+	if err != nil {
+		return agentproto.Fail("%v", err)
+	}
 
 	// until/retries loop.
 	attempts := task.Retries + 1
@@ -362,9 +436,12 @@ func registerOverlay(task *playbook.Task, res *agentproto.Result) map[string]any
 	return map[string]any{name: m}
 }
 
-func (r *Runner) actionContext(host string, task *playbook.Task, play *playbook.Play, vctx *vars.Context) *actions.Context {
+func (r *Runner) actionContext(host string, task *playbook.Task, play *playbook.Play, vctx *vars.Context) (*actions.Context, error) {
 	become := r.effectiveBecome(play, task)
-	conn := r.connFor(host)
+	conn, err := r.connFor(host)
+	if err != nil {
+		return nil, err
+	}
 	return &actions.Context{
 		Host:      host,
 		Vars:      vctx,
@@ -380,7 +457,7 @@ func (r *Runner) actionContext(host string, task *playbook.Task, play *playbook.
 		SetFact: func(name string, value any) {
 			r.Store.SetHostFact(host, name, value)
 		},
-	}
+	}, nil
 }
 
 func (r *Runner) effectiveBecome(play *playbook.Play, task *playbook.Task) *connection.BecomeSpec {
@@ -407,10 +484,26 @@ func (r *Runner) effectiveBecome(play *playbook.Play, task *playbook.Task) *conn
 	return &connection.BecomeSpec{User: user, Method: "sudo", Password: r.Opts.BecomePass}
 }
 
-// connFor returns the connection for a host. M3: local only; the SSH
-// connection manager replaces this in M6.
-func (r *Runner) connFor(host string) connection.Connection {
-	return connection.NewLocal()
+// connFor returns the connection for a host, honoring -c and the
+// ansible_connection behavioral var. SSH lands in M6; until then non-local
+// hosts fail with a clear message at execution time.
+func (r *Runner) connFor(host string) (connection.Connection, error) {
+	kind := r.Opts.Connection
+	if kind == "" {
+		if v, ok := r.Store.RawHostVar(host, "ansible_connection"); ok {
+			kind, _ = v.(string)
+		}
+	}
+	switch kind {
+	case "local":
+		return connection.NewLocal(), nil
+	case "", "ssh", "smart":
+		if host == "localhost" || host == "127.0.0.1" {
+			return connection.NewLocal(), nil
+		}
+		return nil, fmt.Errorf("ssh connections are not supported yet (coming in the next milestone); use ansible_connection=local or -c local")
+	}
+	return nil, fmt.Errorf("unknown connection type %q", kind)
 }
 
 // runModule executes a module request. For local connections the module
