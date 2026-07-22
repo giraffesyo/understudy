@@ -136,8 +136,11 @@ func TestGoldenDifferential(t *testing.T) {
 		t.Run(filepath.Base(pb), func(t *testing.T) {
 			workA := t.TempDir()
 			workB := t.TempDir()
-			invA := writeGoldenInventory(t, workA)
-			invB := writeGoldenInventory(t, workB)
+			// A sibling "<name>.inventory" file (multi-host / groups) is used
+			// when present; otherwise a single local host.
+			invSrc := strings.TrimSuffix(pb, ".yml") + ".inventory"
+			invA := writeGoldenInventory(t, workA, invSrc)
+			invB := writeGoldenInventory(t, workB, invSrc)
 
 			// Two runs each so idempotence is part of the comparison.
 			env := []string{"NO_COLOR=1", "ANSIBLE_NOCOLOR=1", "ANSIBLE_HOST_KEY_CHECKING=False",
@@ -170,10 +173,14 @@ func TestGoldenDifferential(t *testing.T) {
 	}
 }
 
-func writeGoldenInventory(t *testing.T, dir string) string {
+func writeGoldenInventory(t *testing.T, dir, src string) string {
 	t.Helper()
+	content := []byte("localhost ansible_connection=local\n")
+	if data, err := os.ReadFile(src); err == nil {
+		content = data
+	}
 	inv := filepath.Join(dir, "hosts")
-	if err := os.WriteFile(inv, []byte("localhost ansible_connection=local\n"), 0o644); err != nil {
+	if err := os.WriteFile(inv, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return inv

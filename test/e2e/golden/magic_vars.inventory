@@ -1,0 +1,13 @@
+[web]
+web1 ansible_connection=local host_role=frontend
+web2 ansible_connection=local host_role=frontend
+
+[db]
+db1 ansible_connection=local host_role=backend
+
+[production:children]
+web
+db
+
+[production:vars]
+tier=prod
