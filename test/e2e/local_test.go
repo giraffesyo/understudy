@@ -15,6 +15,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/executor"
 	"github.com/giraffesyo/understudy/internal/inventory"
 	"github.com/giraffesyo/understudy/internal/playbook"
+	"github.com/giraffesyo/understudy/internal/vault"
 )
 
 // run executes playbook YAML on localhost and returns exit code + output.
@@ -776,4 +777,80 @@ func TestBlockinfileAndFind(t *testing.T) {
 	if !strings.Contains(string(data), "ANSIBLE MANAGED BLOCK") || !strings.Contains(string(data), "option one") {
 		t.Errorf("block content wrong:\n%s", data)
 	}
+}
+
+func TestVaultRuntime(t *testing.T) {
+	dir := t.TempDir()
+	// Encrypt values with understudy's own vault (format-verified against
+	// real ansible-vault elsewhere).
+	inlineVal, err := vault.Encrypt([]byte("super-secret-token"), "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileEnc, err := vault.Encrypt([]byte("db_password: p@ssw0rd\n"), "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "secrets.yml"), []byte(fileEnc), 0o644)
+
+	// Embed the !vault inline var (indented under vars:).
+	var indented strings.Builder
+	for _, line := range strings.Split(strings.TrimRight(inlineVal, "\n"), "\n") {
+		indented.WriteString("      " + line + "\n")
+	}
+	src := `
+- hosts: all
+  gather_facts: false
+  vars_files: [secrets.yml]
+  vars:
+    api_token: !vault |
+` + indented.String() + `
+  tasks:
+    - assert:
+        that:
+          - api_token == "super-secret-token"
+          - db_password == "p@ssw0rd"
+`
+	path := filepath.Join(dir, "site.yml")
+	os.WriteFile(path, []byte(src), 0o644)
+
+	plays, err := playbook.LoadFile(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	secrets := vault.NewSecrets("pw")
+	inventory.Decrypt = secrets.MaybeDecryptFile
+	defer func() { inventory.Decrypt = nil }()
+	if err := playbook.ResolveRoles(plays, dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	cb := &callback.Default{Out: &buf, NoColor: true}
+	inv, _ := inventory.Load([]string{"localhost,"}, nil)
+	r := executor.NewRunner(inv, cb, executor.Options{BaseDir: dir, Vault: secrets})
+	code, err := r.Run(context.Background(), plays)
+	if err != nil || code != 0 {
+		t.Fatalf("vault run failed: code=%d err=%v\n%s", code, err, buf.String())
+	}
+
+	// Without the password, the encrypted value must error clearly.
+	plays2, _ := playbook.LoadFile(path)
+	inventory.Decrypt = nil
+	playbook.ResolveRoles(plays2, dir, nil)
+	var buf2 bytes.Buffer
+	r2 := executor.NewRunner(inventoryMust(t), &callback.Default{Out: &buf2, NoColor: true},
+		executor.Options{BaseDir: dir})
+	// vars_files decryption fails at play start without a password.
+	code2, _ := r2.Run(context.Background(), plays2)
+	if code2 == 0 {
+		t.Errorf("run without vault password should fail:\n%s", buf2.String())
+	}
+}
+
+func inventoryMust(t *testing.T) *inventory.Inventory {
+	inv, err := inventory.Load([]string{"localhost,"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inv
 }

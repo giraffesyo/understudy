@@ -10,6 +10,12 @@ import (
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
+// Decrypt transparently decrypts vault-encrypted group_vars/host_vars
+// files. Set before Load when a vault password is available; nil leaves
+// files untouched (an encrypted file then fails to parse with a clear
+// vault error).
+var Decrypt func([]byte) ([]byte, error)
+
 // Load builds an inventory from -i sources: files (INI or YAML by sniffing),
 // directories (each file loaded), or literal host lists ("h1,h2,").
 // group_vars/ and host_vars/ next to file sources are applied, then any
@@ -204,6 +210,11 @@ func mergeVarsFile(path string, into map[string]any) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
+	}
+	if Decrypt != nil {
+		if data, err = Decrypt(data); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
 	}
 	v, err := yaml.Unmarshal(data, path)
 	if err != nil {
