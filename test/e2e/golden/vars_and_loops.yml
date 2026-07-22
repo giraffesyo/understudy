@@ -1,0 +1,67 @@
+---
+# Variable precedence, set_fact persistence, lazy resolution, and loop
+# variants — decisions must match Ansible.
+- name: vars and loops
+  hosts: all
+  gather_facts: false
+  vars:
+    base: play-level
+    layered: "from-play"
+    ref_chain: "{{ base }}-extended"
+    matrix:
+      - {env: dev, port: 8080}
+      - {env: prod, port: 443}
+    settings:
+      timeout: 30
+      retries: 3
+  tasks:
+    - name: task vars beat play vars
+      assert:
+        that: layered == 'from-task'
+      vars:
+        layered: "from-task"
+
+    - name: lazy cross-reference resolves
+      assert:
+        that: ref_chain == 'play-level-extended'
+
+    - name: set_fact persists and outranks play vars
+      set_fact:
+        layered: "from-fact"
+        computed: "{{ base | upper }}"
+
+    - name: registered fact is visible to later tasks
+      assert:
+        that:
+          - layered == 'from-fact'
+          - computed == 'PLAY-LEVEL'
+
+    - name: loop with loop_var
+      debug:
+        msg: "{{ entry.env }}:{{ entry.port }}"
+      loop: "{{ matrix }}"
+      loop_control:
+        loop_var: entry
+
+    - name: loop over a range
+      assert:
+        that: item < 3
+      loop: "{{ range(3) | list }}"
+
+    - name: with_items flattens
+      debug:
+        msg: "{{ item }}"
+      with_items:
+        - one
+        - two
+
+    - name: with_dict iterates key/value
+      assert:
+        that: item.key in ['timeout', 'retries']
+      with_dict: "{{ settings }}"
+
+    - name: conditional loop skips per item
+      debug:
+        msg: "big {{ item }}"
+      loop: [1, 5, 10]
+      when: item > 3

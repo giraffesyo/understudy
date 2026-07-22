@@ -144,10 +144,16 @@ func TestGoldenDifferential(t *testing.T) {
 				"ANSIBLE_LOCALHOST_WARNING=False", "ANSIBLE_INVENTORY_UNPARSED_WARNING=False",
 				"ANSIBLE_DEPRECATION_WARNINGS=False", "ANSIBLE_SYSTEM_WARNINGS=False"}
 
-			aOut := runTool(t, ansible, []string{"-i", invA, "-c", "local",
-				"-e", "workdir=" + workA, pb}, env, 2)
-			uOut := runTool(t, understudy, []string{"playbook", "-i", invB, "-c", "local",
-				"-e", "workdir=" + workB, pb}, env, 2)
+			// A "check_" prefixed corpus file runs both tools in --check mode.
+			var extra []string
+			if strings.HasPrefix(filepath.Base(pb), "check_") {
+				extra = []string{"--check"}
+			}
+			aArgs := append([]string{"-i", invA, "-c", "local", "-e", "workdir=" + workA}, extra...)
+			uArgs := append([]string{"playbook", "-i", invB, "-c", "local", "-e", "workdir=" + workB}, extra...)
+
+			aOut := runTool(t, ansible, append(aArgs, pb), env, 2)
+			uOut := runTool(t, understudy, append(uArgs, pb), env, 2)
 
 			aStatus, aRecap := parseRun(aOut)
 			uStatus, uRecap := parseRun(uOut)

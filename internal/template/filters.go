@@ -56,7 +56,14 @@ func registerFilters(e *Engine) {
 				def = d
 			}
 		}
+		// Ansible: int(value, default=0, base=10) — base is positional or a
+		// kwarg.
 		base := int64(10)
+		if len(args) > 1 {
+			if bi, ok := asInt(args[1]); ok {
+				base = bi
+			}
+		}
 		if b, ok := kwargs["base"]; ok {
 			if bi, ok := asInt(b); ok {
 				base = bi
@@ -77,6 +84,8 @@ func registerFilters(e *Engine) {
 		case string, yaml.UnsafeString:
 			s, _ := asString(t)
 			s = strings.TrimSpace(s)
+			// Python's int(s, base) accepts the matching radix prefix.
+			s = stripRadixPrefix(s, base)
 			if v, err := strconv.ParseInt(s, int(base), 64); err == nil {
 				return v, nil
 			}
@@ -233,6 +242,29 @@ func registerFilters(e *Engine) {
 	f["type_debug"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		return pyTypeName(in), nil
 	}
+}
+
+// stripRadixPrefix removes a 0x/0o/0b prefix when it matches the requested
+// base, mirroring Python's int(s, base) which tolerates the prefix.
+func stripRadixPrefix(s string, base int64) string {
+	if len(s) < 2 || s[0] != '0' {
+		return s
+	}
+	switch base {
+	case 16:
+		if s[1] == 'x' || s[1] == 'X' {
+			return s[2:]
+		}
+	case 8:
+		if s[1] == 'o' || s[1] == 'O' {
+			return s[2:]
+		}
+	case 2:
+		if s[1] == 'b' || s[1] == 'B' {
+			return s[2:]
+		}
+	}
+	return s
 }
 
 // filterDefault implements default/d: replace Undefined (or, with the

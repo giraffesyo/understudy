@@ -1,0 +1,88 @@
+---
+# Filter/test compatibility: each assert is evaluated by BOTH engines. If
+# understudy computes a filter differently than Ansible's Jinja2, its assert
+# fails while Ansible's passes — the harness catches the divergent recap.
+- name: templating
+  hosts: all
+  gather_facts: false
+  vars:
+    words: [banana, apple, cherry]
+    nums: [3, 1, 2, 3]
+    person: {name: ada, roles: [admin, dev]}
+    people:
+      - {name: ada, age: 36}
+      - {name: bob, age: 41}
+      - {name: cy, age: 29}
+    csv: "a,b,c"
+    blank: ""
+  tasks:
+    - name: string filters
+      assert:
+        that:
+          - "'Hello' | lower == 'hello'"
+          - "'hello world' | upper == 'HELLO WORLD'"
+          - "'  pad  ' | trim == 'pad'"
+          - "csv | split(',') | length == 3"
+          - "words | join('-') == 'banana-apple-cherry'"
+          - "'hello' | replace('l', 'L') == 'heLLo'"
+          - "'ansible-2.16' | regex_replace('^ansible-', '') == '2.16'"
+          - "'server01' | regex_search('[0-9]+') == '01'"
+
+    - name: sequence filters
+      assert:
+        that:
+          - nums | unique | sort == [1, 2, 3]
+          - words | sort == ['apple', 'banana', 'cherry']
+          - words | sort(reverse=true) | first == 'cherry'
+          - nums | max == 3
+          - nums | min == 1
+          - nums | sum == 9
+          - words | length == 3
+          - "[1, 2] | union([2, 3]) | sort == [1, 2, 3]"
+          - "[1, 2, 3] | intersect([2, 3, 4]) | sort == [2, 3]"
+          - "[1, 2, 3] | difference([2]) | sort == [1, 3]"
+
+    - name: dict and attribute filters
+      assert:
+        that:
+          - person.name == 'ada'
+          - "person | dict2items | length == 2"
+          - "people | map(attribute='name') | list == ['ada', 'bob', 'cy']"
+          - "people | selectattr('age', 'gt', 35) | map(attribute='name') | list == ['ada', 'bob']"
+          - "people | rejectattr('age', 'gt', 35) | map(attribute='name') | list == ['cy']"
+          - "person | combine({'active': true}) | length == 3"
+
+    - name: default and type filters
+      assert:
+        that:
+          - undefined_var | default('fallback') == 'fallback'
+          - blank | default('x', true) == 'x'
+          - "'42' | int == 42"
+          - "'42' | int + 8 == 50"
+          - "'3.5' | float == 3.5"
+          - "'yes' | bool == true"
+          - "5 | string == '5'"
+
+    - name: tests
+      assert:
+        that:
+          - words is iterable
+          - person is mapping
+          - "'str' is string"
+          - 42 is number
+          - undefined_var is undefined
+          - person.name is defined
+          - 4 is even
+          - 3 is odd
+          - "'2.16' is version('2.10', '>=')"
+          - "'1.9' is version('1.10', '<')"
+
+    - name: conditional expressions and math
+      assert:
+        that:
+          - (1 if true else 2) == 1
+          - (nums | length > 2) | ternary('many', 'few') == 'many'
+          - 7 // 2 == 3
+          - 7 % 3 == 1
+          - 2 ** 8 == 256
+          - "'a' ~ 'b' ~ 'c' == 'abc'"
