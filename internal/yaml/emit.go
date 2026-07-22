@@ -1,0 +1,175 @@
+package yaml
+
+import (
+	"fmt"
+	"math"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// Marshal renders v as block-style YAML for the to_yaml/to_nice_yaml
+// filters. Mapping keys are sorted. It does not aim to round-trip styles or
+// comments — it produces clean output that this package can re-parse.
+func Marshal(v any, indent int) ([]byte, error) {
+	if indent <= 0 {
+		indent = 2
+	}
+	var b strings.Builder
+	if err := emitValue(&b, v, 0, indent, true); err != nil {
+		return nil, err
+	}
+	if b.Len() == 0 || b.String()[b.Len()-1] != '\n' {
+		b.WriteByte('\n')
+	}
+	return []byte(b.String()), nil
+}
+
+func emitValue(b *strings.Builder, v any, depth, indent int, inline bool) error {
+	switch t := v.(type) {
+	case nil:
+		b.WriteString("null")
+	case bool:
+		b.WriteString(strconv.FormatBool(t))
+	case int:
+		b.WriteString(strconv.Itoa(t))
+	case int64:
+		b.WriteString(strconv.FormatInt(t, 10))
+	case float64:
+		b.WriteString(formatFloat(t))
+	case string:
+		b.WriteString(quoteIfNeeded(t, depth*indent))
+	case UnsafeString:
+		b.WriteString(quoteIfNeeded(string(t), depth*indent))
+	case VaultedString:
+		b.WriteString("!vault |\n")
+		pad := strings.Repeat(" ", (depth+1)*indent)
+		for _, line := range strings.Split(strings.TrimRight(t.Ciphertext, "\n"), "\n") {
+			b.WriteString(pad)
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	case []any:
+		if len(t) == 0 {
+			b.WriteString("[]")
+			return nil
+		}
+		for i, item := range t {
+			if i > 0 || !inline {
+				b.WriteByte('\n')
+				b.WriteString(strings.Repeat(" ", depth*indent))
+			}
+			b.WriteString("- ")
+			if err := emitValue(b, item, depth+1, indent, true); err != nil {
+				return err
+			}
+		}
+	case map[string]any:
+		if len(t) == 0 {
+			b.WriteString("{}")
+			return nil
+		}
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for i, k := range keys {
+			if i > 0 || !inline {
+				b.WriteByte('\n')
+				b.WriteString(strings.Repeat(" ", depth*indent))
+			}
+			b.WriteString(quoteIfNeeded(k, 0))
+			b.WriteByte(':')
+			val := t[k]
+			if isScalarValue(val) || isEmptyContainer(val) {
+				b.WriteByte(' ')
+			}
+			if err := emitValue(b, val, depth+1, indent, false); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("yaml: cannot marshal value of type %T", v)
+	}
+	return nil
+}
+
+func isScalarValue(v any) bool {
+	switch v.(type) {
+	case nil, bool, int, int64, float64, string, UnsafeString:
+		return true
+	}
+	return false
+}
+
+func isEmptyContainer(v any) bool {
+	switch t := v.(type) {
+	case []any:
+		return len(t) == 0
+	case map[string]any:
+		return len(t) == 0
+	}
+	return false
+}
+
+func formatFloat(f float64) string {
+	switch {
+	case math.IsInf(f, 1):
+		return ".inf"
+	case math.IsInf(f, -1):
+		return "-.inf"
+	case math.IsNaN(f):
+		return ".nan"
+	}
+	s := strconv.FormatFloat(f, 'g', -1, 64)
+	// Ensure re-parsing yields a float, not an int.
+	if !strings.ContainsAny(s, ".eE") {
+		s += ".0"
+	}
+	// PyYAML-quirk safety: "1e+05" style already carries a sign; bare "1e5"
+	// forms cannot come out of FormatFloat's 'g' verb.
+	return s
+}
+
+// quoteIfNeeded returns s quoted iff a plain scalar would not round-trip.
+func quoteIfNeeded(s string, _ int) string {
+	if s == "" {
+		return "''"
+	}
+	if needsQuoting(s) {
+		return strconv.Quote(s) // double-quoted with \n, \t, \" escapes
+	}
+	return s
+}
+
+func needsQuoting(s string) bool {
+	// Would resolve to a non-string type?
+	if _, isStr := resolveScalar(s).(string); !isStr {
+		return true
+	}
+	if strings.ContainsAny(s, "\n\t") {
+		return true
+	}
+	// Leading indicator characters or whitespace.
+	c := s[0]
+	if strings.IndexByte("-?:,[]{}#&*!|>'\"%@` ", c) >= 0 {
+		// "- x" needs quotes; "-x" does not, unless it resolves non-string
+		// (handled above). Same for "? " and ": ".
+		if c != '-' && c != '?' && c != ':' {
+			return true
+		}
+		if len(s) == 1 || s[1] == ' ' {
+			return true
+		}
+	}
+	if s[len(s)-1] == ' ' {
+		return true
+	}
+	// Structure-forming substrings.
+	if strings.Contains(s, ": ") || strings.HasSuffix(s, ":") ||
+		strings.Contains(s, " #") {
+		return true
+	}
+	return false
+}
