@@ -15,6 +15,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/giraffesyo/understudy/internal/callback"
+	"github.com/giraffesyo/understudy/internal/config"
 	"github.com/giraffesyo/understudy/internal/connection"
 	"github.com/giraffesyo/understudy/internal/executor"
 	"github.com/giraffesyo/understudy/internal/inventory"
@@ -101,7 +102,7 @@ type parsedArgs struct {
 }
 
 func parseArgs(args []string) (*parsedArgs, error) {
-	p := &parsedArgs{forks: 5, extraVars: map[string]any{}}
+	p := &parsedArgs{extraVars: map[string]any{}} // forks 0 = unset (cfg default applies)
 	i := 0
 	next := func(flag string) (string, error) {
 		i++
@@ -187,10 +188,27 @@ func parseArgs(args []string) (*parsedArgs, error) {
 	return p, nil
 }
 
-// buildOptions assembles executor options, running -k/-K prompts once.
+// buildOptions assembles executor options from CLI flags layered over
+// ansible.cfg (CLI > env > cfg > defaults), running -k/-K prompts once.
 func buildOptions(p *parsedArgs, baseDir string) (executor.Options, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return executor.Options{}, err
+	}
+	forks := p.forks
+	if forks <= 0 {
+		forks = cfg.Forks
+	}
+	remoteUser := p.remoteUser
+	if remoteUser == "" {
+		remoteUser = cfg.RemoteUser
+	}
+	privateKey := p.privateKey
+	if privateKey == "" {
+		privateKey = cfg.PrivateKeyFile
+	}
 	opts := executor.Options{
-		Forks:      p.forks,
+		Forks:      forks,
 		CheckMode:  p.check,
 		Diff:       p.diff,
 		Verbosity:  p.verbosity,
@@ -202,14 +220,12 @@ func buildOptions(p *parsedArgs, baseDir string) (executor.Options, error) {
 		Tags:       splitCSV(p.tags),
 		SkipTags:   splitCSV(p.skipTags),
 	}
-	hostKeyChecking := true
-	if v := os.Getenv("ANSIBLE_HOST_KEY_CHECKING"); v != "" {
-		hostKeyChecking = !(v == "False" || v == "false" || v == "no" || v == "0")
-	}
 	opts.ConnOpts = connection.ManagerOptions{
-		RemoteUser:      p.remoteUser,
-		PrivateKey:      p.privateKey,
-		HostKeyChecking: hostKeyChecking,
+		RemoteUser:      remoteUser,
+		PrivateKey:      privateKey,
+		HostKeyChecking: cfg.HostKeyChecking,
+		Timeout:         cfg.Timeout,
+		RemoteTmp:       cfg.RemoteTmp,
 		KeyPassphrase: func() (string, error) {
 			return promptSecret("SSH key passphrase")
 		},
@@ -296,14 +312,27 @@ func parseExtraVars(s string, into map[string]any) error {
 	}
 }
 
-// loadInventory builds the inventory from -i sources, applying
-// group_vars/host_vars adjacent to sources and to the playbook directory.
+// loadInventory builds the inventory from -i sources (falling back to
+// ansible.cfg's inventory setting), applying group_vars/host_vars adjacent
+// to sources and to the playbook directory.
 func loadInventory(p *parsedArgs, playbookDir string) (*inventory.Inventory, error) {
+	sources := p.inventory
+	if len(sources) == 0 {
+		if cfg, err := config.Load(); err == nil && len(cfg.Inventory) > 0 {
+			// Only use cfg inventory entries that exist (Ansible warns and
+			// falls back to implicit localhost otherwise).
+			for _, src := range cfg.Inventory {
+				if _, err := os.Stat(src); err == nil {
+					sources = append(sources, src)
+				}
+			}
+		}
+	}
 	var varsDirs []string
 	if playbookDir != "" {
 		varsDirs = append(varsDirs, playbookDir)
 	}
-	return inventory.Load(p.inventory, varsDirs)
+	return inventory.Load(sources, varsDirs)
 }
 
 func playbookCmd(args []string) int {
