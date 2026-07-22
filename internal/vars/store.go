@@ -80,6 +80,20 @@ func (s *Store) SetHostFact(host, name string, value any) {
 	s.set(LHostFacts, host, map[string]any{name: value})
 }
 
+// SetInventoryVars installs a host's merged inventory vars (group vars in
+// depth order + host vars — the inventory package pre-merges them).
+func (s *Store) SetInventoryVars(host string, vars map[string]any) {
+	s.set(LHostVars, host, vars)
+}
+
+// RawHostVar fetches an untemplated var for one host (behavioral
+// connection vars like ansible_connection/ansible_host).
+func (s *Store) RawHostVar(host, name string) (any, bool) {
+	flat := s.flatten(host)
+	v, ok := flat[name]
+	return v, ok
+}
+
 // SetFacts records gathered facts for one host.
 func (s *Store) SetFacts(host string, facts map[string]any) {
 	s.set(LFacts, host, facts)

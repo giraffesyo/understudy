@@ -14,6 +14,7 @@ import (
 
 	"github.com/giraffesyo/understudy/internal/callback"
 	"github.com/giraffesyo/understudy/internal/executor"
+	"github.com/giraffesyo/understudy/internal/inventory"
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -224,29 +225,14 @@ func parseExtraVars(s string, into map[string]any) error {
 	}
 }
 
-// resolveHosts turns -i values into a host list. M3 supports the literal
-// list form ('host1,host2,') and defaults to localhost; inventory files
-// land in M5.
-func resolveHosts(p *parsedArgs) ([]string, error) {
-	var hosts []string
-	for _, inv := range p.inventory {
-		if strings.Contains(inv, ",") {
-			for _, h := range strings.Split(inv, ",") {
-				if h = strings.TrimSpace(h); h != "" {
-					hosts = append(hosts, h)
-				}
-			}
-			continue
-		}
-		if _, err := os.Stat(inv); err == nil {
-			return nil, fmt.Errorf("inventory files are not supported yet (coming in a later milestone); use the literal form: -i %q", inv+",")
-		}
-		hosts = append(hosts, inv)
+// loadInventory builds the inventory from -i sources, applying
+// group_vars/host_vars adjacent to sources and to the playbook directory.
+func loadInventory(p *parsedArgs, playbookDir string) (*inventory.Inventory, error) {
+	var varsDirs []string
+	if playbookDir != "" {
+		varsDirs = append(varsDirs, playbookDir)
 	}
-	if len(hosts) == 0 {
-		hosts = []string{"localhost"}
-	}
-	return hosts, nil
+	return inventory.Load(p.inventory, varsDirs)
 }
 
 func playbookCmd(args []string) int {
@@ -275,27 +261,32 @@ func playbookCmd(args []string) int {
 			listTasks(path, plays)
 			continue
 		}
-		hosts, err := resolveHosts(p)
+		inv, err := loadInventory(p, filepath.Dir(path))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
 			return 1
 		}
 		if p.listHosts {
-			for _, play := range plays {
+			for i, play := range plays {
 				name := play.Name
 				if name == "" {
 					name = play.HostPattern
 				}
-				fmt.Printf("\n  play #%d (%s): host count=%d\n", 1, name, len(hosts))
-				for _, h := range hosts {
-					fmt.Printf("    %s\n", h)
+				matched, err := inv.Match(play.HostPattern)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+					return 1
+				}
+				fmt.Printf("\n  play #%d (%s): host count=%d\n", i+1, name, len(matched))
+				for _, h := range matched {
+					fmt.Printf("    %s\n", h.Name)
 				}
 			}
 			continue
 		}
 
 		cb := callback.New(p.verbosity)
-		runner := executor.NewRunner(hosts, cb, executor.Options{
+		runner := executor.NewRunner(inv, cb, executor.Options{
 			Forks:      p.forks,
 			CheckMode:  p.check,
 			Diff:       p.diff,
@@ -306,6 +297,7 @@ func playbookCmd(args []string) int {
 			Connection: p.connection,
 			BaseDir:    filepath.Dir(path),
 		})
+		runner.Limit = p.limit
 		code, err := runner.Run(context.Background(), plays)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
@@ -389,13 +381,13 @@ func adhocCmd(args []string) int {
 		Src:         playbook.Pos{File: "<adhoc>", Line: 1},
 	}
 
-	hosts, err := resolveHosts(p)
+	inv, err := loadInventory(p, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
 		return 1
 	}
 	cb := callback.New(p.verbosity)
-	runner := executor.NewRunner(hosts, cb, executor.Options{
+	runner := executor.NewRunner(inv, cb, executor.Options{
 		Forks:      p.forks,
 		CheckMode:  p.check,
 		Diff:       p.diff,
@@ -406,6 +398,7 @@ func adhocCmd(args []string) int {
 		Connection: p.connection,
 		BaseDir:    ".",
 	})
+	runner.Limit = p.limit
 	code, err := runner.Run(context.Background(), []*playbook.Play{play})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)

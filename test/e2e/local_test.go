@@ -12,6 +12,7 @@ import (
 
 	"github.com/giraffesyo/understudy/internal/callback"
 	"github.com/giraffesyo/understudy/internal/executor"
+	"github.com/giraffesyo/understudy/internal/inventory"
 	"github.com/giraffesyo/understudy/internal/playbook"
 )
 
@@ -32,7 +33,11 @@ func run(t *testing.T, src string, opts executor.Options) (int, string, map[stri
 	if opts.BaseDir == "" {
 		opts.BaseDir = dir
 	}
-	r := executor.NewRunner([]string{"localhost"}, cb, opts)
+	inv, err := inventory.Load([]string{"localhost,"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := executor.NewRunner(inv, cb, opts)
 	code, err := r.Run(context.Background(), plays)
 	if err != nil {
 		t.Fatalf("run: %v\noutput:\n%s", err, buf.String())
