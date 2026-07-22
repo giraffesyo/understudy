@@ -15,13 +15,19 @@ type Play struct {
 	VarsFiles   []string
 	GatherFacts *bool // nil = default (true)
 	Become      BecomeFields
+	Roles       []*RoleRef
 	PreTasks    []*Task
 	Tasks       []*Task
 	PostTasks   []*Task
 	Handlers    []*Task
 	Tags        []string
 	Environment map[string]any
-	Src         Pos
+
+	// Filled by ResolveRoles: per-role vars for the store's role layers.
+	RoleDefaults []map[string]any
+	RoleVars     []map[string]any
+
+	Src Pos
 }
 
 // BecomeFields are the become-related keywords, inheritable play -> task.
@@ -53,7 +59,10 @@ type Task struct {
 	FreeForm     string         // raw params for command/shell/raw
 	When         []string       // list of expressions, ANDed
 	Loop         any            // raw list or template string; nil if absent
+	LoopWith     string         // lookup plugin name for with_<X> loops ("" = plain loop)
 	LoopVar      string         // default "item"
+	Async        int            // async timeout seconds (0 = synchronous)
+	Poll         int            // poll interval; -1 = unset, 0 = fire-and-forget
 	Register     string
 	IgnoreErrors bool
 	FailedWhen   []string
@@ -69,5 +78,15 @@ type Task struct {
 	NoLog        bool
 	Delegate     string
 	Blocks       []BlockRef // enclosing blocks, outermost first
+	SrcDir       string     // role root for src resolution ("" = playbook dir)
 	Src          Pos
+}
+
+// RoleRef is one entry in a play's roles: list.
+type RoleRef struct {
+	Name   string
+	Params map[string]any // role vars from the ref (high precedence)
+	When   []string
+	Tags   []string
+	Src    Pos
 }

@@ -100,6 +100,7 @@ func NewRunner(inv *inventory.Inventory, cb Callback, opts Options) *Runner {
 	connOpts := opts.ConnOpts
 	connOpts.Connection = opts.Connection
 	r.Conns = connection.NewManager(r.Store, connOpts)
+	r.installLookups()
 	playbook.ModuleKnown = actions.Known
 	return r
 }
@@ -158,8 +159,17 @@ func (r *Runner) Run(ctx context.Context, plays []*playbook.Play) (int, error) {
 }
 
 func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
+	if len(play.Roles) > 0 {
+		return fmt.Errorf("internal error: play %q has unresolved roles (playbook.ResolveRoles was not called)", play.Name)
+	}
 	r.Callback.PlayStart(play)
 	r.Store.SetPlayVars(play.Vars)
+	for _, defaults := range play.RoleDefaults {
+		r.Store.AddRoleDefaults(defaults)
+	}
+	for _, roleVars := range play.RoleVars {
+		r.Store.AddRoleVars(roleVars)
+	}
 
 	// vars_files load relative to the playbook dir, templated with play vars.
 	for _, vf := range play.VarsFiles {
@@ -213,33 +223,175 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 		r.runTaskAcrossHosts(ctx, play, gather, r.activeOf(playHosts), playHosts, false)
 	}
 	for _, section := range [][]*playbook.Task{play.PreTasks, play.Tasks, play.PostTasks} {
-		for _, task := range section {
-			if !r.tagsMatch(task, play) {
-				continue
-			}
-			if task.Module == "meta" {
-				if err := r.runMeta(ctx, play, task, playHosts); err != nil {
-					return err
-				}
-				continue
-			}
-			// Block routing: skip hosts whose enclosing block state says no
-			// (failed block sections skip; rescue runs only after failure).
-			// Hard-failed hosts are re-admitted for the always sections of
-			// blocks they failed inside — so no early break on empty active.
-			active := r.activeOf(playHosts)
-			active = append(active, r.alwaysEligible(playHosts, task)...)
-			active = r.blockEligible(active, task)
-			if len(active) == 0 {
-				continue
-			}
-			r.runTaskAcrossHosts(ctx, play, task, active, playHosts, false)
+		if err := r.runTaskList(ctx, play, section, playHosts, nil, 0); err != nil {
+			return err
 		}
 		if err := r.flushHandlers(ctx, play, playHosts); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+const maxIncludeDepth = 100
+
+// runTaskList executes a task sequence with the linear strategy. restrict
+// (non-nil) limits execution to a host subset — used by include_tasks,
+// whose file may differ per host.
+func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*playbook.Task, playHosts, restrict []string, depth int) error {
+	if depth > maxIncludeDepth {
+		return fmt.Errorf("include_tasks nesting exceeds %d levels (include loop?)", maxIncludeDepth)
+	}
+	for _, task := range tasks {
+		if !r.tagsMatch(task, play) {
+			continue
+		}
+		if task.Module == "meta" {
+			if err := r.runMeta(ctx, play, task, playHosts); err != nil {
+				return err
+			}
+			continue
+		}
+		// Block routing: skip hosts whose enclosing block state says no
+		// (failed block sections skip; rescue runs only after failure).
+		// Hard-failed hosts are re-admitted for the always sections of
+		// blocks they failed inside — so no early break on empty active.
+		active := r.activeOf(playHosts)
+		active = append(active, r.alwaysEligible(playHosts, task)...)
+		active = r.blockEligible(active, task)
+		if restrict != nil {
+			active = intersect(active, restrict)
+		}
+		if len(active) == 0 {
+			continue
+		}
+		if task.Module == "include_tasks" {
+			if err := r.runIncludeTasks(ctx, play, task, active, playHosts, depth); err != nil {
+				return err
+			}
+			continue
+		}
+		r.runTaskAcrossHosts(ctx, play, task, active, playHosts, false)
+	}
+	return nil
+}
+
+func intersect(a, b []string) []string {
+	keep := make(map[string]bool, len(b))
+	for _, h := range b {
+		keep[h] = true
+	}
+	var out []string
+	for _, h := range a {
+		if keep[h] {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// runIncludeTasks implements dynamic includes: the file path is templated
+// per host (it may reference host facts), hosts are grouped by resolved
+// path, and each group's tasks run through the normal pipeline. The
+// include's own when: gates inclusion per host (Ansible's dynamic-include
+// semantics); its vars: overlay the included tasks.
+func (r *Runner) runIncludeTasks(ctx context.Context, play *playbook.Play, task *playbook.Task, active, playHosts []string, depth int) error {
+	if task.Loop != nil {
+		return fmt.Errorf("%s:%d: loops on include_tasks are not supported yet", task.Src.File, task.Src.Line)
+	}
+	rawPath, _ := task.Args["file"].(string)
+	if rawPath == "" {
+		return fmt.Errorf("%s:%d: include_tasks requires a file name", task.Src.File, task.Src.Line)
+	}
+
+	pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
+	groups := map[string][]string{} // resolved path -> hosts
+	var order []string
+	for _, host := range active {
+		vctx := r.newHostContext(host, pos, playHosts)
+		if len(task.Vars) > 0 {
+			vctx = vctx.WithOverlay(task.Vars)
+		}
+		if len(task.When) > 0 {
+			ok, err := vctx.EvalWhen(task.When)
+			if err != nil {
+				r.record(host, task, agentproto.Fail("The conditional check failed: %v", err), nil)
+				continue
+			}
+			if !ok {
+				continue // dynamic include: when gates the include itself
+			}
+		}
+		rendered, err := vctx.TemplateString(rawPath)
+		if err != nil {
+			r.record(host, task, agentproto.Fail("error templating include_tasks path: %v", err), nil)
+			continue
+		}
+		path, err := r.resolveIncludePath(fmt.Sprintf("%v", rendered), task)
+		if err != nil {
+			r.record(host, task, agentproto.Fail("%v", err), nil)
+			continue
+		}
+		if _, seen := groups[path]; !seen {
+			order = append(order, path)
+		}
+		groups[path] = append(groups[path], host)
+	}
+
+	for _, path := range order {
+		tasks, err := playbook.LoadTaskFile(path, task.SrcDir)
+		if err != nil {
+			for _, host := range groups[path] {
+				r.record(host, task, agentproto.Fail("include_tasks: %v", err), nil)
+			}
+			continue
+		}
+		// The include's vars/tags carry into the included tasks.
+		for _, t := range tasks {
+			if len(task.Vars) > 0 {
+				merged := make(map[string]any, len(task.Vars)+len(t.Vars))
+				for k, v := range task.Vars {
+					merged[k] = v
+				}
+				for k, v := range t.Vars {
+					merged[k] = v
+				}
+				t.Vars = merged
+			}
+			t.Tags = append(append([]string{}, task.Tags...), t.Tags...)
+		}
+		if err := r.runTaskList(ctx, play, tasks, playHosts, groups[path], depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// resolveIncludePath locates an included task file: absolute, relative to
+// the including file, the role's tasks dir, or the playbook dir.
+func (r *Runner) resolveIncludePath(path string, task *playbook.Task) (string, error) {
+	if filepath.IsAbs(path) {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+		return "", fmt.Errorf("include_tasks: %s not found", path)
+	}
+	var candidates []string
+	if task.Src.File != "" {
+		candidates = append(candidates, filepath.Join(filepath.Dir(task.Src.File), path))
+	}
+	if task.SrcDir != "" {
+		candidates = append(candidates,
+			filepath.Join(task.SrcDir, "tasks", path),
+			filepath.Join(task.SrcDir, path))
+	}
+	candidates = append(candidates, filepath.Join(r.Opts.BaseDir, path))
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c, nil
+		}
+	}
+	return "", fmt.Errorf("include_tasks: could not find %q (searched near %s)", path, task.Src.File)
 }
 
 // runTaskAcrossHosts executes one task on all active hosts with forks
@@ -533,6 +685,7 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 }
 
 // resolveLoop templates the loop value. Returns isLoop=false when absent.
+// with_<lookup> loops feed the templated terms through the lookup plugin.
 func (r *Runner) resolveLoop(task *playbook.Task, vctx *vars.Context) ([]any, bool, error) {
 	if task.Loop == nil {
 		return nil, false, nil
@@ -540,6 +693,23 @@ func (r *Runner) resolveLoop(task *playbook.Task, vctx *vars.Context) ([]any, bo
 	v, err := vctx.TemplateValue(task.Loop)
 	if err != nil {
 		return nil, false, err
+	}
+	if task.LoopWith != "" {
+		if r.Engine.Lookup == nil {
+			return nil, false, fmt.Errorf("with_%s: lookups are not available", task.LoopWith)
+		}
+		terms, ok := v.([]any)
+		if !ok {
+			terms = []any{v}
+		}
+		out, err := r.Engine.Lookup(nil, task.LoopWith, terms, nil)
+		if err != nil {
+			return nil, false, err
+		}
+		if list, ok := out.([]any); ok {
+			return list, true, nil
+		}
+		return []any{out}, true, nil
 	}
 	switch t := v.(type) {
 	case []any:
@@ -683,14 +853,16 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		return nil, &unreachableError{host: host, err: err}
 	}
 	return &actions.Context{
-		Host:      host,
-		Vars:      vctx,
-		Conn:      conn,
-		Become:    become,
-		CheckMode: r.Opts.CheckMode,
-		Diff:      r.Opts.Diff,
-		BaseDir:   r.Opts.BaseDir,
-		Verbosity: r.Opts.Verbosity,
+		Host:       host,
+		Vars:       vctx,
+		Conn:       conn,
+		Become:     become,
+		CheckMode:  r.Opts.CheckMode,
+		Diff:       r.Opts.Diff,
+		Background: task.Async > 0 && task.Poll == 0,
+		BaseDir:    r.Opts.BaseDir,
+		SrcDir:     task.SrcDir,
+		Verbosity:  r.Opts.Verbosity,
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
 			return r.runModule(ctx, host, inProcess, become, task, req, payload)
 		},

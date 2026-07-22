@@ -24,6 +24,7 @@ const (
 	LHostVars
 	LPlayVars
 	LPlayVarsFiles
+	LRoleVars // role vars/main.yml: outrank play vars (Ansible precedence)
 	LTaskVars
 	LFacts
 	LHostFacts // set_fact + register; persists across plays
@@ -59,15 +60,24 @@ func (s *Store) set(layer Layer, scope string, vars map[string]any) {
 	}
 }
 
-// SetPlayVars replaces the play-vars layer (called at play start).
+// SetPlayVars replaces all play-scoped layers (called at play start).
 func (s *Store) SetPlayVars(vars map[string]any) {
 	s.mu.Lock()
 	s.layers[LPlayVars] = nil
+	s.layers[LPlayVarsFiles] = nil
+	s.layers[LRoleDefaults] = nil
+	s.layers[LRoleVars] = nil
 	s.mu.Unlock()
 	if vars != nil {
 		s.set(LPlayVars, "", vars)
 	}
 }
+
+// AddRoleDefaults merges one role's defaults (lowest precedence).
+func (s *Store) AddRoleDefaults(vars map[string]any) { s.set(LRoleDefaults, "", vars) }
+
+// AddRoleVars merges one role's vars (outrank play vars).
+func (s *Store) AddRoleVars(vars map[string]any) { s.set(LRoleVars, "", vars) }
 
 // AddVarsFile merges one vars_files result.
 func (s *Store) AddVarsFile(vars map[string]any) { s.set(LPlayVarsFiles, "", vars) }

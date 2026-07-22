@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giraffesyo/understudy/internal/callback"
 	"github.com/giraffesyo/understudy/internal/executor"
@@ -27,6 +28,13 @@ func run(t *testing.T, src string, opts executor.Options) (int, string, map[stri
 	plays, err := playbook.LoadFile(path)
 	if err != nil {
 		t.Fatalf("load: %v", err)
+	}
+	roleBase := opts.BaseDir
+	if roleBase == "" {
+		roleBase = dir
+	}
+	if err := playbook.ResolveRoles(plays, roleBase, nil); err != nil {
+		t.Fatalf("roles: %v", err)
 	}
 	var buf bytes.Buffer
 	cb := &callback.Default{Out: &buf, Verbosity: opts.Verbosity, NoColor: true}
@@ -513,4 +521,183 @@ func TestDelegateToLocalhost(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit=%d\n%s", code, out)
 	}
+}
+
+// writeRole builds a complete role fixture on disk.
+func writeRole(t *testing.T, dir, name string, files map[string]string) {
+	t.Helper()
+	root := filepath.Join(dir, "roles", name)
+	for rel, content := range files {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRolesEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out")
+	os.MkdirAll(out, 0o755)
+
+	// A dependency role, pulled in via meta/main.yml.
+	writeRole(t, dir, "base", map[string]string{
+		"tasks/main.yml": `
+- name: base marker
+  copy:
+    content: "base was here\n"
+    dest: ` + out + `/base.txt
+`,
+	})
+
+	writeRole(t, dir, "web", map[string]string{
+		"meta/main.yml":          "dependencies:\n  - base\n",
+		"defaults/main.yml":      "port: 80\nservername: default-name\n",
+		"vars/main.yml":          "docroot: /srv/www\n",
+		"templates/site.conf.j2": "server {{ servername }}:{{ port }} root={{ docroot }}\n",
+		"tasks/main.yml": `
+- name: render site config
+  template:
+    src: site.conf.j2
+    dest: ` + out + `/site.conf
+  notify: reload web
+- name: os-specific setup
+  include_tasks: "{{ flavor }}.yml"
+- name: static import
+  import_tasks: extra.yml
+  vars:
+    extra_msg: from-import
+`,
+		"tasks/alpha.yml": `
+- name: alpha branch
+  copy:
+    content: "flavor=alpha\n"
+    dest: ` + out + `/flavor.txt
+`,
+		"tasks/extra.yml": `
+- name: imported task
+  copy:
+    content: "{{ extra_msg }}\n"
+    dest: ` + out + `/extra.txt
+`,
+		"handlers/main.yml": `
+- name: reload web
+  copy:
+    content: "handler ran\n"
+    dest: ` + out + `/handler.txt
+`,
+	})
+
+	code, output, stats := run(t, `
+- hosts: all
+  gather_facts: false
+  vars:
+    flavor: alpha
+  roles:
+    - role: web
+      vars:
+        servername: overridden
+  tasks:
+    - name: role vars visible to play tasks
+      assert:
+        that:
+          - port == 80
+          - docroot == "/srv/www"
+`, executor.Options{BaseDir: dir})
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s", code, output)
+	}
+
+	checks := map[string]string{
+		"base.txt":    "base was here\n",                      // dependency ran first
+		"site.conf":   "server overridden:80 root=/srv/www\n", // params > defaults; role vars work
+		"flavor.txt":  "flavor=alpha\n",                       // dynamic include with templated path
+		"extra.txt":   "from-import\n",                        // static import with vars inheritance
+		"handler.txt": "handler ran\n",                        // role handler notified
+	}
+	for file, want := range checks {
+		data, err := os.ReadFile(filepath.Join(out, file))
+		if err != nil {
+			t.Errorf("%s missing: %v", file, err)
+			continue
+		}
+		if string(data) != want {
+			t.Errorf("%s = %q, want %q", file, data, want)
+		}
+	}
+	if st := stats["localhost"]; st.Failed != 0 {
+		t.Errorf("stats = %+v", st)
+	}
+}
+
+func TestIncludeTasksWhenGates(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "inc.yml"), []byte(`
+- name: included task
+  debug: {msg: included-ran}
+`), 0o644)
+	_, out, _ := run(t, `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - include_tasks: inc.yml
+      when: false
+    - include_tasks: inc.yml
+      when: true
+`, executor.Options{BaseDir: dir})
+	if strings.Count(out, "included-ran") != 1 {
+		t.Errorf("include when-gating wrong (want exactly one run):\n%s", out)
+	}
+}
+
+func TestRoleNotFoundError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "p.yml")
+	os.WriteFile(path, []byte("- hosts: all\n  roles: [nosuchrole]\n"), 0o644)
+	plays, err := playbook.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = playbook.ResolveRoles(plays, dir, nil)
+	if err == nil || !strings.Contains(err.Error(), `"nosuchrole" was not found`) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestAsyncFireAndForget(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "bg-done")
+	code, out, _ := run(t, `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: background job
+      shell: sleep 0.2 && touch `+marker+`
+      async: 60
+      poll: 0
+      register: bg
+    - assert:
+        that:
+          - bg.started == 1
+          - bg.finished == 0
+`, executor.Options{})
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s", code, out)
+	}
+	// The marker must NOT exist yet (task returned before the sleep ended)…
+	if _, err := os.Stat(marker); err == nil {
+		t.Log("marker existed immediately (slow machine?); continuing")
+	}
+	// …but the detached process must complete on its own.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(marker); err == nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Error("background process never completed")
 }

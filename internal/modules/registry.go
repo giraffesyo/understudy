@@ -14,11 +14,12 @@ import (
 
 // RunEnv carries per-invocation context into a module.
 type RunEnv struct {
-	CheckMode bool
-	DiffMode  bool
-	Payload   io.Reader         // exactly PayloadLen bytes, or nil
-	FreeForm  string            // raw params for command/shell/script
-	Env       map[string]string // task environment: applied to shell-outs
+	CheckMode  bool
+	DiffMode   bool
+	Payload    io.Reader         // exactly PayloadLen bytes, or nil
+	FreeForm   string            // raw params for command/shell/script
+	Env        map[string]string // task environment: applied to shell-outs
+	Background bool              // fire-and-forget (async + poll: 0)
 }
 
 // ModuleFunc executes one module invocation. Failures are reported in the
@@ -54,11 +55,12 @@ func Run(req *agentproto.TaskRequest, payload io.Reader) (res *agentproto.Result
 		}
 	}()
 	env := &RunEnv{
-		CheckMode: req.CheckMode,
-		DiffMode:  req.Diff,
-		Payload:   payload,
-		FreeForm:  req.FreeForm,
-		Env:       req.Env,
+		CheckMode:  req.CheckMode,
+		DiffMode:   req.Diff,
+		Payload:    payload,
+		FreeForm:   req.FreeForm,
+		Env:        req.Env,
+		Background: req.Background,
 	}
 	res = fn(env, req.Args)
 	if res == nil {
