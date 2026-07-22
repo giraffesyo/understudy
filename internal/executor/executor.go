@@ -750,8 +750,37 @@ func (r *Runner) newHostContext(host string, pos template.Position, playHosts []
 	}
 	c.SetMagic("playbook_dir", r.Opts.BaseDir)
 	c.SetMagic("ansible_check_mode", r.Opts.CheckMode)
+	// hostvars: a lazy mapping from any inventory host to that host's
+	// resolved variable view. Building another host's context is deferred
+	// until hostvars['other'] is actually accessed.
+	if r.Inv != nil {
+		c.SetMagic("hostvars", newHostVars(r, pos, playHosts))
+	}
 	return c
 }
+
+// hostVars is the lazy `hostvars` magic variable.
+type hostVars struct {
+	r         *Runner
+	pos       template.Position
+	playHosts []string
+	names     []string
+}
+
+func newHostVars(r *Runner, pos template.Position, playHosts []string) *hostVars {
+	return &hostVars{r: r, pos: pos, playHosts: playHosts, names: r.Inv.SortedHostNames()}
+}
+
+func (h *hostVars) GetItem(host string) (any, bool) {
+	if _, ok := h.r.Inv.Hosts[host]; !ok {
+		return nil, false
+	}
+	// Build the target host's context on demand and expose it as a mapping.
+	return h.r.newHostContext(host, h.pos, h.playHosts).AsMapping(), true
+}
+
+func (h *hostVars) Keys() []string { return h.names }
+func (h *hostVars) Len() int       { return len(h.names) }
 
 func playPos(play *playbook.Play) template.Position {
 	return template.Position{File: play.Src.File, Line: play.Src.Line, Col: play.Src.Col}

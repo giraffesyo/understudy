@@ -6,6 +6,7 @@ package vars
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/giraffesyo/understudy/internal/template"
@@ -186,6 +187,49 @@ func (c *Context) WithOverlay(vars map[string]any) *Context {
 
 // SetMagic installs a magic variable (groups, play_hosts, ansible_facts...).
 func (c *Context) SetMagic(name string, v any) { c.magic[name] = v }
+
+// Names returns the variable names visible in this context (flattened store
+// vars, overlay, and magic vars) — used to expose a host's variable set
+// through hostvars.
+func (c *Context) Names() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(m map[string]any) {
+		for k := range m {
+			if !seen[k] {
+				seen[k] = true
+				out = append(out, k)
+			}
+		}
+	}
+	add(c.flat)
+	add(c.overlay)
+	add(c.magic)
+	sort.Strings(out)
+	return out
+}
+
+// AsMapping exposes a context as a template.Mapping (GetItem/Keys/Len), so
+// one host's resolved variables can be read from another host — the basis
+// of the hostvars magic variable.
+func (c *Context) AsMapping() template.Mapping { return &contextMapping{ctx: c} }
+
+type contextMapping struct{ ctx *Context }
+
+func (m *contextMapping) GetItem(key string) (any, bool) { return m.ctx.getSafe(key) }
+func (m *contextMapping) Keys() []string                 { return m.ctx.Names() }
+func (m *contextMapping) Len() int                       { return len(m.ctx.Names()) }
+
+// getSafe is Get with resolution panics converted to a not-found so a bad
+// var on another host doesn't abort the referencing host.
+func (c *Context) getSafe(name string) (v any, ok bool) {
+	defer func() {
+		if recover() != nil {
+			v, ok = nil, false
+		}
+	}()
+	return c.Get(name)
+}
 
 // Get implements template.VarGetter with lazy recursive resolution.
 func (c *Context) Get(name string) (any, bool) {

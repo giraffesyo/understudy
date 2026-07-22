@@ -1,0 +1,45 @@
+---
+# Magic variables: inventory_hostname, groups, group_names, hostvars,
+# ansible_play_hosts. Uses the sibling magic_vars.inventory (web/db groups).
+- name: magic vars
+  hosts: production
+  gather_facts: false
+  tasks:
+    - name: inventory_hostname is set
+      assert:
+        that:
+          - inventory_hostname in ['web1', 'web2', 'db1']
+          - inventory_hostname_short == inventory_hostname
+
+    - name: group_names reflects membership
+      assert:
+        that:
+          - "'production' in group_names"
+          - "(inventory_hostname == 'db1') == ('db' in group_names)"
+          - "(host_role == 'frontend') == ('web' in group_names)"
+
+    - name: groups maps names to host lists
+      assert:
+        that:
+          - "groups['web'] | sort == ['web1', 'web2']"
+          - "groups['db'] == ['db1']"
+          - "groups['production'] | length == 3"
+          - "groups['all'] | length == 3"
+
+    - name: play hosts
+      assert:
+        that:
+          - ansible_play_hosts | length == 3
+          - inventory_hostname in ansible_play_hosts
+
+    - name: inventory var inheritance
+      assert:
+        that:
+          - tier == 'prod'
+
+    - name: hostvars cross-host access
+      assert:
+        that:
+          - hostvars['web1']['host_role'] == 'frontend'
+          - hostvars['db1']['host_role'] == 'backend'
+          - hostvars[inventory_hostname]['host_role'] == host_role
