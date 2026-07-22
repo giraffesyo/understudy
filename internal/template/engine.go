@@ -58,7 +58,10 @@ func New() *Engine {
 		Opts:    DefaultOptions(),
 	}
 	registerFilters(e)
+	registerAnsibleFilters(e)
+	registerRegexFilters(e)
 	registerTests(e)
+	registerAnsibleTests(e)
 	registerGlobals(e)
 	return e
 }
