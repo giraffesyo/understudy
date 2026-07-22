@@ -10,9 +10,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -286,25 +288,19 @@ func registerAnsibleFilters(e *Engine) {
 	}
 
 	// ---- serialization ----
+	// to_json/to_nice_json match Python's json.dumps: "', '" item and "': '"
+	// key separators (Go's encoding/json omits the spaces), keys sorted.
 	f["to_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		data, err := json.Marshal(jsonSanitize(in))
-		if err != nil {
-			return nil, err
-		}
-		return string(data), nil
+		return pyJSON(jsonSanitize(in), 0), nil
 	}
 	f["to_nice_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		indent := int64(4)
+		indent := 4
 		if v, ok := kwargs["indent"]; ok {
 			if n, ok := asInt(v); ok {
-				indent = n
+				indent = int(n)
 			}
 		}
-		data, err := json.MarshalIndent(jsonSanitize(in), "", strings.Repeat(" ", int(indent)))
-		if err != nil {
-			return nil, err
-		}
-		return string(data), nil
+		return pyJSON(jsonSanitize(in), indent), nil
 	}
 	f["from_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
@@ -570,30 +566,17 @@ func registerAnsibleFilters(e *Engine) {
 		if len(args) > 1 {
 			method, _ = asString(args[1])
 		}
-		mult := 1.0
-		for i := int64(0); i < precision; i++ {
-			mult *= 10
-		}
+		mult := math.Pow(10, float64(precision))
 		v := fv * mult
 		switch method {
 		case "common":
-			if v >= 0 {
-				v = float64(int64(v + 0.5))
-			} else {
-				v = float64(int64(v - 0.5))
-			}
+			// Jinja2's 'common' method calls Python's round(), which is
+			// banker's rounding (half to even): round(2.5)==2, round(3.5)==4.
+			v = math.RoundToEven(v)
 		case "floor":
-			v = float64(int64(v))
-			if fv < 0 && v != fv*mult {
-				v--
-			}
+			v = math.Floor(v)
 		case "ceil":
-			t := float64(int64(v))
-			if v > t {
-				v = t + 1
-			} else {
-				v = t
-			}
+			v = math.Ceil(v)
 		default:
 			return nil, fmt.Errorf("unknown rounding method %q", method)
 		}
@@ -881,6 +864,91 @@ func pathFilter(fn func(string) string) FilterFunc {
 		}
 		return fn(s), nil
 	}
+}
+
+// pyJSON serializes a value the way Python's json.dumps does — the format
+// Ansible's to_json/to_nice_json produce. indent==0 yields the compact form
+// with ", " and ": " separators; indent>0 pretty-prints with sorted keys.
+func pyJSON(v any, indent int) string {
+	var b strings.Builder
+	writePyJSON(&b, v, indent, 0)
+	return b.String()
+}
+
+func writePyJSON(b *strings.Builder, v any, indent, depth int) {
+	switch t := v.(type) {
+	case nil:
+		b.WriteString("null")
+	case bool:
+		if t {
+			b.WriteString("true")
+		} else {
+			b.WriteString("false")
+		}
+	case string:
+		b.WriteString(jsonQuote(t))
+	case int64:
+		b.WriteString(strconv.FormatInt(t, 10))
+	case int:
+		b.WriteString(strconv.Itoa(t))
+	case float64:
+		b.WriteString(pyFloatStr(t))
+	case []any:
+		if len(t) == 0 {
+			b.WriteString("[]")
+			return
+		}
+		b.WriteByte('[')
+		for i, item := range t {
+			pyJSONSep(b, i, indent, depth+1)
+			writePyJSON(b, item, indent, depth+1)
+		}
+		pyJSONClose(b, ']', indent, depth)
+	case map[string]any:
+		if len(t) == 0 {
+			b.WriteString("{}")
+			return
+		}
+		b.WriteByte('{')
+		for i, k := range sortedKeys(t) {
+			pyJSONSep(b, i, indent, depth+1)
+			b.WriteString(jsonQuote(k))
+			b.WriteString(": ")
+			writePyJSON(b, t[k], indent, depth+1)
+		}
+		pyJSONClose(b, '}', indent, depth)
+	default:
+		b.WriteString(jsonQuote(toStr(v)))
+	}
+}
+
+func pyJSONSep(b *strings.Builder, i, indent, depth int) {
+	if i > 0 {
+		if indent > 0 {
+			b.WriteByte(',')
+		} else {
+			b.WriteString(", ")
+		}
+	}
+	if indent > 0 {
+		b.WriteByte('\n')
+		b.WriteString(strings.Repeat(" ", indent*depth))
+	}
+}
+
+func pyJSONClose(b *strings.Builder, closer byte, indent, depth int) {
+	if indent > 0 {
+		b.WriteByte('\n')
+		b.WriteString(strings.Repeat(" ", indent*depth))
+	}
+	b.WriteByte(closer)
+}
+
+// jsonQuote quotes a string like encoding/json (escapes match Python's
+// default ensure_ascii=False for the common printable case).
+func jsonQuote(s string) string {
+	out, _ := json.Marshal(s)
+	return string(out)
 }
 
 // jsonSanitize converts engine-internal values into plain JSON-encodable

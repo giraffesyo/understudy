@@ -92,7 +92,7 @@ func TestSerializationFilters(t *testing.T) {
 		expr string
 		want any
 	}{
-		{"{'b': 1, 'a': [2]} | to_json", `{"a":[2],"b":1}`},
+		{"{'b': 1, 'a': [2]} | to_json", `{"a": [2], "b": 1}`}, // Python json.dumps separators
 		{`'{"x": 5}' | from_json`, map[string]any{"x": int64(5)}},
 		{`'a: 1' | from_yaml`, map[string]any{"a": int64(1)}},
 		{"'hello' | b64encode", "aGVsbG8="},
@@ -123,7 +123,8 @@ func TestPathAndMiscFilters(t *testing.T) {
 		{"false | ternary('yes', 'no')", "no"},
 		{"-5 | abs", int64(5)},
 		{"2.567 | round(2)", 2.57},
-		{"2.5 | round", 3.0},
+		{"2.5 | round", 2.0}, // banker's rounding (half to even), matching Python
+		{"3.5 | round", 4.0},
 		{"'a' | extract({'a': 42})", int64(42)},
 		{"'x\\ny' | indent(2)", "x\n  y"},
 	}

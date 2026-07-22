@@ -1,0 +1,34 @@
+---
+# Run under --check (harness detects the check_ prefix). Change-prediction
+# in check mode must match: file/copy/lineinfile predict changes without
+# making them; command skips; debug/assert/set_fact still run.
+- name: check mode
+  hosts: all
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/cfg"
+  tasks:
+    - name: predict a directory creation
+      file:
+        path: "{{ d }}"
+        state: directory
+
+    - name: predict a file write
+      copy:
+        content: "x=1\n"
+        dest: "{{ d }}/a.conf"
+
+    - name: command is skipped in check mode
+      command: "touch {{ d }}/should-not-exist"
+
+    - name: debug still runs
+      debug:
+        msg: visible in check mode
+
+    - name: set_fact still runs
+      set_fact:
+        flag: computed
+
+    - name: assert sees the fact
+      assert:
+        that: flag == 'computed'
