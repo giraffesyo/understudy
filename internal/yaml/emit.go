@@ -3,14 +3,27 @@ package yaml
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 )
 
+// KV is one ordered mapping entry for Marshal.
+type KV struct {
+	K string
+	V any
+}
+
+// OrderedMap is a mapping whose key order Marshal preserves (plain maps
+// emit sorted). Decode never produces it; it exists for renderers that
+// care about human-readable key ordering (playbook generation).
+type OrderedMap []KV
+
 // Marshal renders v as block-style YAML for the to_yaml/to_nice_yaml
-// filters. Mapping keys are sorted. It does not aim to round-trip styles or
-// comments — it produces clean output that this package can re-parse.
+// filters. Mapping keys are sorted (use OrderedMap to control ordering).
+// It does not aim to round-trip styles or comments — it produces clean
+// output that this package can re-parse.
 func Marshal(v any, indent int) ([]byte, error) {
 	if indent <= 0 {
 		indent = 2
@@ -74,14 +87,24 @@ func emitValue(b *strings.Builder, v any, depth, indent int, inline bool) error 
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		for i, k := range keys {
+		ordered := make(OrderedMap, 0, len(keys))
+		for _, k := range keys {
+			ordered = append(ordered, KV{K: k, V: t[k]})
+		}
+		return emitValue(b, ordered, depth, indent, inline)
+	case OrderedMap:
+		if len(t) == 0 {
+			b.WriteString("{}")
+			return nil
+		}
+		for i, kv := range t {
 			if i > 0 || !inline {
 				b.WriteByte('\n')
 				b.WriteString(strings.Repeat(" ", depth*indent))
 			}
-			b.WriteString(quoteIfNeeded(k, 0))
+			b.WriteString(quoteIfNeeded(kv.K, 0))
 			b.WriteByte(':')
-			val := t[k]
+			val := kv.V
 			if isScalarValue(val) || isEmptyContainer(val) {
 				b.WriteByte(' ')
 			}
@@ -90,6 +113,30 @@ func emitValue(b *strings.Builder, v any, depth, indent int, inline bool) error 
 			}
 		}
 	default:
+		// Generic slices/maps ([]string, map[string]string, int32...) from
+		// caller-provided values normalize via reflection.
+		rv := reflect.ValueOf(v)
+		switch rv.Kind() {
+		case reflect.Slice, reflect.Array:
+			items := make([]any, rv.Len())
+			for i := range items {
+				items[i] = rv.Index(i).Interface()
+			}
+			return emitValue(b, items, depth, indent, inline)
+		case reflect.Map:
+			if rv.Type().Key().Kind() == reflect.String {
+				m := make(map[string]any, rv.Len())
+				for _, k := range rv.MapKeys() {
+					m[k.String()] = rv.MapIndex(k).Interface()
+				}
+				return emitValue(b, m, depth, indent, inline)
+			}
+		case reflect.Int8, reflect.Int16, reflect.Int32,
+			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			return emitValue(b, rv.Convert(reflect.TypeOf(int64(0))).Interface(), depth, indent, inline)
+		case reflect.Float32:
+			return emitValue(b, rv.Float(), depth, indent, inline)
+		}
 		return fmt.Errorf("yaml: cannot marshal value of type %T", v)
 	}
 	return nil
