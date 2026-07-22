@@ -12,7 +12,10 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/term"
+
 	"github.com/giraffesyo/understudy/internal/callback"
+	"github.com/giraffesyo/understudy/internal/connection"
 	"github.com/giraffesyo/understudy/internal/executor"
 	"github.com/giraffesyo/understudy/internal/inventory"
 	"github.com/giraffesyo/understudy/internal/playbook"
@@ -184,6 +187,61 @@ func parseArgs(args []string) (*parsedArgs, error) {
 	return p, nil
 }
 
+// buildOptions assembles executor options, running -k/-K prompts once.
+func buildOptions(p *parsedArgs, baseDir string) (executor.Options, error) {
+	opts := executor.Options{
+		Forks:      p.forks,
+		CheckMode:  p.check,
+		Diff:       p.diff,
+		Verbosity:  p.verbosity,
+		ExtraVars:  p.extraVars,
+		Become:     p.become,
+		BecomeUser: p.becomeUser,
+		Connection: p.connection,
+		BaseDir:    baseDir,
+		Tags:       splitCSV(p.tags),
+		SkipTags:   splitCSV(p.skipTags),
+	}
+	hostKeyChecking := true
+	if v := os.Getenv("ANSIBLE_HOST_KEY_CHECKING"); v != "" {
+		hostKeyChecking = !(v == "False" || v == "false" || v == "no" || v == "0")
+	}
+	opts.ConnOpts = connection.ManagerOptions{
+		RemoteUser:      p.remoteUser,
+		PrivateKey:      p.privateKey,
+		HostKeyChecking: hostKeyChecking,
+		KeyPassphrase: func() (string, error) {
+			return promptSecret("SSH key passphrase")
+		},
+	}
+	if p.askPass {
+		pw, err := promptSecret("SSH password")
+		if err != nil {
+			return opts, err
+		}
+		opts.ConnOpts.Password = pw
+	}
+	if p.askBecome {
+		pw, err := promptSecret("BECOME password")
+		if err != nil {
+			return opts, err
+		}
+		opts.BecomePass = pw
+	}
+	return opts, nil
+}
+
+// promptSecret reads a password without echo.
+func promptSecret(label string) (string, error) {
+	fmt.Fprintf(os.Stderr, "%s: ", label)
+	data, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", fmt.Errorf("reading %s: %w", label, err)
+	}
+	return string(data), nil
+}
+
 func splitCSV(s string) []string {
 	if s == "" {
 		return nil
@@ -298,20 +356,13 @@ func playbookCmd(args []string) int {
 			continue
 		}
 
+		opts, err := buildOptions(p, filepath.Dir(path))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+			return 1
+		}
 		cb := callback.New(p.verbosity)
-		runner := executor.NewRunner(inv, cb, executor.Options{
-			Forks:      p.forks,
-			CheckMode:  p.check,
-			Diff:       p.diff,
-			Verbosity:  p.verbosity,
-			ExtraVars:  p.extraVars,
-			Become:     p.become,
-			BecomeUser: p.becomeUser,
-			Connection: p.connection,
-			BaseDir:    filepath.Dir(path),
-			Tags:       splitCSV(p.tags),
-			SkipTags:   splitCSV(p.skipTags),
-		})
+		runner := executor.NewRunner(inv, cb, opts)
 		runner.Limit = p.limit
 		code, err := runner.Run(context.Background(), plays)
 		if err != nil {
@@ -401,18 +452,13 @@ func adhocCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
 		return 1
 	}
+	opts, err := buildOptions(p, ".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		return 1
+	}
 	cb := callback.New(p.verbosity)
-	runner := executor.NewRunner(inv, cb, executor.Options{
-		Forks:      p.forks,
-		CheckMode:  p.check,
-		Diff:       p.diff,
-		Verbosity:  p.verbosity,
-		ExtraVars:  p.extraVars,
-		Become:     p.become,
-		BecomeUser: p.becomeUser,
-		Connection: p.connection,
-		BaseDir:    ".",
-	})
+	runner := executor.NewRunner(inv, cb, opts)
 	runner.Limit = p.limit
 	code, err := runner.Run(context.Background(), []*playbook.Play{play})
 	if err != nil {

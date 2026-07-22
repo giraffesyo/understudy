@@ -54,6 +54,7 @@ type Options struct {
 	BaseDir    string // playbook directory
 	Tags       []string
 	SkipTags   []string
+	ConnOpts   connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
 }
 
 // Runner executes playbooks.
@@ -61,6 +62,7 @@ type Runner struct {
 	Inv      *inventory.Inventory
 	Engine   *template.Engine
 	Store    *vars.Store
+	Conns    *connection.Manager
 	Callback Callback
 	Opts     Options
 	Limit    string // --limit pattern, intersected with each play's hosts
@@ -93,6 +95,9 @@ func NewRunner(inv *inventory.Inventory, cb Callback, opts Options) *Runner {
 	if opts.ExtraVars != nil {
 		r.Store.SetExtraVars(opts.ExtraVars)
 	}
+	connOpts := opts.ConnOpts
+	connOpts.Connection = opts.Connection
+	r.Conns = connection.NewManager(r.Store, connOpts)
 	playbook.ModuleKnown = actions.Known
 	return r
 }
@@ -483,8 +488,12 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		freeForm = fmt.Sprintf("%v", v)
 	}
 
-	actx, err := r.actionContext(host, task, play, vctx)
+	actx, err := r.actionContext(ctx, host, task, play, vctx)
 	if err != nil {
+		if ue, ok := err.(*unreachableError); ok {
+			return &agentproto.Result{Failed: true, Msg: ue.Error(),
+				Extra: map[string]any{"unreachable": true}}
+		}
 		return agentproto.Fail("%v", err)
 	}
 
@@ -557,11 +566,11 @@ func registerOverlay(task *playbook.Task, res *agentproto.Result) map[string]any
 	return map[string]any{name: m}
 }
 
-func (r *Runner) actionContext(host string, task *playbook.Task, play *playbook.Play, vctx *vars.Context) (*actions.Context, error) {
+func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.Task, play *playbook.Play, vctx *vars.Context) (*actions.Context, error) {
 	become := r.effectiveBecome(play, task)
-	conn, err := r.connFor(host)
+	conn, inProcess, err := r.Conns.Get(ctx, host)
 	if err != nil {
-		return nil, err
+		return nil, &unreachableError{host: host, err: err}
 	}
 	return &actions.Context{
 		Host:      host,
@@ -573,13 +582,21 @@ func (r *Runner) actionContext(host string, task *playbook.Task, play *playbook.
 		BaseDir:   r.Opts.BaseDir,
 		Verbosity: r.Opts.Verbosity,
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
-			return r.runModule(ctx, host, conn, become, task, req, payload)
+			return r.runModule(ctx, host, inProcess, become, task, req, payload)
 		},
 		SetFact: func(name string, value any) {
 			r.Store.SetHostFact(host, name, value)
 		},
 	}, nil
 }
+
+// unreachableError marks transport failures (distinct from task failures).
+type unreachableError struct {
+	host string
+	err  error
+}
+
+func (e *unreachableError) Error() string { return e.err.Error() }
 
 func (r *Runner) effectiveBecome(play *playbook.Play, task *playbook.Task) *connection.BecomeSpec {
 	on := r.Opts.Become
@@ -605,31 +622,9 @@ func (r *Runner) effectiveBecome(play *playbook.Play, task *playbook.Task) *conn
 	return &connection.BecomeSpec{User: user, Method: "sudo", Password: r.Opts.BecomePass}
 }
 
-// connFor returns the connection for a host, honoring -c and the
-// ansible_connection behavioral var. SSH lands in M6; until then non-local
-// hosts fail with a clear message at execution time.
-func (r *Runner) connFor(host string) (connection.Connection, error) {
-	kind := r.Opts.Connection
-	if kind == "" {
-		if v, ok := r.Store.RawHostVar(host, "ansible_connection"); ok {
-			kind, _ = v.(string)
-		}
-	}
-	switch kind {
-	case "local":
-		return connection.NewLocal(), nil
-	case "", "ssh", "smart":
-		if host == "localhost" || host == "127.0.0.1" {
-			return connection.NewLocal(), nil
-		}
-		return nil, fmt.Errorf("ssh connections are not supported yet (coming in the next milestone); use ansible_connection=local or -c local")
-	}
-	return nil, fmt.Errorf("unknown connection type %q", kind)
-}
-
-// runModule executes a module request. For local connections the module
-// registry runs in-process — no subprocess, no serialization.
-func (r *Runner) runModule(ctx context.Context, host string, conn connection.Connection, become *connection.BecomeSpec, task *playbook.Task, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
+// runModule executes a module request: in-process for local connections,
+// via the remote agent otherwise (bootstrapped lazily on first use).
+func (r *Runner) runModule(ctx context.Context, host string, inProcess bool, become *connection.BecomeSpec, task *playbook.Task, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
 	if len(task.Environment) > 0 {
 		env := make(map[string]string, len(task.Environment))
 		vctx := r.Store.NewContext(host, template.Position{File: task.Src.File, Line: task.Src.Line})
@@ -645,8 +640,14 @@ func (r *Runner) runModule(ctx context.Context, host string, conn connection.Con
 	if become != nil && become.User != "" {
 		req.BecomeUser = become.User
 	}
-	// M3: in-process execution (local). M6 adds the agent path over SSH.
-	return modules.Run(req, payload), nil
+	if inProcess {
+		return modules.Run(req, payload), nil
+	}
+	agentClient, err := r.Conns.Agent(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	return agentClient.Run(ctx, req, payload, become)
 }
 
 // dispatch routes to a control-side action or the module runtime.
@@ -664,6 +665,14 @@ func (r *Runner) dispatch(ctx context.Context, task *playbook.Task, actx *action
 // record finalizes a task result for one host (non-loop path emits the
 // callback here; loops emitted per item already).
 func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result, loopItems []any) {
+	if res.Extra != nil && res.Extra["unreachable"] == true {
+		r.Callback.HostUnreachable(host, task, res.Msg)
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.stats[host].Unreachable++
+		r.failed[host] = true
+		return
+	}
 	ignored := task.IgnoreErrors && res.Failed
 	if loopItems == nil {
 		r.Callback.HostResult(host, task, res, ignored, nil)
