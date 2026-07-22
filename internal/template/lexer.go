@@ -1,0 +1,495 @@
+package template
+
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
+
+// lexer is a two-mode state machine: TEXT mode scans literal template text up
+// to {{ / {% / {#; TAG mode tokenizes the expression language until the
+// matching closer. Whitespace-control markers ({{- and -}}) trim adjacent
+// text, and {% raw %} is handled here so its body is never tokenized.
+type lexer struct {
+	src    string
+	pos    int // byte offset
+	tokens []token
+	opts   Options
+	tplPos Position // document position of the template, for errors
+}
+
+func lex(src string, opts Options, tplPos Position) ([]token, error) {
+	l := &lexer{src: src, opts: opts, tplPos: tplPos}
+	if err := l.run(); err != nil {
+		return nil, err
+	}
+	return l.tokens, nil
+}
+
+func (l *lexer) errf(format string, args ...any) error {
+	return &TemplateError{Pos: l.tplPos, Msg: sprintf(format, args...), Src: l.src, Off: l.pos}
+}
+
+func (l *lexer) run() error {
+	for {
+		start := l.pos
+		text, found := l.scanText()
+		if !found {
+			if text != "" {
+				l.tokens = append(l.tokens, token{kind: tokText, val: text, off: start})
+			}
+			l.tokens = append(l.tokens, token{kind: tokEOF, off: l.pos})
+			return nil
+		}
+
+		marker := l.src[l.pos+1] // '{', '%', or '#'
+
+		// Whitespace control: a '-' right after the opener trims trailing
+		// whitespace from the preceding text.
+		trimBefore := l.pos+2 < len(l.src) && l.src[l.pos+2] == '-'
+		if trimBefore {
+			text = strings.TrimRight(text, " \t\r\n")
+		} else if marker == '%' && l.opts.LstripBlocks {
+			// Strip whitespace from the start of the line the block tag sits on.
+			if i := strings.LastIndexByte(text, '\n'); i >= 0 {
+				if strings.TrimRight(text[i+1:], " \t") == "" {
+					text = text[:i+1]
+				}
+			} else if strings.TrimRight(text, " \t") == "" && onLineStart(l.src, start) {
+				text = ""
+			}
+		}
+		if text != "" {
+			l.tokens = append(l.tokens, token{kind: tokText, val: text, off: start})
+		}
+
+		switch marker {
+		case '#':
+			end := strings.Index(l.src[l.pos:], "#}")
+			if end < 0 {
+				return l.errf("unclosed comment (missing '#}')")
+			}
+			closeEnd := l.pos + end + 2
+			trimAfter := end >= 1 && l.src[l.pos+end-1] == '-'
+			l.pos = closeEnd
+			l.applyTrimAfter(trimAfter, false)
+		case '{':
+			l.tokens = append(l.tokens, token{kind: tokVarStart, off: l.pos})
+			l.pos += 2
+			if trimBefore {
+				l.pos++
+			}
+			if err := l.lexTag(tokVarEnd); err != nil {
+				return err
+			}
+		case '%':
+			openOff := l.pos
+			l.pos += 2
+			if trimBefore {
+				l.pos++
+			}
+			// {% raw %} swallows everything up to {% endraw %} as text.
+			if name, after := l.peekBlockName(); name == "raw" {
+				l.pos = after
+				if err := l.finishRawBlock(); err != nil {
+					return err
+				}
+				continue
+			}
+			l.tokens = append(l.tokens, token{kind: tokBlockStart, off: openOff})
+			if err := l.lexTag(tokBlockEnd); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// scanText advances to the next tag opener ({{, {%, or {#), returning the
+// literal text before it. found=false means the rest of the source is text.
+func (l *lexer) scanText() (string, bool) {
+	start := l.pos
+	for {
+		i := strings.IndexByte(l.src[l.pos:], '{')
+		if i < 0 || l.pos+i+1 >= len(l.src) {
+			text := l.src[start:]
+			l.pos = len(l.src)
+			return text, false
+		}
+		abs := l.pos + i
+		switch l.src[abs+1] {
+		case '{', '%', '#':
+			text := l.src[start:abs]
+			l.pos = abs
+			return text, true
+		}
+		l.pos = abs + 1
+	}
+}
+
+func onLineStart(src string, off int) bool {
+	return off == 0 || src[off-1] == '\n'
+}
+
+// applyTrimAfter handles '-' before a closer (trim all following whitespace)
+// and TrimBlocks (a block tag's closer eats one following newline).
+func (l *lexer) applyTrimAfter(trimAfter, blockTag bool) {
+	if trimAfter {
+		for l.pos < len(l.src) {
+			switch l.src[l.pos] {
+			case ' ', '\t', '\r', '\n':
+				l.pos++
+				continue
+			}
+			break
+		}
+		return
+	}
+	if blockTag && l.opts.TrimBlocks {
+		if l.pos < len(l.src) && l.src[l.pos] == '\n' {
+			l.pos++
+		} else if l.pos+1 < len(l.src) && l.src[l.pos] == '\r' && l.src[l.pos+1] == '\n' {
+			l.pos += 2
+		}
+	}
+}
+
+// peekBlockName reads the identifier after '{%' (and optional '-')
+// without consuming, returning the name and the offset just past it.
+func (l *lexer) peekBlockName() (string, int) {
+	p := l.pos
+	for p < len(l.src) && (l.src[p] == ' ' || l.src[p] == '\t') {
+		p++
+	}
+	start := p
+	for p < len(l.src) && (isNameByte(l.src[p])) {
+		p++
+	}
+	return l.src[start:p], p
+}
+
+func (l *lexer) finishRawBlock() error {
+	// Consume the rest of the {% raw %} tag.
+	end := l.findTagEnd("%}")
+	if end < 0 {
+		return l.errf("unclosed '{%% raw %%}' tag")
+	}
+	trimAfterOpen := l.src[end-1] == '-'
+	l.pos = end + 2
+	l.applyTrimAfter(trimAfterOpen, true)
+	bodyStart := l.pos
+	// Find {% endraw %}.
+	rest := l.src[l.pos:]
+	for {
+		i := strings.Index(rest, "{%")
+		if i < 0 {
+			return l.errf("missing '{%% endraw %%}'")
+		}
+		save := l.pos
+		l.pos = save + i
+		p := l.pos + 2
+		if p < len(l.src) && l.src[p] == '-' {
+			p++
+		}
+		l.pos = p
+		name, after := l.peekBlockName()
+		if name == "endraw" {
+			body := l.src[bodyStart : save+i]
+			trimBefore := l.src[save+i+2] == '-'
+			if trimBefore {
+				body = strings.TrimRight(body, " \t\r\n")
+			}
+			if body != "" {
+				l.tokens = append(l.tokens, token{kind: tokText, val: body, off: bodyStart})
+			}
+			l.pos = after
+			end := l.findTagEnd("%}")
+			if end < 0 {
+				return l.errf("unclosed '{%% endraw %%}' tag")
+			}
+			trimAfter := l.src[end-1] == '-'
+			l.pos = end + 2
+			l.applyTrimAfter(trimAfter, true)
+			return nil
+		}
+		l.pos = save
+		rest = l.src[save+i+2:]
+		if len(rest) == 0 {
+			return l.errf("missing '{%% endraw %%}'")
+		}
+		l.pos = save + i + 2
+		rest = l.src[l.pos:]
+	}
+}
+
+// findTagEnd locates the closer within the current tag, skipping strings.
+func (l *lexer) findTagEnd(closer string) int {
+	inStr := byte(0)
+	for i := l.pos; i < len(l.src); i++ {
+		c := l.src[i]
+		if inStr != 0 {
+			if c == '\\' && inStr == '"' {
+				i++
+			} else if c == inStr {
+				inStr = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			inStr = c
+		case closer[0]:
+			if i+1 < len(l.src) && l.src[i+1] == closer[1] {
+				return i
+			}
+		case '-':
+			if i+2 < len(l.src) && l.src[i+1] == closer[0] && l.src[i+2] == closer[1] {
+				return i + 1
+			}
+		}
+	}
+	return -1
+}
+
+// lexTag tokenizes expression content until the matching closer token.
+func (l *lexer) lexTag(closer tokKind) error {
+	closeStr := "}}"
+	if closer == tokBlockEnd {
+		closeStr = "%}"
+	}
+	depth := 0 // bracket depth: a '}' at depth 0 may be part of '}}'
+	for {
+		l.skipTagWhitespace()
+		if l.pos >= len(l.src) {
+			return l.errf("unclosed %s (missing '%s')", map[tokKind]string{tokVarEnd: "'{{'", tokBlockEnd: "'{%'"}[closer], closeStr)
+		}
+		c := l.src[l.pos]
+
+		// Closing marker (with optional whitespace-control '-')?
+		if depth == 0 {
+			if c == '-' && strings.HasPrefix(l.src[l.pos+1:], closeStr) {
+				l.tokens = append(l.tokens, token{kind: closer, off: l.pos})
+				l.pos += 3
+				l.applyTrimAfter(true, closer == tokBlockEnd)
+				return nil
+			}
+			if strings.HasPrefix(l.src[l.pos:], closeStr) {
+				l.tokens = append(l.tokens, token{kind: closer, off: l.pos})
+				l.pos += 2
+				l.applyTrimAfter(false, closer == tokBlockEnd)
+				return nil
+			}
+		}
+
+		start := l.pos
+		switch {
+		case c == '\'' || c == '"':
+			s, err := l.lexString(c)
+			if err != nil {
+				return err
+			}
+			l.tokens = append(l.tokens, token{kind: tokString, val: s, off: start})
+		case c >= '0' && c <= '9' ||
+			c == '.' && !l.afterPostfixable() && l.pos+1 < len(l.src) && isDigit(l.src[l.pos+1]):
+			l.lexNumber()
+		case isNameStartByte(c) || c >= utf8.RuneSelf:
+			if !l.lexName() {
+				return l.errf("unexpected character in template expression")
+			}
+		default:
+			kind, size := l.lexOperator()
+			if size == 0 {
+				return l.errf("unexpected character %q in template expression", string(rune(c)))
+			}
+			switch kind {
+			case tokLBracket, tokLParen, tokLBrace:
+				depth++
+			case tokRBracket, tokRParen, tokRBrace:
+				depth--
+			}
+			l.tokens = append(l.tokens, token{kind: kind, off: start})
+			l.pos += size
+		}
+	}
+}
+
+func (l *lexer) skipTagWhitespace() {
+	for l.pos < len(l.src) {
+		switch l.src[l.pos] {
+		case ' ', '\t', '\r', '\n':
+			l.pos++
+		default:
+			return
+		}
+	}
+}
+
+// afterPostfixable reports whether the previous token can take a '.attr'
+// postfix, so `l.0` lexes as attribute access rather than the float '.0'.
+func (l *lexer) afterPostfixable() bool {
+	if len(l.tokens) == 0 {
+		return false
+	}
+	switch l.tokens[len(l.tokens)-1].kind {
+	case tokName, tokString, tokRParen, tokRBracket, tokRBrace:
+		return true
+	}
+	return false
+}
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+func isNameStartByte(c byte) bool {
+	return c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+func isNameByte(c byte) bool { return isNameStartByte(c) || isDigit(c) }
+
+// lexName scans an identifier; it reports false if no valid name characters
+// were consumed (e.g. an invalid UTF-8 byte).
+func (l *lexer) lexName() bool {
+	start := l.pos
+	for l.pos < len(l.src) {
+		c := l.src[l.pos]
+		if isNameByte(c) {
+			l.pos++
+			continue
+		}
+		if c >= utf8.RuneSelf {
+			r, size := utf8.DecodeRuneInString(l.src[l.pos:])
+			if r != utf8.RuneError && (unicode.IsLetter(r) || unicode.IsDigit(r)) {
+				l.pos += size
+				continue
+			}
+		}
+		break
+	}
+	if l.pos == start {
+		return false
+	}
+	l.tokens = append(l.tokens, token{kind: tokName, val: l.src[start:l.pos], off: start})
+	return true
+}
+
+func (l *lexer) lexNumber() {
+	start := l.pos
+	isFloat := false
+	for l.pos < len(l.src) {
+		c := l.src[l.pos]
+		if isDigit(c) || c == '_' {
+			l.pos++
+		} else if c == '.' && !isFloat && l.pos+1 < len(l.src) && isDigit(l.src[l.pos+1]) {
+			isFloat = true
+			l.pos++
+		} else if (c == 'e' || c == 'E') && l.pos+1 < len(l.src) &&
+			(isDigit(l.src[l.pos+1]) || (l.src[l.pos+1] == '-' || l.src[l.pos+1] == '+') && l.pos+2 < len(l.src) && isDigit(l.src[l.pos+2])) {
+			isFloat = true
+			l.pos += 2
+		} else {
+			break
+		}
+	}
+	kind := tokInt
+	if isFloat {
+		kind = tokFloat
+	}
+	l.tokens = append(l.tokens, token{kind: kind, val: strings.ReplaceAll(l.src[start:l.pos], "_", ""), off: start})
+}
+
+func (l *lexer) lexString(quote byte) (string, error) {
+	l.pos++ // opening quote
+	var b strings.Builder
+	for l.pos < len(l.src) {
+		c := l.src[l.pos]
+		if c == quote {
+			l.pos++
+			return b.String(), nil
+		}
+		if c == '\\' && l.pos+1 < len(l.src) {
+			// Python-style escapes in both quote styles.
+			switch e := l.src[l.pos+1]; e {
+			case 'n':
+				b.WriteByte('\n')
+			case 't':
+				b.WriteByte('\t')
+			case 'r':
+				b.WriteByte('\r')
+			case '\\':
+				b.WriteByte('\\')
+			case '\'':
+				b.WriteByte('\'')
+			case '"':
+				b.WriteByte('"')
+			default:
+				b.WriteByte('\\')
+				b.WriteByte(e)
+			}
+			l.pos += 2
+			continue
+		}
+		b.WriteByte(c)
+		l.pos++
+	}
+	return "", l.errf("unclosed string literal")
+}
+
+// lexOperator matches the longest operator at the cursor.
+func (l *lexer) lexOperator() (tokKind, int) {
+	src := l.src[l.pos:]
+	two := ""
+	if len(src) >= 2 {
+		two = src[:2]
+	}
+	switch two {
+	case "**":
+		return tokPow, 2
+	case "//":
+		return tokFloorDiv, 2
+	case "==":
+		return tokEq, 2
+	case "!=":
+		return tokNe, 2
+	case "<=":
+		return tokLe, 2
+	case ">=":
+		return tokGe, 2
+	}
+	switch src[0] {
+	case '+':
+		return tokAdd, 1
+	case '-':
+		return tokSub, 1
+	case '*':
+		return tokMul, 1
+	case '/':
+		return tokDiv, 1
+	case '%':
+		return tokMod, 1
+	case '~':
+		return tokTilde, 1
+	case '<':
+		return tokLt, 1
+	case '>':
+		return tokGt, 1
+	case '=':
+		return tokAssign, 1
+	case '|':
+		return tokPipe, 1
+	case '.':
+		return tokDot, 1
+	case ',':
+		return tokComma, 1
+	case ':':
+		return tokColon, 1
+	case '(':
+		return tokLParen, 1
+	case ')':
+		return tokRParen, 1
+	case '[':
+		return tokLBracket, 1
+	case ']':
+		return tokRBracket, 1
+	case '{':
+		return tokLBrace, 1
+	case '}':
+		return tokRBrace, 1
+	}
+	return tokEOF, 0
+}
