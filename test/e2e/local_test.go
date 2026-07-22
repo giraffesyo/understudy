@@ -66,7 +66,7 @@ func TestFailurePropagation(t *testing.T) {
   gather_facts: false
   tasks:
     - name: boom
-      command: /bin/false
+      shell: exit 1
     - name: never reached
       debug:
         msg: unreachable
@@ -91,7 +91,7 @@ func TestIgnoreErrors(t *testing.T) {
 - hosts: all
   gather_facts: false
   tasks:
-    - command: /bin/false
+    - shell: exit 1
       ignore_errors: true
     - debug:
         msg: still here
@@ -373,5 +373,118 @@ func TestCopyTemplateFileStat(t *testing.T) {
 	}
 	if target, err := os.Readlink(filepath.Join(dest, "link.txt")); err != nil || target != filepath.Join(dest, "greeting.txt") {
 		t.Errorf("symlink target = %q, %v", target, err)
+	}
+}
+
+func TestBlockRescueAlways(t *testing.T) {
+	code, out, stats := run(t, `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - block:
+        - name: doomed
+          shell: exit 1
+        - name: unreachable in block
+          debug: {msg: never-block}
+      rescue:
+        - name: recovery
+          debug:
+            msg: "rescued after {{ ansible_failed_task.name }} (rc={{ ansible_failed_result.rc }})"
+      always:
+        - name: cleanup
+          debug: {msg: always-runs}
+    - name: after block
+      debug: {msg: play-continues}
+`, executor.Options{})
+	if code != 0 {
+		t.Fatalf("rescue should keep the play green: exit=%d\n%s", code, out)
+	}
+	for _, want := range []string{"rescued after doomed (rc=1)", "always-runs", "play-continues", "FAILED!"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "never-block") {
+		t.Errorf("block continued after failure:\n%s", out)
+	}
+	st := stats["localhost"]
+	if st.Failed != 0 || st.Rescued != 1 {
+		t.Errorf("stats = %+v, want failed=0 rescued=1", st)
+	}
+}
+
+func TestBlockWithoutRescueFails(t *testing.T) {
+	code, out, stats := run(t, `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - block:
+        - shell: exit 1
+      always:
+        - debug: {msg: always-still-runs}
+    - debug: {msg: not-reached}
+`, executor.Options{})
+	if code != 2 {
+		t.Errorf("exit=%d, want 2", code)
+	}
+	if !strings.Contains(out, "always-still-runs") {
+		t.Errorf("always must run even on unrescued failure:\n%s", out)
+	}
+	if strings.Contains(out, "not-reached") {
+		t.Errorf("play continued after unrescued failure:\n%s", out)
+	}
+	if st := stats["localhost"]; st.Failed != 1 {
+		t.Errorf("stats = %+v", st)
+	}
+}
+
+func TestBlockInheritance(t *testing.T) {
+	code, out, _ := run(t, `
+- hosts: all
+  gather_facts: false
+  vars: {run_it: false}
+  tasks:
+    - block:
+        - name: inherited when skips me
+          debug: {msg: should-skip}
+        - name: also skipped
+          debug: {msg: also-skip}
+      when: run_it
+    - block:
+        - name: sees block var
+          debug: {msg: "{{ blockvar }}"}
+      vars: {blockvar: from-block}
+`, executor.Options{})
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s", code, out)
+	}
+	if strings.Contains(out, "should-skip") && !strings.Contains(out, "skipping") {
+		t.Errorf("block when not inherited:\n%s", out)
+	}
+	if !strings.Contains(out, "from-block") {
+		t.Errorf("block vars not inherited:\n%s", out)
+	}
+}
+
+func TestRescueFailurePropagates(t *testing.T) {
+	code, out, stats := run(t, `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - block:
+        - shell: exit 1
+      rescue:
+        - name: rescue that also fails
+          shell: exit 1
+    - debug: {msg: not-reached}
+`, executor.Options{})
+	if code != 2 {
+		t.Errorf("failing rescue must fail the host: exit=%d\n%s", code, out)
+	}
+	if strings.Contains(out, "not-reached") {
+		t.Errorf("play continued after failing rescue:\n%s", out)
+	}
+	if st := stats["localhost"]; st.Failed != 1 || st.Rescued != 1 {
+		t.Errorf("stats = %+v, want failed=1 rescued=1", st)
 	}
 }
