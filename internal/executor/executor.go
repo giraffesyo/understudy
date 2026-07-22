@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -191,6 +192,15 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 	// Ansible runs pre_tasks, tasks, post_tasks as separate sections with a
 	// handler flush after each.
 	r.resetNotified()
+	if play.GatherFacts == nil || *play.GatherFacts {
+		gather := &playbook.Task{
+			Name:    "Gathering Facts",
+			Module:  "setup",
+			LoopVar: "item",
+			Src:     play.Src,
+		}
+		r.runTaskAcrossHosts(ctx, play, gather, r.activeOf(playHosts), playHosts, false)
+	}
 	for _, section := range [][]*playbook.Task{play.PreTasks, play.Tasks, play.PostTasks} {
 		for _, task := range section {
 			if !r.tagsMatch(task, play) {
@@ -660,6 +670,17 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	}
 	if task.Register != "" {
 		r.Store.SetHostFact(host, task.Register, res.ToVars())
+	}
+	// Gathered facts land in the facts layer, both prefixed at top level
+	// (inject_facts_as_vars) and under the ansible_facts dict. set_fact
+	// writes its own layer via the SetFact hook.
+	if len(res.AnsibleFacts) > 0 && task.Module != "set_fact" {
+		r.Store.SetFacts(host, res.AnsibleFacts)
+		stripped := make(map[string]any, len(res.AnsibleFacts))
+		for k, v := range res.AnsibleFacts {
+			stripped[strings.TrimPrefix(k, "ansible_")] = v
+		}
+		r.Store.SetFacts(host, map[string]any{"ansible_facts": stripped})
 	}
 	if res.Changed && !res.Failed && len(task.Notify) > 0 {
 		r.notifyHandlers(host, task.Notify)
