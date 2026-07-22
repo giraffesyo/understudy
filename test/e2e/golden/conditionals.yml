@@ -1,0 +1,44 @@
+---
+# when/register/loop/failed_when/changed_when decision-making must match.
+- name: conditionals
+  hosts: all
+  gather_facts: false
+  vars:
+    enabled: true
+    disabled: false
+    items: [alpha, beta, gamma]
+  tasks:
+    - name: runs when true
+      debug:
+        msg: on
+      when: enabled
+
+    - name: skips when false
+      debug:
+        msg: off
+      when: disabled
+
+    - name: register a result
+      shell: echo hello
+      register: greeting
+      changed_when: false
+
+    - name: conditional on register
+      debug:
+        msg: "{{ greeting.stdout }}"
+      when: greeting.rc == 0
+
+    - name: loop over items
+      debug:
+        msg: "item {{ item }}"
+      loop: "{{ items }}"
+
+    - name: forced not-changed
+      command: echo static
+      changed_when: false
+
+    - name: forced failure tolerated
+      command: echo trigger
+      failed_when: "'trigger' in cmd_out.stdout"
+      register: cmd_out
+      ignore_errors: true

@@ -1,0 +1,33 @@
+---
+# Change-detection must match Ansible: first run changes, second is clean.
+# Run this twice; the harness compares the SECOND run (steady state).
+- name: idempotence
+  hosts: all
+  gather_facts: false
+  vars:
+    conf_dir: "{{ workdir }}/etc"
+  tasks:
+    - name: make a directory
+      file:
+        path: "{{ conf_dir }}"
+        state: directory
+
+    - name: write a config file
+      copy:
+        content: "port=8080\n"
+        dest: "{{ conf_dir }}/app.conf"
+
+    - name: ensure a line
+      lineinfile:
+        path: "{{ conf_dir }}/app.conf"
+        regexp: "^port="
+        line: "port=9090"
+
+    - name: a command with creates guard
+      command: "touch {{ conf_dir }}/marker"
+      args:
+        creates: "{{ conf_dir }}/marker"
+
+    - name: never-changed debug
+      debug:
+        msg: steady
