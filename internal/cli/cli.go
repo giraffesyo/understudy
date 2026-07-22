@@ -184,6 +184,19 @@ func parseArgs(args []string) (*parsedArgs, error) {
 	return p, nil
 }
 
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
 // parseExtraVars handles -e k=v, -e '{"json": true}', and -e @file.yml.
 func parseExtraVars(s string, into map[string]any) error {
 	switch {
@@ -296,6 +309,8 @@ func playbookCmd(args []string) int {
 			BecomeUser: p.becomeUser,
 			Connection: p.connection,
 			BaseDir:    filepath.Dir(path),
+			Tags:       splitCSV(p.tags),
+			SkipTags:   splitCSV(p.skipTags),
 		})
 		runner.Limit = p.limit
 		code, err := runner.Run(context.Background(), plays)
