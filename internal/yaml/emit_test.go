@@ -41,6 +41,7 @@ func TestMarshalRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("re-parse of %q (from %#v): %v", out, v, err)
 		}
+		back = AsMap(back) // normalize *OMap -> map for value comparison
 		if !reflect.DeepEqual(back, v) {
 			t.Errorf("round trip failed:\n  in:   %#v\n  yaml: %q\n  out:  %#v", v, out, back)
 		}

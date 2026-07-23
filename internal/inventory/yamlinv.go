@@ -22,7 +22,7 @@ func LoadYAML(inv *Inventory, data []byte, filename string) error {
 	if err != nil {
 		return err
 	}
-	root, ok := v.(map[string]any)
+	root, ok := yaml.PlainMap(v)
 	if !ok {
 		return fmt.Errorf("%s: YAML inventory must be a mapping of group names", filename)
 	}
@@ -39,14 +39,14 @@ func loadYAMLGroup(inv *Inventory, name string, body any, filename string) error
 	if body == nil {
 		return nil
 	}
-	m, ok := body.(map[string]any)
+	m, ok := yaml.PlainMap(body)
 	if !ok {
 		return fmt.Errorf("%s: group %q must map to a mapping (hosts/children/vars)", filename, name)
 	}
 	for key, val := range m {
 		switch key {
 		case "hosts":
-			hosts, ok := val.(map[string]any)
+			hosts, ok := yaml.PlainMap(val)
 			if !ok {
 				if val == nil {
 					continue
@@ -60,7 +60,7 @@ func loadYAMLGroup(inv *Inventory, name string, body any, filename string) error
 				}
 				var vars map[string]any
 				if hostVars != nil {
-					vars, ok = hostVars.(map[string]any)
+					vars, ok = yaml.PlainMap(hostVars)
 					if !ok {
 						return fmt.Errorf("%s: vars for host %q must be a mapping", filename, hostName)
 					}
@@ -74,7 +74,7 @@ func loadYAMLGroup(inv *Inventory, name string, body any, filename string) error
 				}
 			}
 		case "children":
-			children, ok := val.(map[string]any)
+			children, ok := yaml.PlainMap(val)
 			if !ok {
 				if val == nil {
 					continue
@@ -88,7 +88,7 @@ func loadYAMLGroup(inv *Inventory, name string, body any, filename string) error
 				linkGroups(group, inv.Groups[childName])
 			}
 		case "vars":
-			vars, ok := val.(map[string]any)
+			vars, ok := yaml.PlainMap(val)
 			if !ok {
 				if val == nil {
 					continue

@@ -13,12 +13,14 @@ func mustUnmarshal(t *testing.T, src string) any {
 	if err != nil {
 		t.Fatalf("Unmarshal(%q): %v", src, err)
 	}
-	return v
+	// Normalize *OMap to plain maps so structure/value assertions work; key
+	// order is verified separately in TestKeyOrderPreserved.
+	return AsMap(v)
 }
 
 func eq(t *testing.T, src string, want any) {
 	t.Helper()
-	got := mustUnmarshal(t, src)
+	got := AsMap(mustUnmarshal(t, src))
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Unmarshal(%q)\n got: %#v\nwant: %#v", src, got, want)
 	}
@@ -371,4 +373,24 @@ func FuzzParse(f *testing.F) {
 			d.Decode() // must not panic; errors are fine
 		}
 	})
+}
+
+func TestKeyOrderPreserved(t *testing.T) {
+	v, err := Unmarshal([]byte("z: 1\na: 2\nm: 3\nb: 4\n"), "order.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	om, ok := v.(*OMap)
+	if !ok {
+		t.Fatalf("expected *OMap, got %T", v)
+	}
+	if got := om.Keys(); !reflect.DeepEqual(got, []string{"z", "a", "m", "b"}) {
+		t.Errorf("key order = %v, want source order [z a m b]", got)
+	}
+	// Merge keys keep the mapping's own key order, appending merged keys.
+	v2, _ := Unmarshal([]byte("base: &b {x: 1, y: 2}\nchild:\n  <<: *b\n  first: 0\n"), "m.yml")
+	child := v2.(*OMap).Get("child").(*OMap)
+	if got := child.Keys(); !reflect.DeepEqual(got, []string{"first", "x", "y"}) {
+		t.Errorf("merge order = %v, want [first x y]", got)
+	}
 }

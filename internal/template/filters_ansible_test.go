@@ -92,7 +92,8 @@ func TestSerializationFilters(t *testing.T) {
 		expr string
 		want any
 	}{
-		{"{'b': 1, 'a': [2]} | to_json", `{"a": [2], "b": 1}`}, // Python json.dumps separators
+		{"{'b': 1, 'a': [2]} | to_json", `{"b": 1, "a": [2]}`},                                       // insertion order, Python separators
+		{"{'b': 1, 'a': [2]} | to_nice_json", "{\n    \"a\": [\n        2\n    ],\n    \"b\": 1\n}"}, // sort_keys=True
 		{`'{"x": 5}' | from_json`, map[string]any{"x": int64(5)}},
 		{`'a: 1' | from_yaml`, map[string]any{"a": int64(1)}},
 		{"'hello' | b64encode", "aGVsbG8="},

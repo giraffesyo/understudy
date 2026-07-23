@@ -28,14 +28,16 @@ func lookupMethod(x any, name string) (boundMethod, bool) {
 	case map[string]any:
 		if m, ok := dictMethods[name]; ok {
 			return func(ec *EvalCtx, args []any, kwargs map[string]any) (any, error) {
-				return m(t, args)
+				return m(sortedKeys(t), t, args)
 			}, true
 		}
 	case Mapping:
 		if m, ok := dictMethods[name]; ok {
+			// Preserve the mapping's own key order (Python dict methods do).
+			keys := t.Keys()
 			mm := mappingToMap(t)
 			return func(ec *EvalCtx, args []any, kwargs map[string]any) (any, error) {
-				return m(mm, args)
+				return m(keys, mm, args)
 			}, true
 		}
 	case []any:
@@ -254,27 +256,27 @@ func strsToAnys(ss []string) []any {
 	return out
 }
 
-var dictMethods = map[string]func(m map[string]any, args []any) (any, error){
-	"keys": func(m map[string]any, _ []any) (any, error) {
-		return strsToAnys(sortedKeys(m)), nil
+// dictMethods receive the receiver's keys in iteration order (sorted for a
+// bare Go map, insertion order for an *OMap) plus the value map.
+var dictMethods = map[string]func(keys []string, m map[string]any, args []any) (any, error){
+	"keys": func(keys []string, _ map[string]any, _ []any) (any, error) {
+		return strsToAnys(keys), nil
 	},
-	"values": func(m map[string]any, _ []any) (any, error) {
-		keys := sortedKeys(m)
+	"values": func(keys []string, m map[string]any, _ []any) (any, error) {
 		out := make([]any, len(keys))
 		for i, k := range keys {
 			out[i] = m[k]
 		}
 		return out, nil
 	},
-	"items": func(m map[string]any, _ []any) (any, error) {
-		keys := sortedKeys(m)
+	"items": func(keys []string, m map[string]any, _ []any) (any, error) {
 		out := make([]any, len(keys))
 		for i, k := range keys {
 			out[i] = []any{k, m[k]}
 		}
 		return out, nil
 	},
-	"get": func(m map[string]any, args []any) (any, error) {
+	"get": func(_ []string, m map[string]any, args []any) (any, error) {
 		key, err := argStr(args, 0, "")
 		if err != nil {
 			return nil, err

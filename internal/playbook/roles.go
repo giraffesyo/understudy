@@ -251,7 +251,7 @@ func loadVarsMain(dir string) (map[string]any, error) {
 	if v == nil {
 		return nil, nil
 	}
-	m, ok := v.(map[string]any)
+	m, ok := yaml.PlainMap(v)
 	if !ok {
 		return nil, fmt.Errorf("%s: must contain a mapping", path)
 	}

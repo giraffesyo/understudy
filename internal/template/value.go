@@ -98,7 +98,21 @@ func toStr(v any) string {
 		b.WriteByte('}')
 		return b.String()
 	case Mapping:
-		return toStr(mappingToMap(t))
+		// Render in the mapping's own key order (Python dict str() preserves
+		// insertion order; *OMap carries YAML source order).
+		var b strings.Builder
+		b.WriteByte('{')
+		for i, k := range t.Keys() {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			mv, _ := t.GetItem(k)
+			b.WriteString(pyRepr(k))
+			b.WriteString(": ")
+			b.WriteString(pyRepr(mv))
+		}
+		b.WriteByte('}')
+		return b.String()
 	}
 	return fmt.Sprintf("%v", v)
 }
@@ -505,6 +519,20 @@ func anyToMap(v any) (map[string]any, bool) {
 		return mappingToMap(t), true
 	}
 	return nil, false
+}
+
+// orderedMap returns v's keys in iteration order plus a value map. An ordered
+// mapping (*OMap or any Mapping) yields its own key order; a plain Go map has
+// no inherent order and yields sorted keys for determinism. Used by filters
+// (dict2items) that must iterate a dict the way Python would.
+func orderedMap(v any) ([]string, map[string]any, bool) {
+	switch t := v.(type) {
+	case Mapping:
+		return t.Keys(), mappingToMap(t), true
+	case map[string]any:
+		return sortedKeys(t), t, true
+	}
+	return nil, nil, false
 }
 
 // contains implements the `in` operator.

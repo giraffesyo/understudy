@@ -92,6 +92,12 @@ func emitValue(b *strings.Builder, v any, depth, indent int, inline bool) error 
 			ordered = append(ordered, KV{K: k, V: t[k]})
 		}
 		return emitValue(b, ordered, depth, indent, inline)
+	case *OMap:
+		om := make(OrderedMap, 0, t.Len())
+		for _, k := range t.Keys() {
+			om = append(om, KV{K: k, V: t.Get(k)})
+		}
+		return emitValue(b, om, depth, indent, inline)
 	case OrderedMap:
 		if len(t) == 0 {
 			b.WriteString("{}")
@@ -156,6 +162,8 @@ func isEmptyContainer(v any) bool {
 		return len(t) == 0
 	case map[string]any:
 		return len(t) == 0
+	case *OMap:
+		return t.Len() == 0
 	}
 	return false
 }
