@@ -51,19 +51,28 @@ func DialSSH(cfg SSHConfig) (*SSH, error) {
 
 	var methods []ssh.AuthMethod
 
-	// 1. ssh-agent.
-	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
-		if conn, err := net.Dial("unix", sock); err == nil {
-			ag := agent.NewClient(conn)
-			methods = append(methods, ssh.PublicKeysCallback(ag.Signers))
+	// When an explicit key file is configured, use ONLY it — like Ansible's
+	// IdentitiesOnly=yes. Offering the agent's and default keys first can
+	// exhaust the server's MaxAuthTries before the intended key is reached.
+	explicitKey := len(cfg.PrivateKeys) > 0
+
+	// 1. ssh-agent (skipped when an explicit key is given).
+	if !explicitKey {
+		if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
+			if conn, err := net.Dial("unix", sock); err == nil {
+				ag := agent.NewClient(conn)
+				methods = append(methods, ssh.PublicKeysCallback(ag.Signers))
+			}
 		}
 	}
 
-	// 2. Key files: explicit ones, then conventional defaults.
+	// 2. Key files: the explicit ones, or the conventional defaults.
 	keyFiles := append([]string{}, cfg.PrivateKeys...)
-	if home, err := os.UserHomeDir(); err == nil {
-		for _, name := range []string{"id_ed25519", "id_rsa", "id_ecdsa"} {
-			keyFiles = append(keyFiles, filepath.Join(home, ".ssh", name))
+	if !explicitKey {
+		if home, err := os.UserHomeDir(); err == nil {
+			for _, name := range []string{"id_ed25519", "id_rsa", "id_ecdsa"} {
+				keyFiles = append(keyFiles, filepath.Join(home, ".ssh", name))
+			}
 		}
 	}
 	var signers []ssh.Signer
