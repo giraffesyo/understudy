@@ -812,8 +812,19 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 	agg := &agentproto.Result{Extra: map[string]any{}}
 	var itemResults []any
 	anyChanged, anyFailed, allSkipped := false, false, true
-	for _, item := range items {
-		itemCtx := base.WithOverlay(map[string]any{task.LoopVar: item})
+	for i, item := range items {
+		// Rebuild the per-item context from the store each iteration so a
+		// set_fact from an earlier item is visible to later ones (Ansible's
+		// accumulate-in-a-loop pattern).
+		itemCtx := r.newHostContext(host, pos, playHosts)
+		if len(task.Vars) > 0 {
+			itemCtx = itemCtx.WithOverlay(task.Vars)
+		}
+		overlay := map[string]any{task.LoopVar: item}
+		if task.IndexVar != "" {
+			overlay[task.IndexVar] = int64(i)
+		}
+		itemCtx = itemCtx.WithOverlay(overlay)
 		res := r.runOnce(ctx, play, task, host, itemCtx, item)
 		r.Callback.HostResult(host, task, res, task.IgnoreErrors && res.Failed, item)
 		m := res.ToVars()

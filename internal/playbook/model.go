@@ -68,6 +68,7 @@ type Task struct {
 	Loop         any            // raw list or template string; nil if absent
 	LoopWith     string         // lookup plugin name for with_<X> loops ("" = plain loop)
 	LoopVar      string         // default "item"
+	IndexVar     string         // loop_control.index_var (0-based); "" = none
 	Async        int            // async timeout seconds (0 = synchronous)
 	Poll         int            // poll interval; -1 = unset, 0 = fire-and-forget
 	CheckMode    *bool          // per-task check_mode override (nil = inherit run)

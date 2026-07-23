@@ -1,0 +1,67 @@
+---
+# {% for %} loop variables (loop.index/index0/first/last), for-else, nested
+# conditionals, and the loop: keyword's index_var — all must match Jinja2.
+- name: loop controls
+  hosts: all
+  gather_facts: false
+  vars:
+    hosts:
+      - {name: web1}
+      - {name: web2}
+      - {name: db1}
+    config:
+      alpha: 1
+      beta: 2
+    empty: []
+  tasks:
+    - name: render a loop-heavy template
+      template:
+        src: loops.j2
+        dest: "{{ workdir }}/loops.out"
+
+    - name: read back
+      set_fact:
+        out: "{{ lookup('file', workdir + '/loops.out') }}"
+
+    - name: for-loop variables match Jinja2
+      assert:
+        that:
+          - "'1. web1 (primary)' in out"
+          - "'2. web2' in out"
+          - "'3. db1 (last)' in out"
+          - "'total=3' in out"
+          - "'0:alpha=1' in out"
+          - "'1:beta=2' in out"
+          - "'odd 1' in out"
+          - "'even 2' in out"
+          - "'odd 3' in out"
+          - "'empty list' in out"
+          - "'should not appear' not in out"
+
+    - name: loop keyword with index_var
+      set_fact:
+        indexed: []
+
+    - name: build an indexed list
+      set_fact:
+        indexed: "{{ indexed + [idx ~ ':' ~ item] }}"
+      loop: [a, b, c]
+      loop_control:
+        index_var: idx
+
+    - name: index_var counted from zero
+      assert:
+        that: indexed == ['0:a', '1:b', '2:c']
+
+    - name: loop registers per-item results
+      shell: "echo {{ item }}"
+      loop: [x, y]
+      register: loop_out
+      changed_when: false
+
+    - name: registered loop has results
+      assert:
+        that:
+          - loop_out.results | length == 2
+          - loop_out.results[0].stdout == 'x'
+          - loop_out.results[1].item == 'y'

@@ -638,6 +638,12 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			if lv, ok := m["loop_var"].(string); ok && lv != "" {
 				task.LoopVar = lv
 			}
+			if iv, ok := m["index_var"].(string); ok && iv != "" {
+				task.IndexVar = iv
+			}
+			if pause, ok := m["pause"]; ok {
+				_ = pause // accepted; understudy does not pace loop items
+			}
 		case "register":
 			task.Register, _ = val.Str()
 		case "ignore_errors":
