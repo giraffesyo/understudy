@@ -417,6 +417,46 @@ func registerAnsibleFilters(e *Engine) {
 		return rng.Int63n(n), nil
 	}
 
+	// password_hash(scheme, salt=None, rounds=None): glibc crypt(3) hash of a
+	// password. Only sha256/sha512 are supported (the schemes real playbooks
+	// use); a salt must be given for a deterministic result.
+	f["password_hash"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		pw, ok := asString(in)
+		if !ok {
+			return nil, fmt.Errorf("password_hash requires a string")
+		}
+		scheme, err := argStr(args, 0, "sha512")
+		if err != nil {
+			return nil, err
+		}
+		use512 := scheme == "sha512"
+		if !use512 && scheme != "sha256" {
+			return nil, fmt.Errorf("password_hash: unsupported scheme %q (sha256/sha512 only)", scheme)
+		}
+		salt, _ := asString(args1(args, 1))
+		if s, ok := kwargs["salt"]; ok {
+			salt, _ = asString(s)
+		}
+		if salt == "" {
+			return nil, fmt.Errorf("password_hash: a salt is required (random salts are not supported)")
+		}
+		// Ansible's password_hash uses passlib, whose default rounds differ by
+		// scheme (sha512=656000, sha256=535000) — not glibc's 5000. Match it so
+		// unqualified hashes agree.
+		rounds := 535000
+		if use512 {
+			rounds = 656000
+		}
+		if v, ok := kwargs["rounds"]; ok {
+			if n, ok := asInt(v); ok {
+				rounds = int(n)
+			}
+		} else if n, ok := asInt(args1(args, 2)); ok {
+			rounds = int(n)
+		}
+		return shaCrypt(pw, salt, rounds, use512), nil
+	}
+
 	// strftime(timestamp): the format string is the input; the epoch seconds
 	// are the argument (defaulting to now is unsupported — a timestamp must be
 	// given so results stay deterministic). Rendered in local time, like
@@ -1032,6 +1072,14 @@ func asFloatArg(args []any, i int) (float64, bool) {
 		return 0, false
 	}
 	return asFloat(args[i])
+}
+
+// args1 returns the i-th positional argument, or nil if absent.
+func args1(args []any, i int) any {
+	if i >= len(args) {
+		return nil
+	}
+	return args[i]
 }
 
 // newRand returns a PRNG seeded from the given value (deterministic) or from
