@@ -223,7 +223,7 @@ func mergeVarsFile(path string, into map[string]any) error {
 	if v == nil {
 		return nil
 	}
-	m, ok := v.(map[string]any)
+	m, ok := yaml.PlainMap(v)
 	if !ok {
 		return fmt.Errorf("%s: vars file must contain a mapping", path)
 	}

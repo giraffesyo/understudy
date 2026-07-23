@@ -225,8 +225,7 @@ than silently diverging. Known boundaries:
   lookups beyond `env`/`file`/`fileglob`/`first_found`/`dict`.
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
   strings; regular expressions use Go's RE2 (lookaround and backreferences
-  in *patterns* are rejected with a clear error rather than mis-matched);
-  dict iteration is key-sorted rather than insertion-ordered.
+  in *patterns* are rejected with a clear error rather than mis-matched).
 
 ## Building & testing
 

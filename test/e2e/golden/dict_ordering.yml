@@ -1,0 +1,85 @@
+---
+# Dict key-order fidelity. Python/Ansible preserve insertion order in the data
+# model (iteration, dict methods, to_json, dict2items, combine) and sort only
+# where a filter explicitly asks (to_nice_json, to_yaml, dictsort) or where the
+# default callback dumps a value (sort_keys=True). Every assertion below encodes
+# the exact order real ansible-playbook produces, so any drift in understudy
+# fails its assert while ansible's passes — a status divergence the golden
+# harness catches.
+- name: dict ordering
+  hosts: all
+  gather_facts: false
+  vars:
+    # Deliberately non-alphabetical so sorted != insertion.
+    d:
+      zebra: 1
+      apple: 2
+      mango: 3
+      banana: 4
+    e:
+      yak: 9
+      ant: 8
+    who: world
+    cfg:
+      greeting: "hi {{ who }}"
+      farewell: "bye {{ who }}"
+  tasks:
+    - name: to_json preserves insertion order
+      assert:
+        that:
+          - 'd | to_json == ''{"zebra": 1, "apple": 2, "mango": 3, "banana": 4}'''
+          - "{'b': 1, 'a': [2]} | to_json == '{\"b\": 1, \"a\": [2]}'"
+
+    - name: to_nice_json sorts keys
+      assert:
+        that:
+          - "d | to_nice_json(indent=2) == '{\n  \"apple\": 2,\n  \"banana\": 4,\n  \"mango\": 3,\n  \"zebra\": 1\n}'"
+
+    - name: dict iteration and methods keep insertion order
+      assert:
+        that:
+          - "(d | list) == ['zebra', 'apple', 'mango', 'banana']"
+          - "(d.keys() | list) == ['zebra', 'apple', 'mango', 'banana']"
+          - "(d.values() | list) == [1, 2, 3, 4]"
+          - "(d.items() | list | map('first') | list) == ['zebra', 'apple', 'mango', 'banana']"
+
+    - name: dict2items keeps insertion order
+      assert:
+        that:
+          - "(d | dict2items | map(attribute='key') | list) == ['zebra', 'apple', 'mango', 'banana']"
+
+    - name: with_dict accumulate keys in order
+      set_fact:
+        wd_keys: "{{ wd_keys | default([]) + [item.key] }}"
+      with_dict: "{{ d }}"
+
+    - name: with_dict keeps insertion order
+      assert:
+        that:
+          - "wd_keys == ['zebra', 'apple', 'mango', 'banana']"
+
+    - name: dictsort sorts by key
+      assert:
+        that:
+          - "(d | dictsort | map('first') | list) == ['apple', 'banana', 'mango', 'zebra']"
+
+    - name: combine keeps base-then-new insertion order
+      assert:
+        that:
+          - "(d | combine(e) | to_json) == '{\"zebra\": 1, \"apple\": 2, \"mango\": 3, \"banana\": 4, \"yak\": 9, \"ant\": 8}'"
+          - "(d | combine({'aaa': 0}) | to_json) == '{\"zebra\": 1, \"apple\": 2, \"mango\": 3, \"banana\": 4, \"aaa\": 0}'"
+
+    - name: string rendering keeps insertion order
+      assert:
+        that:
+          - "('' ~ d) == \"{'zebra': 1, 'apple': 2, 'mango': 3, 'banana': 4}\""
+
+    - name: from_yaml round trip through to_json keeps source order
+      assert:
+        that:
+          - "('z: 1\na: 2\nm: 3' | from_yaml | to_json) == '{\"z\": 1, \"a\": 2, \"m\": 3}'"
+
+    - name: nested templates in a dict var render and keep order
+      assert:
+        that:
+          - "(cfg | to_json) == '{\"greeting\": \"hi world\", \"farewell\": \"bye world\"}'"

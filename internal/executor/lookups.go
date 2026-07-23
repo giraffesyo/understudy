@@ -73,19 +73,28 @@ func (r *Runner) installLookups() {
 			if len(terms) != 1 {
 				return nil, fmt.Errorf("dict lookup requires exactly one mapping")
 			}
-			m, ok := terms[0].(map[string]any)
-			if !ok {
+			var keys []string
+			var get func(string) any
+			switch m := terms[0].(type) {
+			case template.Mapping:
+				// Ordered mapping (e.g. *yaml.OMap from a var): keep insertion
+				// order, which with_dict preserves in real Ansible.
+				keys = m.Keys()
+				get = func(k string) any { v, _ := m.GetItem(k); return v }
+			case map[string]any:
+				keys = make([]string, 0, len(m))
+				for k := range m {
+					keys = append(keys, k)
+				}
+				// A plain Go map has no inherent order; sort for determinism.
+				sortStrings(keys)
+				get = func(k string) any { return m[k] }
+			default:
 				return nil, fmt.Errorf("with_dict requires a dictionary, got %T", terms[0])
 			}
-			keys := make([]string, 0, len(m))
-			for k := range m {
-				keys = append(keys, k)
-			}
-			// Deterministic order matches the engine's sorted-map policy.
-			sortStrings(keys)
-			out := make([]any, 0, len(m))
+			out := make([]any, 0, len(keys))
 			for _, k := range keys {
-				out = append(out, map[string]any{"key": k, "value": m[k]})
+				out = append(out, map[string]any{"key": k, "value": get(k)})
 			}
 			return out, nil
 

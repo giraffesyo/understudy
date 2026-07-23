@@ -203,7 +203,7 @@ func registerAnsibleFilters(e *Engine) {
 
 	// ---- dicts ----
 	f["dict2items"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		m, ok := anyToMap(in)
+		keys, m, ok := orderedMap(in)
 		if !ok {
 			return nil, fmt.Errorf("dict2items requires a dictionary, got %s", typeName(in))
 		}
@@ -215,7 +215,7 @@ func registerAnsibleFilters(e *Engine) {
 			valName, _ = asString(v)
 		}
 		out := make([]any, 0, len(m))
-		for _, k := range sortedKeys(m) {
+		for _, k := range keys {
 			out = append(out, map[string]any{keyName: k, valName: m[k]})
 		}
 		return out, nil
@@ -254,23 +254,24 @@ func registerAnsibleFilters(e *Engine) {
 	}
 
 	f["combine"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		base, ok := anyToMap(in)
-		if !ok {
-			return nil, fmt.Errorf("combine requires dictionaries, got %s", typeName(in))
-		}
 		recursive := truthy(kwargs["recursive"])
 		if lm, ok := kwargs["list_merge"]; ok {
 			if s, _ := asString(lm); s != "" && s != "replace" {
 				return nil, fmt.Errorf("list_merge=%s is not supported (only 'replace')", s)
 			}
 		}
-		out := copyMap(base)
+		// Build the result as an ordered map so merged keys keep base-then-new
+		// insertion order (Ansible's combine preserves it).
+		out, ok := asOMap(in)
+		if !ok {
+			return nil, fmt.Errorf("combine requires dictionaries, got %s", typeName(in))
+		}
 		for _, a := range args {
-			m, ok := anyToMap(a)
+			m, ok := asOMap(a)
 			if !ok {
 				return nil, fmt.Errorf("combine arguments must be dictionaries, got %s", typeName(a))
 			}
-			mergeInto(out, m, recursive)
+			mergeOMap(out, m, recursive)
 		}
 		return out, nil
 	}
@@ -291,7 +292,8 @@ func registerAnsibleFilters(e *Engine) {
 	// to_json/to_nice_json match Python's json.dumps: "', '" item and "': '"
 	// key separators (Go's encoding/json omits the spaces), keys sorted.
 	f["to_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		return pyJSON(jsonSanitize(in), 0), nil
+		// json.dumps default sort_keys=False: preserve dict insertion order.
+		return pyJSON(in, 0, false), nil
 	}
 	f["to_nice_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		indent := 4
@@ -300,7 +302,8 @@ func registerAnsibleFilters(e *Engine) {
 				indent = int(n)
 			}
 		}
-		return pyJSON(jsonSanitize(in), indent), nil
+		// Ansible's to_nice_json passes sort_keys=True.
+		return pyJSON(in, indent, true), nil
 	}
 	f["from_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
@@ -826,27 +829,38 @@ func setOp(keep func(inA, inB bool) bool) FilterFunc {
 	}
 }
 
-func copyMap(m map[string]any) map[string]any {
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = v
+// asOMap returns an ordered-map copy of a dict value: *OMap/Mapping keep their
+// own key order, a plain Go map is ordered by sorted keys. The copy is shallow
+// (values are shared), so callers may mutate the returned map's key set without
+// disturbing the original — used by combine to stay non-destructive.
+func asOMap(v any) (*yaml.OMap, bool) {
+	keys, m, ok := orderedMap(v)
+	if !ok {
+		return nil, false
 	}
-	return out
+	out := yaml.NewOMap()
+	for _, k := range keys {
+		out.Set(k, m[k])
+	}
+	return out, true
 }
 
-func mergeInto(dst, src map[string]any, recursive bool) {
-	for k, v := range src {
+// mergeOMap merges src into dst in place: src keys are visited in order, new
+// keys append, existing keys update. With recursive=true, two dict values at
+// the same key merge instead of the src value replacing the dst value.
+func mergeOMap(dst, src *yaml.OMap, recursive bool) {
+	for _, k := range src.Keys() {
+		v := src.Get(k)
 		if recursive {
-			if dstMap, ok := anyToMap(dst[k]); ok {
-				if srcMap, ok := anyToMap(v); ok {
-					merged := copyMap(dstMap)
-					mergeInto(merged, srcMap, true)
-					dst[k] = merged
+			if dstChild, ok := asOMap(dst.Get(k)); ok {
+				if srcChild, ok := asOMap(v); ok {
+					mergeOMap(dstChild, srcChild, true)
+					dst.Set(k, dstChild)
 					continue
 				}
 			}
 		}
-		dst[k] = v
+		dst.Set(k, v)
 	}
 }
 
@@ -878,14 +892,17 @@ func pathFilter(fn func(string) string) FilterFunc {
 
 // pyJSON serializes a value the way Python's json.dumps does — the format
 // Ansible's to_json/to_nice_json produce. indent==0 yields the compact form
-// with ", " and ": " separators; indent>0 pretty-prints with sorted keys.
-func pyJSON(v any, indent int) string {
+// with ", " and ": " separators; indent>0 pretty-prints. sortKeys mirrors
+// json.dumps' sort_keys: to_json passes false (dict insertion order kept),
+// to_nice_json passes true. Plain Go maps have no inherent order and are
+// always sorted; *OMap/Mapping honor sortKeys.
+func pyJSON(v any, indent int, sortKeys bool) string {
 	var b strings.Builder
-	writePyJSON(&b, v, indent, 0)
+	writePyJSON(&b, v, indent, 0, sortKeys)
 	return b.String()
 }
 
-func writePyJSON(b *strings.Builder, v any, indent, depth int) {
+func writePyJSON(b *strings.Builder, v any, indent, depth int, sortKeys bool) {
 	switch t := v.(type) {
 	case nil:
 		b.WriteString("null")
@@ -897,12 +914,16 @@ func writePyJSON(b *strings.Builder, v any, indent, depth int) {
 		}
 	case string:
 		b.WriteString(jsonQuote(t))
+	case yaml.UnsafeString:
+		b.WriteString(jsonQuote(string(t)))
 	case int64:
 		b.WriteString(strconv.FormatInt(t, 10))
 	case int:
 		b.WriteString(strconv.Itoa(t))
 	case float64:
 		b.WriteString(pyFloatStr(t))
+	case *rangeValue:
+		writePyJSON(b, t.materialize(), indent, depth, sortKeys)
 	case []any:
 		if len(t) == 0 {
 			b.WriteString("[]")
@@ -911,25 +932,39 @@ func writePyJSON(b *strings.Builder, v any, indent, depth int) {
 		b.WriteByte('[')
 		for i, item := range t {
 			pyJSONSep(b, i, indent, depth+1)
-			writePyJSON(b, item, indent, depth+1)
+			writePyJSON(b, item, indent, depth+1, sortKeys)
 		}
 		pyJSONClose(b, ']', indent, depth)
 	case map[string]any:
-		if len(t) == 0 {
-			b.WriteString("{}")
-			return
+		writePyJSONObject(b, sortedKeys(t), func(k string) any { return t[k] }, len(t), indent, depth, sortKeys)
+	case Mapping:
+		keys := t.Keys()
+		if sortKeys {
+			keys = append([]string(nil), keys...)
+			sort.Strings(keys)
 		}
-		b.WriteByte('{')
-		for i, k := range sortedKeys(t) {
-			pyJSONSep(b, i, indent, depth+1)
-			b.WriteString(jsonQuote(k))
-			b.WriteString(": ")
-			writePyJSON(b, t[k], indent, depth+1)
-		}
-		pyJSONClose(b, '}', indent, depth)
+		writePyJSONObject(b, keys, func(k string) any { v, _ := t.GetItem(k); return v }, t.Len(), indent, depth, sortKeys)
 	default:
 		b.WriteString(jsonQuote(toStr(v)))
 	}
+}
+
+// writePyJSONObject renders a JSON object given keys in the desired order and
+// a value accessor. Plain-map keys arrive pre-sorted; Mapping keys arrive in
+// the order chosen by the caller (insertion or sorted).
+func writePyJSONObject(b *strings.Builder, keys []string, get func(string) any, n, indent, depth int, sortKeys bool) {
+	if n == 0 {
+		b.WriteString("{}")
+		return
+	}
+	b.WriteByte('{')
+	for i, k := range keys {
+		pyJSONSep(b, i, indent, depth+1)
+		b.WriteString(jsonQuote(k))
+		b.WriteString(": ")
+		writePyJSON(b, get(k), indent, depth+1, sortKeys)
+	}
+	pyJSONClose(b, '}', indent, depth)
 }
 
 func pyJSONSep(b *strings.Builder, i, indent, depth int) {

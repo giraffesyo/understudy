@@ -77,7 +77,7 @@ func (n *Node) decodeScalar() (any, error) {
 }
 
 func (n *Node) decodeMapping() (any, error) {
-	out := make(map[string]any, len(n.Content)/2)
+	out := NewOMap()
 	var merges []*Node
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		keyNode := n.Content[i].resolveAlias()
@@ -90,14 +90,14 @@ func (n *Node) decodeMapping() (any, error) {
 			merges = append(merges, valNode)
 			continue
 		}
-		if _, dup := out[key]; dup {
+		if out.Has(key) {
 			warnf("%s:%d: duplicate mapping key %q (last value wins)", fileOf(n), keyNode.Line, key)
 		}
 		v, err := valNode.Decode()
 		if err != nil {
 			return nil, err
 		}
-		out[key] = v
+		out.Set(key, v)
 	}
 	// Merge keys: the mapping's own keys win; among multiple merge sources,
 	// earlier sources win.
@@ -109,7 +109,7 @@ func (n *Node) decodeMapping() (any, error) {
 	return out, nil
 }
 
-func applyMerge(m *Node, out map[string]any) error {
+func applyMerge(m *Node, out *OMap) error {
 	r := m.resolveAlias()
 	switch r.Kind {
 	case MappingNode:
@@ -117,9 +117,13 @@ func applyMerge(m *Node, out map[string]any) error {
 		if err != nil {
 			return err
 		}
-		for k, val := range v.(map[string]any) {
-			if _, exists := out[k]; !exists {
-				out[k] = val
+		src, ok := v.(*OMap)
+		if !ok {
+			return decodeErrf(m, "merge key ('<<') value must be a mapping")
+		}
+		for _, k := range src.Keys() {
+			if !out.Has(k) {
+				out.Set(k, src.Get(k))
 			}
 		}
 		return nil

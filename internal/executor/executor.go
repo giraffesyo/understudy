@@ -203,7 +203,7 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 		if err != nil {
 			return err
 		}
-		m, ok := v.(map[string]any)
+		m, ok := yaml.PlainMap(v)
 		if !ok && v != nil {
 			return fmt.Errorf("%s: vars file must contain a mapping", path)
 		}
@@ -1095,6 +1095,13 @@ func (r *Runner) runModule(ctx context.Context, host string, inProcess bool, bec
 		req.BecomeUser = become.User
 	}
 	if inProcess {
+		// Mirror the remote agent's JSON round-trip: module code
+		// (internal/modules, which must not import yaml) only ever sees plain
+		// JSON-shaped values, never *yaml.OMap. Flatten ordered maps in the args
+		// so the in-process path matches what the wire path delivers.
+		if m, ok := yaml.AsMap(req.Args).(map[string]any); ok {
+			req.Args = m
+		}
 		return modules.Run(req, payload), nil
 	}
 	agentClient, err := r.Conns.Agent(ctx, host)

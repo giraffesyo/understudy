@@ -351,7 +351,7 @@ func parseExtraVars(s string, into map[string]any) error {
 		if err != nil {
 			return err
 		}
-		m, ok := v.(map[string]any)
+		m, ok := yaml.PlainMap(v)
 		if !ok {
 			return fmt.Errorf("extra-vars file %s must contain a mapping", s[1:])
 		}

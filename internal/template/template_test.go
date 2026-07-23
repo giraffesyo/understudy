@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
 var testPos = Position{File: "test.yml", Line: 1, Col: 1}
@@ -31,6 +33,10 @@ func evalExpr(t *testing.T, src string, vars map[string]any) any {
 
 func expectEq(t *testing.T, got, want any, ctx string) {
 	t.Helper()
+	// Normalize *OMap -> plain maps: value-equality tests don't assert key
+	// order (that's covered in the yaml package's TestKeyOrderPreserved).
+	got = yaml.AsMap(got)
+	want = yaml.AsMap(want)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("%s\n got: %#v\nwant: %#v", ctx, got, want)
 	}

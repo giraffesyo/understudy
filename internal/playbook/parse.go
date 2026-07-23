@@ -765,11 +765,12 @@ func parseModuleArgs(task *Task, node *yaml.Node, file string) error {
 	if err != nil {
 		return err
 	}
+	if m, ok := yaml.PlainMap(v); ok {
+		task.Args = m
+		return nil
+	}
 	switch t := v.(type) {
 	case nil:
-		return nil
-	case map[string]any:
-		task.Args = t
 		return nil
 	case string:
 		if executorStatement(task.Module) {
@@ -864,7 +865,7 @@ func decodeMap(node *yaml.Node, file, key string) (map[string]any, error) {
 	if v == nil {
 		return nil, nil
 	}
-	m, ok := v.(map[string]any)
+	m, ok := yaml.PlainMap(v)
 	if !ok {
 		return nil, errAt(file, node, "%q must be a mapping", key)
 	}

@@ -64,7 +64,9 @@ func (ec *EvalCtx) eval(e Expr) (any, error) {
 		return out, nil
 
 	case *dictExpr:
-		out := make(map[string]any, len(t.keys))
+		// Build an ordered map so a dict literal keeps its written key order
+		// (Python dicts preserve insertion order; e.g. {'b':1,'a':2}|to_json).
+		out := yaml.NewOMap()
 		for i := range t.keys {
 			k, err := ec.eval(t.keys[i])
 			if err != nil {
@@ -78,7 +80,7 @@ func (ec *EvalCtx) eval(e Expr) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			out[ks] = v
+			out.Set(ks, v)
 		}
 		return out, nil
 

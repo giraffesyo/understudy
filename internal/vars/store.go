@@ -304,6 +304,18 @@ func (c *Context) deepTemplate(v any) (any, error) {
 			out[k] = r
 		}
 		return out, nil
+	case *yaml.OMap:
+		// Recurse into ordered maps (a dict-valued var/arg) so nested template
+		// strings are rendered, and keep the key order the result should carry.
+		out := yaml.NewOMap()
+		for _, k := range t.Keys() {
+			r, err := c.deepTemplate(t.Get(k))
+			if err != nil {
+				return nil, err
+			}
+			out.Set(k, r)
+		}
+		return out, nil
 	default:
 		return v, nil
 	}
