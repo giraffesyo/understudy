@@ -126,8 +126,11 @@ func TestRHELGoldenDifferential(t *testing.T) {
 			invB := writeInv(t.TempDir())
 			// Reset all state the corpus mutates so both tools start from an
 			// identical clean slate (ansible runs first, then understudy).
+			// Covers every mutation across the RHEL corpus files.
 			resetCmd := "rm -rf /etc/understudy-golden; rm -f /tmp/understudy-golden*; " +
-				"userdel -r uduser 2>/dev/null; groupdel udgrp 2>/dev/null; true"
+				"userdel -r uduser 2>/dev/null; groupdel udgrp 2>/dev/null; " +
+				"systemctl disable --now chronyd 2>/dev/null; " +
+				"dnf -y remove zip chrony 2>/dev/null; true"
 			exec.Command("docker", "exec", "understudy-rhelgolden", "sh", "-c", resetCmd).Run()
 			aOut := runTool(t, ansible, []string{"-i", invA, pb}, env, 1)
 

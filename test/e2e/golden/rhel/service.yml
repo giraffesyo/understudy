@@ -1,0 +1,28 @@
+---
+# systemd service management on a real host: install a unit, then
+# start+enable it (changed), re-assert (idempotent -> ok), disable (changed).
+# understudy compares is-active/is-enabled before acting; verdicts must match
+# Ansible. Reset removes chrony and disables the unit.
+- name: service management on RHEL
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: install a service package
+      package: {name: chrony, state: present}
+
+    - name: start and enable the service
+      service: {name: chronyd, state: started, enabled: true}
+
+    - name: re-assert is a no-op
+      service: {name: chronyd, state: started, enabled: true}
+
+    - name: confirm it is running
+      command: systemctl is-active chronyd
+      changed_when: false
+
+    - name: disable and stop
+      service: {name: chronyd, state: stopped, enabled: false}
+
+    - name: disable again is a no-op
+      service: {name: chronyd, state: stopped, enabled: false}
