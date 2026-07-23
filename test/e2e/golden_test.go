@@ -147,10 +147,15 @@ func TestGoldenDifferential(t *testing.T) {
 				"ANSIBLE_LOCALHOST_WARNING=False", "ANSIBLE_INVENTORY_UNPARSED_WARNING=False",
 				"ANSIBLE_DEPRECATION_WARNINGS=False", "ANSIBLE_SYSTEM_WARNINGS=False"}
 
-			// A "check_" prefixed corpus file runs both tools in --check mode.
+			// Filename-prefix directives: "check_" runs --check; "tags_"
+			// runs --tags run_me,also to exercise tag filtering.
 			var extra []string
-			if strings.HasPrefix(filepath.Base(pb), "check_") {
+			base := filepath.Base(pb)
+			if strings.HasPrefix(base, "check_") {
 				extra = []string{"--check"}
+			}
+			if strings.HasPrefix(base, "tags_") {
+				extra = []string{"--tags", "run_me,also"}
 			}
 			aArgs := append([]string{"-i", invA, "-c", "local", "-e", "workdir=" + workA}, extra...)
 			uArgs := append([]string{"playbook", "-i", invB, "-c", "local", "-e", "workdir=" + workB}, extra...)

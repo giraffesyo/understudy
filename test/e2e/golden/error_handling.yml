@@ -1,0 +1,57 @@
+---
+# Failure semantics: the recap failed/rescued/ignored counts and per-task
+# status must match Ansible's executor exactly.
+- name: error handling
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: ignored failure
+      command: /usr/bin/false
+      ignore_errors: true
+
+    - name: failed_when false forces success
+      command: /usr/bin/false
+      failed_when: false
+
+    - name: changed_when false on a real command
+      command: echo hi
+      changed_when: false
+
+    - name: failed_when expression that is false
+      shell: echo ok
+      register: r1
+      failed_when: "'error' in r1.stdout"
+
+    - name: until succeeds within retries
+      shell: echo done
+      register: r2
+      until: r2.stdout == 'done'
+      retries: 2
+      delay: 0
+
+    - name: nested block with inner rescue
+      block:
+        - name: outer ok
+          debug: {msg: outer}
+        - name: inner block
+          block:
+            - name: inner fails
+              command: /usr/bin/false
+          rescue:
+            - name: inner rescue
+              debug: {msg: inner-rescued}
+        - name: after inner block
+          debug: {msg: after-inner}
+
+    - name: assert that passes
+      assert:
+        that:
+          - 1 + 1 == 2
+          - "'a' in ['a', 'b']"
+
+    - name: conditional skip
+      debug: {msg: skipped}
+      when: false
+
+    - name: final marker
+      debug: {msg: reached-end}
