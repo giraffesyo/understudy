@@ -255,9 +255,16 @@ func registerAnsibleFilters(e *Engine) {
 
 	f["combine"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		recursive := truthy(kwargs["recursive"])
+		listMerge := "replace"
 		if lm, ok := kwargs["list_merge"]; ok {
-			if s, _ := asString(lm); s != "" && s != "replace" {
-				return nil, fmt.Errorf("list_merge=%s is not supported (only 'replace')", s)
+			s, _ := asString(lm)
+			switch s {
+			case "", "replace", "keep", "append", "prepend", "append_rp", "prepend_rp":
+				if s != "" {
+					listMerge = s
+				}
+			default:
+				return nil, fmt.Errorf("combine: unsupported list_merge %q", s)
 			}
 		}
 		// Build the result as an ordered map so merged keys keep base-then-new
@@ -271,7 +278,7 @@ func registerAnsibleFilters(e *Engine) {
 			if !ok {
 				return nil, fmt.Errorf("combine arguments must be dictionaries, got %s", typeName(a))
 			}
-			mergeOMap(out, m, recursive)
+			mergeOMap(out, m, recursive, listMerge)
 		}
 		return out, nil
 	}
@@ -350,6 +357,32 @@ func registerAnsibleFilters(e *Engine) {
 			out = append(out, []any{k, m[k]})
 		}
 		return out, nil
+	}
+
+	f["human_readable"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		n, ok := asFloat(in)
+		if !ok {
+			if s, sok := asString(in); sok {
+				parsed, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+				if err != nil {
+					return nil, fmt.Errorf("human_readable requires a number, got %q", s)
+				}
+				n = parsed
+			} else {
+				return nil, fmt.Errorf("human_readable requires a number, got %s", typeName(in))
+			}
+		}
+		return humanReadable(n, truthy(kwargs["isbits"])), nil
+	}
+	f["human_to_bytes"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		if n, ok := asInt(in); ok {
+			return n, nil
+		}
+		s, ok := asString(in)
+		if !ok {
+			s = toStr(in)
+		}
+		return humanToBytes(s)
 	}
 
 	// ---- serialization ----
@@ -920,6 +953,61 @@ func setOp(keep func(inA, inB bool) bool) FilterFunc {
 	}
 }
 
+// humanReadable formats a byte (or bit) count with base-1024 units and two
+// decimals, matching ansible's human_readable filter ("1.00 MB").
+func humanReadable(size float64, isbits bool) string {
+	units := []string{"Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"}
+	if isbits {
+		units = []string{"bit", "Kb", "Mb", "Gb", "Tb", "Pb", "Eb", "Zb", "Yb"}
+	}
+	n, i := size, 0
+	for n >= 1024 && i < len(units)-1 {
+		n /= 1024
+		i++
+	}
+	return fmt.Sprintf("%.2f %s", n, units[i])
+}
+
+// humanToBytes parses a size like "1 MB", "2MB", "1.5 GB", or "1024" into a
+// byte count (base 1024), matching ansible's human_to_bytes filter.
+func humanToBytes(s string) (any, error) {
+	s = strings.TrimSpace(s)
+	i := 0
+	for i < len(s) && (s[i] == '.' || s[i] == '+' || s[i] == '-' || (s[i] >= '0' && s[i] <= '9')) {
+		i++
+	}
+	num, err := strconv.ParseFloat(strings.TrimSpace(s[:i]), 64)
+	if err != nil {
+		return nil, fmt.Errorf("human_to_bytes: cannot parse number in %q", s)
+	}
+	exp := 0
+	if unit := strings.TrimSpace(s[i:]); unit != "" {
+		switch unit[0] {
+		case 'B', 'b':
+			exp = 0
+		case 'K', 'k':
+			exp = 1
+		case 'M', 'm':
+			exp = 2
+		case 'G', 'g':
+			exp = 3
+		case 'T', 't':
+			exp = 4
+		case 'P', 'p':
+			exp = 5
+		case 'E', 'e':
+			exp = 6
+		case 'Z', 'z':
+			exp = 7
+		case 'Y', 'y':
+			exp = 8
+		default:
+			return nil, fmt.Errorf("human_to_bytes: unknown unit %q", unit)
+		}
+	}
+	return int64(num * math.Pow(1024, float64(exp))), nil
+}
+
 // asOMap returns an ordered-map copy of a dict value: *OMap/Mapping keep their
 // own key order, a plain Go map is ordered by sorted keys. The copy is shallow
 // (values are shared), so callers may mutate the returned map's key set without
@@ -939,20 +1027,72 @@ func asOMap(v any) (*yaml.OMap, bool) {
 // mergeOMap merges src into dst in place: src keys are visited in order, new
 // keys append, existing keys update. With recursive=true, two dict values at
 // the same key merge instead of the src value replacing the dst value.
-func mergeOMap(dst, src *yaml.OMap, recursive bool) {
+// listMerge controls what happens when both values at a key are lists:
+// "replace" (default), "keep", "append", "prepend", "append_rp", "prepend_rp".
+func mergeOMap(dst, src *yaml.OMap, recursive bool, listMerge string) {
 	for _, k := range src.Keys() {
 		v := src.Get(k)
+		existing, has := dst.GetItem(k)
 		if recursive {
-			if dstChild, ok := asOMap(dst.Get(k)); ok {
+			if dstChild, ok := asOMap(existing); ok {
 				if srcChild, ok := asOMap(v); ok {
-					mergeOMap(dstChild, srcChild, true)
+					mergeOMap(dstChild, srcChild, true, listMerge)
 					dst.Set(k, dstChild)
+					continue
+				}
+			}
+		}
+		if has && listMerge != "replace" {
+			if da, ok := existing.([]any); ok {
+				if sa, ok := v.([]any); ok {
+					dst.Set(k, mergeLists(da, sa, listMerge))
 					continue
 				}
 			}
 		}
 		dst.Set(k, v)
 	}
+}
+
+// mergeLists combines two lists per combine's list_merge strategy. The *_rp
+// ("remove present") variants drop elements of the base that reappear in the
+// override before joining.
+func mergeLists(base, over []any, strategy string) []any {
+	switch strategy {
+	case "keep":
+		return base
+	case "append":
+		return append(append([]any{}, base...), over...)
+	case "prepend":
+		return append(append([]any{}, over...), base...)
+	case "append_rp":
+		out := []any{}
+		for _, x := range base {
+			if !listContains(over, x) {
+				out = append(out, x)
+			}
+		}
+		return append(out, over...)
+	case "prepend_rp":
+		out := append([]any{}, over...)
+		for _, x := range base {
+			if !listContains(over, x) {
+				out = append(out, x)
+			}
+		}
+		return out
+	default: // replace
+		return over
+	}
+}
+
+func listContains(list []any, v any) bool {
+	for _, x := range list {
+		if equal(x, v) {
+			return true
+		}
+	}
+	return false
 }
 
 func mkToYAML(indent int) FilterFunc {

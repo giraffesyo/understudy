@@ -242,6 +242,230 @@ func registerFilters(e *Engine) {
 	f["type_debug"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		return pyTypeName(in), nil
 	}
+
+	// batch(n, fill_with=None): group a sequence into lists of n, padding the
+	// last group with fill_with when given.
+	f["batch"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		n, err := argInt(args, 0, 1)
+		if err != nil {
+			return nil, err
+		}
+		if n < 1 {
+			n = 1
+		}
+		items, err := iterate(in)
+		if err != nil {
+			return nil, err
+		}
+		fill, hasFill := filterArg(args, 1, kwargs, "fill_with")
+		out := []any{}
+		for i := 0; i < len(items); i += int(n) {
+			end := i + int(n)
+			if end > len(items) {
+				end = len(items)
+			}
+			chunk := append([]any{}, items[i:end]...)
+			if hasFill {
+				for len(chunk) < int(n) {
+					chunk = append(chunk, fill)
+				}
+			}
+			out = append(out, chunk)
+		}
+		return out, nil
+	}
+
+	// slice(n, fill_with=None): divide a sequence into n groups as evenly as
+	// possible; the first (len % n) groups get one extra item (Jinja2 order).
+	f["slice"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		n, err := argInt(args, 0, 1)
+		if err != nil {
+			return nil, err
+		}
+		if n < 1 {
+			n = 1
+		}
+		items, err := iterate(in)
+		if err != nil {
+			return nil, err
+		}
+		fill, hasFill := filterArg(args, 1, kwargs, "fill_with")
+		slices := int(n)
+		perSlice := len(items) / slices
+		withExtra := len(items) % slices
+		out := make([]any, 0, slices)
+		offset := 0
+		for s := 0; s < slices; s++ {
+			start := offset + s*perSlice
+			if s < withExtra {
+				offset++
+			}
+			end := offset + (s+1)*perSlice
+			if start > len(items) {
+				start = len(items)
+			}
+			if end > len(items) {
+				end = len(items)
+			}
+			group := append([]any{}, items[start:end]...)
+			if hasFill && s >= withExtra {
+				group = append(group, fill)
+			}
+			out = append(out, group)
+		}
+		return out, nil
+	}
+
+	// truncate(length=255, killwords=False, end='...', leeway=5): shorten a
+	// string, matching Jinja2's word-aware truncation.
+	f["truncate"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		s, err := requireString(in, "truncate")
+		if err != nil {
+			return nil, err
+		}
+		length, err := argInt(args, 0, 255)
+		if err != nil {
+			return nil, err
+		}
+		killwords := argBoolAt(args, 1, kwargs, "killwords", false)
+		end, err := argStrKw(args, 2, kwargs, "end", "...")
+		if err != nil {
+			return nil, err
+		}
+		leeway, err := argIntKw(args, 3, kwargs, "leeway", 5)
+		if err != nil {
+			return nil, err
+		}
+		runes := []rune(s)
+		if int64(len(runes)) <= length+leeway {
+			return s, nil
+		}
+		cut := int(length) - len([]rune(end))
+		if cut < 0 {
+			cut = 0
+		}
+		head := string(runes[:cut])
+		if !killwords {
+			if idx := strings.LastIndex(head, " "); idx >= 0 {
+				head = head[:idx]
+			}
+		}
+		return head + end, nil
+	}
+
+	// wordwrap(width=79, break_long_words=True, wrapstring="\n"): greedy word
+	// wrap matching textwrap for the common cases.
+	f["wordwrap"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		s, err := requireString(in, "wordwrap")
+		if err != nil {
+			return nil, err
+		}
+		width, err := argInt(args, 0, 79)
+		if err != nil {
+			return nil, err
+		}
+		if width < 1 {
+			width = 1
+		}
+		breakLong := argBoolAt(args, 1, kwargs, "break_long_words", true)
+		wrapstring, err := argStrKw(args, 2, kwargs, "wrapstring", "\n")
+		if err != nil {
+			return nil, err
+		}
+		return wordWrap(s, int(width), breakLong, wrapstring), nil
+	}
+}
+
+// filterArg returns a positional (index i) or keyword filter argument and
+// whether it was supplied.
+func filterArg(args []any, i int, kwargs map[string]any, name string) (any, bool) {
+	if v, ok := kwargs[name]; ok {
+		return v, true
+	}
+	if i < len(args) {
+		return args[i], true
+	}
+	return nil, false
+}
+
+func argBoolAt(args []any, i int, kwargs map[string]any, name string, def bool) bool {
+	if v, ok := filterArg(args, i, kwargs, name); ok {
+		return truthy(v)
+	}
+	return def
+}
+
+func argStrKw(args []any, i int, kwargs map[string]any, name, def string) (string, error) {
+	if v, ok := filterArg(args, i, kwargs, name); ok {
+		s, ok := asString(v)
+		if !ok {
+			return "", fmt.Errorf("%s must be a string", name)
+		}
+		return s, nil
+	}
+	return def, nil
+}
+
+func argIntKw(args []any, i int, kwargs map[string]any, name string, def int64) (int64, error) {
+	if v, ok := filterArg(args, i, kwargs, name); ok {
+		n, ok := asInt(v)
+		if !ok {
+			return 0, fmt.Errorf("%s must be an integer", name)
+		}
+		return n, nil
+	}
+	return def, nil
+}
+
+// wordWrap greedily wraps text to width, breaking on spaces and (when
+// breakLong is set) splitting words longer than width. Existing newlines in
+// the input are preserved as paragraph breaks.
+func wordWrap(s string, width int, breakLong bool, wrapstring string) string {
+	var lines []string
+	for _, para := range strings.Split(s, "\n") {
+		words := strings.Fields(para)
+		if len(words) == 0 {
+			lines = append(lines, "")
+			continue
+		}
+		cur := ""
+		flush := func() {
+			lines = append(lines, cur)
+			cur = ""
+		}
+		for _, w := range words {
+			for breakLong && len([]rune(w)) > width {
+				space := width - len([]rune(cur))
+				if cur != "" {
+					space--
+				}
+				if space <= 0 {
+					flush()
+					continue
+				}
+				wr := []rune(w)
+				if cur != "" {
+					cur += " "
+				}
+				cur += string(wr[:space])
+				w = string(wr[space:])
+				flush()
+			}
+			switch {
+			case cur == "":
+				cur = w
+			case len([]rune(cur))+1+len([]rune(w)) <= width:
+				cur += " " + w
+			default:
+				flush()
+				cur = w
+			}
+		}
+		if cur != "" {
+			flush()
+		}
+	}
+	return strings.Join(lines, wrapstring)
 }
 
 // stripRadixPrefix removes a 0x/0o/0b prefix when it matches the requested

@@ -87,6 +87,44 @@ func TestDictFilters(t *testing.T) {
 	}
 }
 
+func TestChunkingAndSizeFilters(t *testing.T) {
+	cases := []struct {
+		expr string
+		want any
+	}{
+		// batch / slice (Jinja2 builtins)
+		{"[1, 2, 3, 4, 5] | batch(2) | list", []any{
+			[]any{int64(1), int64(2)}, []any{int64(3), int64(4)}, []any{int64(5)}}},
+		{"[1, 2, 3, 4, 5] | batch(2, 0) | list", []any{
+			[]any{int64(1), int64(2)}, []any{int64(3), int64(4)}, []any{int64(5), int64(0)}}},
+		{"['a', 'b', 'c', 'd', 'e'] | slice(2) | list", []any{
+			[]any{"a", "b", "c"}, []any{"d", "e"}}},
+		{"[1, 2, 3, 4] | slice(3) | list", []any{
+			[]any{int64(1), int64(2)}, []any{int64(3)}, []any{int64(4)}}},
+		// truncate / wordwrap
+		{"'the quick brown fox' | truncate(10, true, '...')", "the qui..."},
+		{"'the quick brown fox' | truncate(12, false, '...')", "the..."},
+		{"'short' | truncate(20)", "short"},
+		{"'hello world foo bar baz' | wordwrap(10)", "hello\nworld foo\nbar baz"},
+		// human_readable / human_to_bytes
+		{"500 | human_readable", "500.00 Bytes"},
+		{"1024 | human_readable", "1.00 KB"},
+		{"1048576 | human_readable", "1.00 MB"},
+		{"1024 | human_readable(isbits=true)", "1.00 Kb"},
+		{"'1024' | human_to_bytes", int64(1024)},
+		{"'2MB' | human_to_bytes", int64(2097152)},
+		{"'1.5 GB' | human_to_bytes", int64(1610612736)},
+		// combine list_merge
+		{"{'x': [1, 2]} | combine({'x': [3]}, list_merge='append')", map[string]any{"x": []any{int64(1), int64(2), int64(3)}}},
+		{"{'x': [1, 2]} | combine({'x': [3]}, list_merge='prepend')", map[string]any{"x": []any{int64(3), int64(1), int64(2)}}},
+		{"{'x': [1, 2]} | combine({'x': [3]}, list_merge='keep')", map[string]any{"x": []any{int64(1), int64(2)}}},
+		{"{'x': [1, 2, 3]} | combine({'x': [2, 4]}, list_merge='append_rp')", map[string]any{"x": []any{int64(1), int64(3), int64(2), int64(4)}}},
+	}
+	for _, c := range cases {
+		expectEq(t, evalExpr(t, c.expr, nil), c.want, c.expr)
+	}
+}
+
 func TestGroupBy(t *testing.T) {
 	vars := map[string]any{
 		"servers": []any{
