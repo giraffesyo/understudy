@@ -25,7 +25,7 @@ import (
 )
 
 const rgUser = "tester"
-const rgImage = "understudy-rhel-test" // built by rhel_test.go's Dockerfile
+const rgImage = "understudy-rhelgolden-img" // distinct from rhel_test.go's image
 
 // bootRockyKeyAuth boots the systemd Rocky container with SSH key auth for
 // `tester` (passwordless sudo) and returns the ssh port and private-key path.
@@ -41,8 +41,12 @@ func bootRockyKeyAuth(t *testing.T) (port, keyFile string) {
 	// Build the image if it isn't already present (Dockerfile lives in
 	// rhel_test.go; rebuild here so this test is independent of test order).
 	dir := t.TempDir()
+	// procps-ng provides the `sysctl` binary that ansible.posix.sysctl shells
+	// out to (understudy writes /proc directly, but a fair comparison needs
+	// both tools able to run). A distinct image tag avoids clashing with
+	// rhel_test.go's image.
 	dockerfile := `FROM rockylinux:9
-RUN dnf -y install openssh-server sudo systemd && dnf clean all && ssh-keygen -A && \
+RUN dnf -y install openssh-server sudo systemd procps-ng && dnf clean all && ssh-keygen -A && \
     useradd -m ` + rgUser + ` && \
     echo '` + rgUser + ` ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/` + rgUser + ` && \
     systemctl enable sshd
@@ -129,7 +133,10 @@ func TestRHELGoldenDifferential(t *testing.T) {
 			// Covers every mutation across the RHEL corpus files.
 			resetCmd := "rm -rf /etc/understudy-golden; rm -f /tmp/understudy-golden*; " +
 				"userdel -r uduser 2>/dev/null; groupdel udgrp 2>/dev/null; " +
+				"userdel -r deploy 2>/dev/null; groupdel deploy 2>/dev/null; groupdel wheel2 2>/dev/null; " +
 				"systemctl disable --now chronyd 2>/dev/null; " +
+				"echo 0 > /proc/sys/net/ipv4/ip_forward 2>/dev/null; " +
+				"sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf 2>/dev/null; " +
 				"dnf -y remove zip chrony 2>/dev/null; true"
 			exec.Command("docker", "exec", "understudy-rhelgolden", "sh", "-c", resetCmd).Run()
 			aOut := runTool(t, ansible, []string{"-i", invA, pb}, env, 1)
