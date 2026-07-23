@@ -1,0 +1,29 @@
+---
+# Jinja center + Ansible math (pow/root/log) and strftime. strftime renders in
+# local time; the golden harness runs both engines on the same host so the TZ
+# matches. (random is not golden-tested: its PRNG can't match Ansible's.)
+- name: math and time filters
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: center pads symmetrically
+      assert:
+        that:
+          - "('hi' | center(10)) == '    hi    '"
+          - "('abc' | center(2)) == 'abc'"
+
+    - name: math filters return floats
+      assert:
+        that:
+          - "(2 | pow(10)) == 1024.0"
+          - "(16 | root) == 4.0"
+          - "(8 | log(2)) == 3.0"
+          - "(100 | log(10)) == 2.0"
+
+    # strftime output is TZ-dependent, but both engines run on the same host,
+    # so the rendered banner must match character-for-character — the harness
+    # compares task names, catching any format-translation drift.
+    - name: "strftime {{ '%Y-%m-%d %H:%M:%S %a %b %j' | strftime(1609459200) }}"
+      assert:
+        that:
+          - "('%Y-%m-%d %H:%M:%S' | strftime(1609459200)) | length == 19"

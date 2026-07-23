@@ -125,6 +125,37 @@ func TestChunkingAndSizeFilters(t *testing.T) {
 	}
 }
 
+func TestMathAndStringPadFilters(t *testing.T) {
+	cases := []struct {
+		expr string
+		want any
+	}{
+		{"'hi' | center(10)", "    hi    "},
+		{"'abc' | center(2)", "abc"},
+		{"2 | pow(10)", 1024.0},
+		{"16 | root", 4.0},
+		{"8 | log(2)", 3.0},
+		{"100 | log(10)", 2.0},
+	}
+	for _, c := range cases {
+		expectEq(t, evalExpr(t, c.expr, nil), c.want, c.expr)
+	}
+	// strftime renders in local time; assert structure, not an exact string.
+	if got := evalExpr(t, "'%Y-%m-%d' | strftime(1609459200)", nil).(string); len(got) != 10 {
+		t.Errorf("strftime date length = %d (%q), want 10", len(got), got)
+	}
+	// random with a seed is deterministic within understudy.
+	a := evalExpr(t, "1000 | random(seed='x')", nil)
+	b := evalExpr(t, "1000 | random(seed='x')", nil)
+	expectEq(t, a, b, "seeded random is deterministic")
+	if n, ok := a.(int64); !ok || n < 0 || n >= 1000 {
+		t.Errorf("random(1000) = %v, want int64 in [0,1000)", a)
+	}
+	if elem := evalExpr(t, "['only'] | random", nil); elem != "only" {
+		t.Errorf("random of single-element list = %v, want 'only'", elem)
+	}
+}
+
 func TestGroupBy(t *testing.T) {
 	vars := map[string]any{
 		"servers": []any{
