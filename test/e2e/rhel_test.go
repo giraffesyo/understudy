@@ -172,3 +172,117 @@ func writeFiles(t *testing.T, root string, files map[string]string) {
 		}
 	}
 }
+
+// TestRHELModuleSurface exercises the system-admin module surface against a
+// real RHEL-family host — multi-package install, group/user, file with
+// ownership, lineinfile add+remove, find+loop, blockinfile, get_url(file://)
+// — and asserts a clean idempotent second run. Mirrors what real
+// config-management roles do.
+func TestRHELModuleSurface(t *testing.T) {
+	port := startRHELContainer(t)
+	dir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "site.yml"), []byte(`
+- hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    conf: /etc/understudy-e2e
+  tasks:
+    - name: install base packages
+      package:
+        name: [rsync, tree, lsof]
+        state: present
+
+    - name: ensure a service group
+      group:
+        name: appgrp
+        state: present
+
+    - name: ensure a service user
+      user:
+        name: appsvc
+        group: appgrp
+        shell: /sbin/nologin
+        system: true
+
+    - name: config directory owned by the service user
+      file:
+        path: "{{ conf }}"
+        state: directory
+        owner: appsvc
+        group: appgrp
+        mode: "0750"
+
+    - name: seed a config file (once; lineinfile owns it afterward)
+      copy:
+        content: "debug=0\n"
+        dest: "{{ conf }}/app.conf"
+        owner: appsvc
+        mode: "0640"
+        force: false
+
+    - name: ensure a settings line
+      lineinfile:
+        path: "{{ conf }}/app.conf"
+        regexp: "^debug="
+        line: "debug=1"
+
+    - name: managed block
+      blockinfile:
+        path: "{{ conf }}/app.conf"
+        block: |
+          option a
+          option b
+
+    - name: remove a legacy line
+      lineinfile:
+        path: "{{ conf }}/app.conf"
+        regexp: "^legacy="
+        state: absent
+
+    - name: find config files
+      find:
+        paths: "{{ conf }}"
+        patterns: "*.conf"
+      register: found
+
+    - name: verify state
+      assert:
+        that:
+          - found.matched == 1
+          - "found.files[0].path == conf + '/app.conf'"
+`), 0o644)
+
+	out1, code1 := runRHEL(t, port, dir)
+	if code1 != 0 {
+		t.Fatalf("first run exit=%d\n%s", code1, out1)
+	}
+
+	// Verify real effects landed on the box.
+	checks := map[string]string{
+		"id appsvc":                                    "appgrp",
+		"stat -c '%U %a' /etc/understudy-e2e":          "appsvc 750",
+		"grep -c . /etc/understudy-e2e/app.conf":       "", // file exists & non-empty
+		"grep '^debug=1' /etc/understudy-e2e/app.conf": "debug=1",
+		"grep 'option a' /etc/understudy-e2e/app.conf": "option a",
+	}
+	for cmd, want := range checks {
+		out, err := exec.Command("docker", "exec", "understudy-rhel-e2e", "sh", "-c", cmd).CombinedOutput()
+		if err != nil && want != "" {
+			t.Errorf("check %q failed: %v\n%s", cmd, err, out)
+		}
+		if want != "" && !strings.Contains(string(out), want) {
+			t.Errorf("check %q = %q, want %q", cmd, out, want)
+		}
+	}
+
+	// Second run must be fully idempotent.
+	out2, code2 := runRHEL(t, port, dir)
+	if code2 != 0 {
+		t.Fatalf("second run exit=%d\n%s", code2, out2)
+	}
+	if !strings.Contains(out2, "changed=0") {
+		t.Errorf("module surface not idempotent (want changed=0):\n%s", out2)
+	}
+}

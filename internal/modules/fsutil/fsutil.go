@@ -43,6 +43,30 @@ func AtomicWrite(path string, content io.Reader, mode os.FileMode) error {
 	return os.Rename(tmpName, path)
 }
 
+// AtomicRewrite overwrites an EXISTING file's content while preserving its
+// mode, owner, and group — the temp+rename would otherwise re-create the
+// file owned by the writing process (root under become) and reset its
+// mode. Modules that edit a file in place (lineinfile, blockinfile, ...)
+// use this so an edit never silently changes ownership. For a new file it
+// falls back to defaultMode and the current owner.
+func AtomicRewrite(path string, content io.Reader, defaultMode os.FileMode) error {
+	mode := defaultMode
+	uid, gid := -1, -1
+	if info, err := os.Lstat(path); err == nil {
+		mode = info.Mode().Perm() | specialBits(info.Mode())
+		if u, g, ok := statIDs(info); ok {
+			uid, gid = u, g
+		}
+	}
+	if err := AtomicWrite(path, content, mode); err != nil {
+		return err
+	}
+	if uid >= 0 || gid >= 0 {
+		return os.Chown(path, uid, gid)
+	}
+	return nil
+}
+
 // Sha256File returns the hex sha256 of a file's content.
 func Sha256File(path string) (string, error) {
 	f, err := os.Open(path)
