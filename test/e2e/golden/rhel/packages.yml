@@ -1,0 +1,30 @@
+---
+# Package changed-detection on a real dnf host: install a fresh package
+# (changed), install again (idempotent -> ok), remove (changed), remove
+# again (ok). understudy's query-before-mutate must reach the same verdicts
+# as Ansible's dnf/package module. Reset ensures 'zip' starts absent.
+- name: package idempotence on RHEL
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: install a package
+      package: {name: zip, state: present}
+
+    - name: install again is a no-op
+      package: {name: zip, state: present}
+
+    - name: verify it is installed
+      command: rpm -q zip
+      changed_when: false
+
+    - name: remove the package
+      package: {name: zip, state: absent}
+
+    - name: remove again is a no-op
+      package: {name: zip, state: absent}
+
+    - name: install a list where some are already present
+      package:
+        name: [zip, rpm]   # rpm is always present; zip is not
+        state: present
