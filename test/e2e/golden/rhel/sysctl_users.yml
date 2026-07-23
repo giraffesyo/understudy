@@ -1,0 +1,59 @@
+---
+# Fast module differentials (no package installs): sysctl set/idempotence
+# and user create/modify/remove. Reset clears the sysctl value + entries and
+# the created users/groups.
+- name: sysctl and users on RHEL
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: set a kernel parameter
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        sysctl_set: true
+        state: present
+
+    - name: set it again is a no-op
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        sysctl_set: true
+        state: present
+
+    - name: confirm live value
+      command: cat /proc/sys/net/ipv4/ip_forward
+      register: fwd
+      changed_when: false
+
+    - name: value is applied
+      assert:
+        that: fwd.stdout == "1"
+
+    - name: create a group
+      group: {name: deploy, state: present}
+
+    - name: create a user with attributes
+      user:
+        name: deploy
+        group: deploy
+        shell: /bin/bash
+        create_home: true
+
+    - name: same user is a no-op
+      user:
+        name: deploy
+        group: deploy
+        shell: /bin/bash
+
+    - name: change the shell
+      user: {name: deploy, shell: /sbin/nologin}
+
+    - name: add a supplementary group
+      group: {name: wheel2, state: present}
+
+    - name: append the user to it
+      user: {name: deploy, groups: [wheel2], append: true}
+
+    - name: append again is a no-op
+      user: {name: deploy, groups: [wheel2], append: true}
