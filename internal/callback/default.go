@@ -76,10 +76,10 @@ func (d *Default) PlayStart(play *playbook.Play) {
 	fmt.Fprintln(d.Out, d.banner(fmt.Sprintf("PLAY [%s]", name)))
 }
 
-func (d *Default) TaskStart(task *playbook.Task, handler bool) {
+func (d *Default) TaskStart(task *playbook.Task, displayName string, handler bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	name := task.Name
+	name := displayName
 	if name == "" {
 		name = task.Module
 	}
