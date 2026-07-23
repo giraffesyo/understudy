@@ -1,0 +1,36 @@
+---
+# Run with --tags run_me,also (harness detects the tags_ prefix). Only
+# matching-tag tasks, plus 'always', run; 'never' stays off; untagged tasks
+# are skipped. The recap counts must match Ansible's tag resolution.
+- name: tag filtering
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: tagged run_me
+      debug: {msg: a}
+      tags: [run_me]
+
+    - name: tagged also
+      debug: {msg: b}
+      tags: [also]
+
+    - name: tagged other (excluded)
+      debug: {msg: c}
+      tags: [other]
+
+    - name: untagged (excluded when --tags is given)
+      debug: {msg: d}
+
+    - name: always tag
+      debug: {msg: e}
+      tags: [always]
+
+    - name: never tag
+      debug: {msg: f}
+      tags: [never, run_me]
+
+    - name: block-level tag applies to inner tasks
+      block:
+        - name: inner inherits block tag
+          debug: {msg: g}
+      tags: [run_me]
