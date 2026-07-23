@@ -276,6 +276,70 @@ func registerAnsibleFilters(e *Engine) {
 		return out, nil
 	}
 
+	f["groupby"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		items, err := iterate(in)
+		if err != nil {
+			return nil, err
+		}
+		var attr any
+		switch {
+		case len(args) > 0:
+			attr = args[0]
+		case kwargs["attribute"] != nil:
+			attr = kwargs["attribute"]
+		default:
+			return nil, fmt.Errorf("groupby requires an attribute")
+		}
+		// Jinja default is case-insensitive grouping; case_sensitive=true keeps
+		// distinct-case keys apart.
+		caseSensitive := truthy(kwargs["case_sensitive"])
+		def, hasDef := kwargs["default"]
+		type group struct {
+			key   any
+			items []any
+		}
+		var order []*group
+		index := map[string]*group{}
+		for _, item := range items {
+			k, err := extractAttr(item, attr)
+			if err != nil {
+				return nil, err
+			}
+			if _, und := k.(Undefined); und && hasDef {
+				k = def
+			}
+			ck := groupKey(k, caseSensitive)
+			g, ok := index[ck]
+			if !ok {
+				// The grouper is the first-seen actual value, not folded.
+				g = &group{key: k}
+				index[ck] = g
+				order = append(order, g)
+			}
+			g.items = append(g.items, item)
+		}
+		sort.SliceStable(order, func(i, j int) bool {
+			a, b := order[i].key, order[j].key
+			if !caseSensitive {
+				if as, ok := asString(a); ok {
+					if bs, ok := asString(b); ok {
+						a, b = strings.ToLower(as), strings.ToLower(bs)
+					}
+				}
+			}
+			c, err := compare(a, b)
+			if err != nil {
+				return false
+			}
+			return c < 0
+		})
+		out := make([]any, len(order))
+		for i, g := range order {
+			out[i] = []any{g.key, g.items}
+		}
+		return out, nil
+	}
+
 	f["dictsort"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		m, ok := anyToMap(in)
 		if !ok {
@@ -643,6 +707,19 @@ func flattenList(list []any, levels int64) []any {
 	return out
 }
 
+// groupKey canonicalizes a grouper value into a map key. Case-insensitive
+// grouping folds string keys; the type prefix keeps e.g. int 1 and string "1"
+// in separate groups.
+func groupKey(k any, caseSensitive bool) string {
+	if s, ok := asString(k); ok {
+		if !caseSensitive {
+			s = strings.ToLower(s)
+		}
+		return "s:" + s
+	}
+	return typeName(k) + ":" + toStr(k)
+}
+
 // extractAttr follows a dotted attribute path into maps.
 func extractAttr(item, attr any) (any, error) {
 	path, ok := asString(attr)
@@ -651,14 +728,28 @@ func extractAttr(item, attr any) (any, error) {
 	}
 	cur := item
 	for _, seg := range strings.Split(path, ".") {
-		m, ok := anyToMap(cur)
-		if !ok {
-			return nil, fmt.Errorf("cannot access attribute %q on %s", seg, typeName(cur))
+		if m, ok := anyToMap(cur); ok {
+			cur, ok = m[seg]
+			if !ok {
+				return Undefined{Name: path}, nil
+			}
+			continue
 		}
-		cur, ok = m[seg]
-		if !ok {
-			return Undefined{Name: path}, nil
+		// A numeric segment indexes a list (Jinja's getitem), so
+		// attribute='0' works on a groupby pair or any sequence.
+		if lst, ok := cur.([]any); ok {
+			if idx, err := strconv.Atoi(seg); err == nil {
+				if idx < 0 {
+					idx += len(lst)
+				}
+				if idx < 0 || idx >= len(lst) {
+					return Undefined{Name: path}, nil
+				}
+				cur = lst[idx]
+				continue
+			}
 		}
+		return nil, fmt.Errorf("cannot access attribute %q on %s", seg, typeName(cur))
 	}
 	return cur, nil
 }
