@@ -1,0 +1,30 @@
+---
+# import_role: static role inclusion. The role's tasks splice in directly
+# (banner "mini : task", no separate import banner or recap entry) with the
+# import's vars overlaid; a second import falls back to the role's defaults.
+- name: import_role
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: import mini statically
+      import_role:
+        name: mini
+      vars:
+        greeting: static
+        expected_greeting: static
+
+    - name: imported role fact is visible
+      assert:
+        that:
+          - "mini_ran == 'static'"
+
+    - name: import mini again using its default greeting
+      import_role:
+        name: mini
+      vars:
+        expected_greeting: hi
+
+    - name: default greeting took effect
+      assert:
+        that:
+          - "mini_ran == 'hi'"

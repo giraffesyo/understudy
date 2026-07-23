@@ -1,0 +1,16 @@
+---
+- name: assert role vars resolved
+  assert:
+    that:
+      - "greeting == expected_greeting"
+      - "times == 2"
+
+- name: set a fact from the role
+  set_fact:
+    demo_ran: "{{ greeting }}"
+
+- name: trigger the demo handler
+  debug:
+    msg: "changing to fire handler"
+  changed_when: true
+  notify: demo handler

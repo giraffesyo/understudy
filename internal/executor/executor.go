@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -383,6 +384,12 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 			}
 			continue
 		}
+		if task.Module == "include_role" || task.Module == "import_role" {
+			if err := r.runIncludeRole(ctx, play, task, active, playHosts, depth); err != nil {
+				return err
+			}
+			continue
+		}
 		r.runTaskAcrossHosts(ctx, play, task, active, playHosts, false)
 
 		// max_fail_percentage is evaluated after each task: too many failed
@@ -489,6 +496,114 @@ func (r *Runner) runIncludeTasks(ctx context.Context, play *playbook.Play, task 
 	return nil
 }
 
+// runIncludeRole implements dynamic include_role (and, for now, import_role):
+// it loads the named role, injects its defaults/vars into the store, registers
+// its handlers, and runs its tasks inline with a "role : task" banner. The
+// include's when: gates inclusion per host; its vars: overlay the role tasks.
+func (r *Runner) runIncludeRole(ctx context.Context, play *playbook.Play, task *playbook.Task, active, playHosts []string, depth int) error {
+	if task.Loop != nil {
+		return fmt.Errorf("%s:%d: loops on include_role are not supported yet", task.Src.File, task.Src.Line)
+	}
+	rawName, _ := task.Args["name"].(string)
+	if rawName == "" {
+		return fmt.Errorf("%s:%d: include_role requires a name", task.Src.File, task.Src.Line)
+	}
+	pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
+	// import_role is static: the role's tasks splice in directly (no banner or
+	// recap entry for the import itself), and its when/tags inherit onto each
+	// role task. include_role is dynamic: it has its own banner+recap entry and
+	// its when: gates the whole include per host.
+	static := task.Module == "import_role"
+
+	var included, skipped []string
+	if static {
+		included = active
+	} else {
+		for _, host := range active {
+			hctx := r.newHostContext(host, pos, playHosts)
+			if len(task.Vars) > 0 {
+				hctx = hctx.WithOverlay(task.Vars)
+			}
+			if len(task.When) > 0 {
+				ok, err := hctx.EvalWhen(task.When)
+				if err != nil {
+					r.record(host, task, agentproto.Fail("The conditional check failed: %v", err), nil)
+					continue
+				}
+				if !ok {
+					skipped = append(skipped, host)
+					continue
+				}
+			}
+			included = append(included, host)
+		}
+		// Dynamic include shows its own banner, then the per-host skipping
+		// lines and/or the role tasks.
+		r.Callback.TaskStart(task, r.taskDisplayName(task, active), false)
+		for _, host := range skipped {
+			r.record(host, task, &agentproto.Result{Skipped: true}, nil)
+		}
+	}
+	if len(included) == 0 {
+		return nil
+	}
+
+	// The role name itself may be templated.
+	name := rawName
+	nctx := r.newHostContext(included[0], pos, playHosts)
+	if len(task.Vars) > 0 {
+		nctx = nctx.WithOverlay(task.Vars)
+	}
+	if rendered, err := nctx.TemplateString(rawName); err == nil {
+		name = fmt.Sprintf("%v", rendered)
+	}
+	tasksFrom, _ := task.Args["tasks_from"].(string)
+
+	ri, err := playbook.LoadRoleForInclude(name, r.Opts.BaseDir, nil, tasksFrom)
+	if err != nil {
+		for _, host := range included {
+			r.record(host, task, agentproto.Fail("%s: %v", task.Module, err), nil)
+		}
+		return nil
+	}
+
+	// A dynamic include counts as ok in the recap (one per host that ran it)
+	// but prints no per-host result line; a static import has no such entry.
+	if !static {
+		r.mu.Lock()
+		for _, host := range included {
+			r.stats[host].OK++
+		}
+		r.mu.Unlock()
+	}
+
+	// Role defaults/vars enter the store's role layers (play scope).
+	if len(ri.Defaults) > 0 {
+		r.Store.AddRoleDefaults(ri.Defaults)
+	}
+	if len(ri.Vars) > 0 {
+		r.Store.AddRoleVars(ri.Vars)
+	}
+	// Register role handlers so notify from role tasks resolves.
+	play.Handlers = append(play.Handlers, ri.Handlers...)
+
+	// The include's vars/tags carry into the role's tasks; a static import also
+	// pushes its when onto each task (Ansible applies it per imported task).
+	for _, t := range ri.Tasks {
+		if len(task.Vars) > 0 {
+			merged := make(map[string]any, len(task.Vars)+len(t.Vars))
+			maps.Copy(merged, task.Vars)
+			maps.Copy(merged, t.Vars)
+			t.Vars = merged
+		}
+		t.Tags = append(append([]string{}, task.Tags...), t.Tags...)
+		if static && len(task.When) > 0 {
+			t.When = append(append([]string{}, task.When...), t.When...)
+		}
+	}
+	return r.runTaskList(ctx, play, ri.Tasks, playHosts, included, depth+1)
+}
+
 // resolveIncludePath locates an included task file: absolute, relative to
 // the including file, the role's tasks dir, or the playbook dir.
 func (r *Runner) resolveIncludePath(path string, task *playbook.Task) (string, error) {
@@ -522,12 +637,15 @@ func (r *Runner) resolveIncludePath(path string, task *playbook.Task) (string, e
 // (e.g. an undefined var) falls back to the raw name rather than aborting.
 func (r *Runner) taskDisplayName(task *playbook.Task, active []string) string {
 	name := task.Name
-	if name == "" || len(active) == 0 || !strings.Contains(name, "{{") && !strings.Contains(name, "{%") {
-		return name
+	if name != "" && len(active) > 0 && (strings.Contains(name, "{{") || strings.Contains(name, "{%")) {
+		ctx := r.Store.NewContext(active[0], template.Position{File: task.Src.File, Line: task.Src.Line})
+		if rendered, err := ctx.TemplateString(name); err == nil {
+			name = fmt.Sprintf("%v", rendered)
+		}
 	}
-	ctx := r.Store.NewContext(active[0], template.Position{File: task.Src.File, Line: task.Src.Line})
-	if rendered, err := ctx.TemplateString(name); err == nil {
-		return fmt.Sprintf("%v", rendered)
+	// Role tasks show as "role : task" (Ansible banner form).
+	if task.RoleName != "" && name != "" {
+		return task.RoleName + " : " + name
 	}
 	return name
 }

@@ -774,8 +774,13 @@ func parseModuleArgs(task *Task, node *yaml.Node, file string) error {
 		return nil
 	case string:
 		if executorStatement(task.Module) {
-			// include_tasks: file.yml — normalize to the map form.
-			task.Args = map[string]any{"file": t}
+			// include_role: rolename normalizes to name:, everything else
+			// (include_tasks/include_vars) to file:.
+			key := "file"
+			if task.Module == "include_role" || task.Module == "import_role" {
+				key = "name"
+			}
+			task.Args = map[string]any{key: t}
 			return nil
 		}
 		if freeFormModule(task.Module) {
@@ -821,7 +826,7 @@ func ParseAdhocArgs(task *Task, module, raw string) error {
 // than a module or action (dynamic includes).
 func executorStatement(name string) bool {
 	switch name {
-	case "include_tasks", "include_vars":
+	case "include_tasks", "include_vars", "include_role", "import_role":
 		return true
 	}
 	return false

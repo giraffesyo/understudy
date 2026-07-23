@@ -1,0 +1,4 @@
+---
+- name: demo handler
+  set_fact:
+    demo_handler_ran: true
