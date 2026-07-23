@@ -137,24 +137,17 @@ func blockinfileModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		os.WriteFile(backupPath, original, 0o600)
 		res.Extra = map[string]any{"backup_file": backupPath}
 	}
-	mode := os.FileMode(0o644)
-	if exists {
-		if info, err := os.Stat(path); err == nil {
-			mode = info.Mode().Perm()
-		}
-	}
-	if p.Has("mode") {
-		if m, err := fsutil.ParseMode(p.Any("mode")); err == nil {
-			mode = m
-		} else {
-			return agentproto.Fail("%v", err)
-		}
-	}
-	if err := fsutil.AtomicWrite(path, bytes.NewReader(newContent), mode); err != nil {
+	// Preserve mode + owner across the rewrite (new files get 0644);
+	// explicit mode/owner/group override afterward.
+	if err := fsutil.AtomicRewrite(path, bytes.NewReader(newContent), 0o644); err != nil {
 		return agentproto.Fail("writing %s: %v", path, err)
 	}
-	if p.Str("owner") != "" || p.Str("group") != "" {
-		if _, err := fsutil.ApplyFileAttrs(path, nil, p.Str("owner"), p.Str("group"), true); err != nil {
+	if p.Has("mode") || p.Str("owner") != "" || p.Str("group") != "" {
+		var mode any
+		if p.Has("mode") {
+			mode = p.Any("mode")
+		}
+		if _, err := fsutil.ApplyFileAttrs(path, mode, p.Str("owner"), p.Str("group"), true); err != nil {
 			return agentproto.Fail("%v", err)
 		}
 	}
