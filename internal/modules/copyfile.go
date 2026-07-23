@@ -105,22 +105,13 @@ func copyModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 				res.Extra["backup_file"] = backupPath
 			}
 		}
-		mode := os.FileMode(0o644)
-		if p.Has("mode") {
-			m, err := fsutil.ParseMode(p.Any("mode"))
-			if err != nil {
-				return agentproto.Fail("%v", err)
-			}
-			mode = m
-		} else if destExists {
-			if info, err := os.Stat(dest); err == nil {
-				mode = info.Mode().Perm()
-			}
-		}
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return agentproto.Fail("creating parent directory: %v", err)
 		}
-		if err := fsutil.AtomicWrite(dest, bytes.NewReader(content), mode); err != nil {
+		// AtomicRewrite preserves an existing file's mode+owner across the
+		// overwrite (Ansible's atomic_move semantics); explicit mode/owner/
+		// group are applied afterward. New files default to 0644.
+		if err := fsutil.AtomicRewrite(dest, bytes.NewReader(content), 0o644); err != nil {
 			return agentproto.Fail("writing %s: %v", dest, err)
 		}
 		res.Changed = true
