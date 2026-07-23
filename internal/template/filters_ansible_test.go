@@ -156,6 +156,25 @@ func TestMathAndStringPadFilters(t *testing.T) {
 	}
 }
 
+func TestPasswordHash(t *testing.T) {
+	// Oracle values from real ansible-playbook (passlib), with pinned salt and
+	// rounds so the result is deterministic.
+	cases := []struct {
+		expr string
+		want any
+	}{
+		{"'mypassword' | password_hash('sha512', 'abcdefghijklmnop', rounds=5000)",
+			"$6$abcdefghijklmnop$jxZ5UKgPKWlCx21QPZbkQOj73EKOWhff2HX66XmEGXBN7/VGv5K5AH0mgtIbyEHEwJOO3UibHo1CrTlQvXbbS/"},
+		{"'mypassword' | password_hash('sha256', 'abcdefghijklmnop', rounds=5000)",
+			"$5$abcdefghijklmnop$oZAI4Z3YFTVIrKPkvxU2vFozcTT4/RqEMnF1aR4uWP3"},
+		{"'secret' | password_hash('sha512', 'saltsalt', rounds=10000)",
+			"$6$rounds=10000$saltsalt$WowrPBpEDVlCoruBosYlrZycTCx3//TyDHYqEhX9DUHHt0XTztUqzQDDUuvUGRA8aUe9p55hcAxeGcu58sm3u."},
+	}
+	for _, c := range cases {
+		expectEq(t, evalExpr(t, c.expr, nil), c.want, c.expr)
+	}
+}
+
 func TestGroupBy(t *testing.T) {
 	vars := map[string]any{
 		"servers": []any{
