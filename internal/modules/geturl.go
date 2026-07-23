@@ -88,15 +88,9 @@ func getURLModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		}
 	}
 
-	mode := os.FileMode(0o644)
-	if p.Has("mode") {
-		if m, err := fsutil.ParseMode(p.Any("mode")); err == nil {
-			mode = m
-		} else {
-			return agentproto.Fail("%v", err)
-		}
-	}
-	if err := fsutil.AtomicWrite(dest, bytes.NewReader(body), mode); err != nil {
+	// Preserve an existing file's mode+owner across the download; explicit
+	// mode/owner/group applied by applyGetURLAttrs below. New files: 0644.
+	if err := fsutil.AtomicRewrite(dest, bytes.NewReader(body), 0o644); err != nil {
 		return agentproto.Fail("writing %s: %v", dest, err)
 	}
 	res := &agentproto.Result{Changed: true, Extra: map[string]any{
