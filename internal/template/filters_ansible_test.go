@@ -87,6 +87,39 @@ func TestDictFilters(t *testing.T) {
 	}
 }
 
+func TestGroupBy(t *testing.T) {
+	vars := map[string]any{
+		"servers": []any{
+			map[string]any{"name": "web1", "role": "web"},
+			map[string]any{"name": "db1", "role": "db"},
+			map[string]any{"name": "web2", "role": "web"},
+		},
+		"mixed": []any{
+			map[string]any{"k": "Web"},
+			map[string]any{"k": "web"},
+		},
+	}
+	cases := []struct {
+		expr string
+		want any
+	}{
+		// Groups sorted by key; grouper via numeric attribute on the pair.
+		{"servers | groupby('role') | map(attribute='0') | list", []any{"db", "web"}},
+		// Grouped rows keep source order.
+		{"servers | groupby('role') | selectattr('0', 'eq', 'web') | map(attribute='1') | first | map(attribute='name') | list",
+			[]any{"web1", "web2"}},
+		// Case-insensitive by default: Web/web fold, first-seen grouper kept.
+		{"mixed | groupby('k') | map(attribute='0') | list", []any{"Web"}},
+		// case_sensitive=true keeps distinct-case keys apart, ASCII-sorted.
+		{"mixed | groupby('k', case_sensitive=true) | map(attribute='0') | list", []any{"Web", "web"}},
+		// extractAttr indexes lists: attribute='1' is the group's row list length.
+		{"servers | groupby('role') | map(attribute='1') | map('length') | list", []any{int64(1), int64(2)}},
+	}
+	for _, c := range cases {
+		expectEq(t, evalExpr(t, c.expr, vars), c.want, c.expr)
+	}
+}
+
 func TestSerializationFilters(t *testing.T) {
 	cases := []struct {
 		expr string
