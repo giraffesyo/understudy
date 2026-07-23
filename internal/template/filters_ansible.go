@@ -10,12 +10,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash"
+	"hash/fnv"
 	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -357,6 +360,77 @@ func registerAnsibleFilters(e *Engine) {
 			out = append(out, []any{k, m[k]})
 		}
 		return out, nil
+	}
+
+	// Math filters (all return floats, matching ansible).
+	f["pow"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		base, ok := asFloat(in)
+		exp, ok2 := asFloatArg(args, 0)
+		if !ok || !ok2 {
+			return nil, fmt.Errorf("pow requires numbers")
+		}
+		return math.Pow(base, exp), nil
+	}
+	f["root"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		x, ok := asFloat(in)
+		if !ok {
+			return nil, fmt.Errorf("root requires a number")
+		}
+		n := 2.0
+		if v, ok := asFloatArg(args, 0); ok {
+			n = v
+		}
+		if n == 2 {
+			return math.Sqrt(x), nil // exact for the common square-root case
+		}
+		return math.Pow(x, 1/n), nil
+	}
+	f["log"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		x, ok := asFloat(in)
+		if !ok {
+			return nil, fmt.Errorf("log requires a number")
+		}
+		if base, ok := asFloatArg(args, 0); ok {
+			return math.Log(x) / math.Log(base), nil
+		}
+		return math.Log(x), nil
+	}
+
+	// random: choose a random element of a list, or a random int in [0, N).
+	// A seed makes it deterministic within understudy (the sequence does not
+	// match Ansible's Python PRNG, so seeded values are not cross-checked).
+	f["random"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		rng := newRand(kwargs["seed"])
+		if items, ok := in.([]any); ok {
+			if len(items) == 0 {
+				return nil, nil
+			}
+			return items[rng.Intn(len(items))], nil
+		}
+		n, ok := asInt(in)
+		if !ok {
+			return nil, fmt.Errorf("random requires a list or an integer, got %s", typeName(in))
+		}
+		if n <= 0 {
+			return int64(0), nil
+		}
+		return rng.Int63n(n), nil
+	}
+
+	// strftime(timestamp): the format string is the input; the epoch seconds
+	// are the argument (defaulting to now is unsupported — a timestamp must be
+	// given so results stay deterministic). Rendered in local time, like
+	// ansible.
+	f["strftime"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		format, ok := asString(in)
+		if !ok {
+			return nil, fmt.Errorf("strftime requires a format string")
+		}
+		ts, ok := asFloatArg(args, 0)
+		if !ok {
+			return nil, fmt.Errorf("strftime requires an epoch-seconds argument")
+		}
+		return strftime(format, int64(ts)), nil
 	}
 
 	f["human_readable"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
@@ -951,6 +1025,82 @@ func setOp(keep func(inA, inB bool) bool) FilterFunc {
 		}
 		return out, nil
 	}
+}
+
+func asFloatArg(args []any, i int) (float64, bool) {
+	if i >= len(args) {
+		return 0, false
+	}
+	return asFloat(args[i])
+}
+
+// newRand returns a PRNG seeded from the given value (deterministic) or from
+// the clock when seed is nil.
+func newRand(seed any) *rand.Rand {
+	if seed == nil {
+		return rand.New(rand.NewSource(time.Now().UnixNano()))
+	}
+	h := fnv.New64a()
+	h.Write([]byte(toStr(seed)))
+	return rand.New(rand.NewSource(int64(h.Sum64())))
+}
+
+// strftime formats epoch seconds using Python strftime codes, in local time
+// (matching ansible's strftime filter). Unknown codes pass through literally.
+func strftime(format string, ts int64) string {
+	t := time.Unix(ts, 0)
+	var b strings.Builder
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' || i+1 >= len(format) {
+			b.WriteByte(format[i])
+			continue
+		}
+		i++
+		switch format[i] {
+		case 'Y':
+			b.WriteString(t.Format("2006"))
+		case 'y':
+			b.WriteString(t.Format("06"))
+		case 'm':
+			b.WriteString(t.Format("01"))
+		case 'd':
+			b.WriteString(t.Format("02"))
+		case 'e':
+			fmt.Fprintf(&b, "%2d", t.Day())
+		case 'H':
+			b.WriteString(t.Format("15"))
+		case 'I':
+			b.WriteString(t.Format("03"))
+		case 'M':
+			b.WriteString(t.Format("04"))
+		case 'S':
+			b.WriteString(t.Format("05"))
+		case 'p':
+			b.WriteString(t.Format("PM"))
+		case 'A':
+			b.WriteString(t.Format("Monday"))
+		case 'a':
+			b.WriteString(t.Format("Mon"))
+		case 'B':
+			b.WriteString(t.Format("January"))
+		case 'b', 'h':
+			b.WriteString(t.Format("Jan"))
+		case 'j':
+			fmt.Fprintf(&b, "%03d", t.YearDay())
+		case 'w':
+			b.WriteString(strconv.Itoa(int(t.Weekday())))
+		case 'Z':
+			b.WriteString(t.Format("MST"))
+		case 'z':
+			b.WriteString(t.Format("-0700"))
+		case '%':
+			b.WriteByte('%')
+		default:
+			b.WriteByte('%')
+			b.WriteByte(format[i])
+		}
+	}
+	return b.String()
 }
 
 // humanReadable formats a byte (or bit) count with base-1024 units and two

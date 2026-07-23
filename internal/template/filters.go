@@ -243,6 +243,25 @@ func registerFilters(e *Engine) {
 		return pyTypeName(in), nil
 	}
 
+	// center(width=80): pad a string with spaces so it is centered in width.
+	f["center"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		s, err := requireString(in, "center")
+		if err != nil {
+			return nil, err
+		}
+		width, err := argInt(args, 0, 80)
+		if err != nil {
+			return nil, err
+		}
+		n := int64(len([]rune(s)))
+		if n >= width {
+			return s, nil
+		}
+		total := int(width - n)
+		left := total / 2
+		return strings.Repeat(" ", left) + s + strings.Repeat(" ", total-left), nil
+	}
+
 	// batch(n, fill_with=None): group a sequence into lists of n, padding the
 	// last group with fill_with when given.
 	f["batch"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
