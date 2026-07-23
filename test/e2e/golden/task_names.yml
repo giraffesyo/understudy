@@ -1,0 +1,31 @@
+---
+# Task names are Jinja templates rendered once at task-start (banner text).
+# The golden harness compares per-task names, so these banners must match
+# real ansible-playbook character for character.
+- name: task name templating
+  hosts: all
+  gather_facts: false
+  vars:
+    svc: nginx
+    version: "1.2.3"
+    count: 3
+  tasks:
+    - name: "Configure {{ svc }} service"
+      debug:
+        msg: ok
+
+    - name: "Deploy {{ svc }} version {{ version }}"
+      debug:
+        msg: ok
+
+    - name: "Scaling to {{ count + 1 }} replicas"
+      debug:
+        msg: ok
+
+    - name: "Upper {{ svc | upper }}"
+      debug:
+        msg: ok
+
+    - name: a plain name with no template
+      debug:
+        msg: ok

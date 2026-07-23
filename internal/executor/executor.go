@@ -30,7 +30,7 @@ import (
 // Callback receives execution events for display.
 type Callback interface {
 	PlayStart(play *playbook.Play)
-	TaskStart(task *playbook.Task, handler bool)
+	TaskStart(task *playbook.Task, displayName string, handler bool)
 	HostResult(host string, task *playbook.Task, res *agentproto.Result, ignored bool, item any)
 	HostUnreachable(host string, task *playbook.Task, msg string)
 	Recap(stats map[string]*HostStats, order []string)
@@ -516,10 +516,26 @@ func (r *Runner) resolveIncludePath(path string, task *playbook.Task) (string, e
 	return "", fmt.Errorf("include_tasks: could not find %q (searched near %s)", path, task.Src.File)
 }
 
+// taskDisplayName renders the task name for the banner. Ansible templates
+// task names once at task-start; it uses the first host's vars (loop item is
+// not bound yet). Non-templated names take the cheap path; a templating error
+// (e.g. an undefined var) falls back to the raw name rather than aborting.
+func (r *Runner) taskDisplayName(task *playbook.Task, active []string) string {
+	name := task.Name
+	if name == "" || len(active) == 0 || !strings.Contains(name, "{{") && !strings.Contains(name, "{%") {
+		return name
+	}
+	ctx := r.Store.NewContext(active[0], template.Position{File: task.Src.File, Line: task.Src.Line})
+	if rendered, err := ctx.TemplateString(name); err == nil {
+		return fmt.Sprintf("%v", rendered)
+	}
+	return name
+}
+
 // runTaskAcrossHosts executes one task on all active hosts with forks
 // parallelism (one errgroup per task = the linear-strategy barrier).
 func (r *Runner) runTaskAcrossHosts(ctx context.Context, play *playbook.Play, task *playbook.Task, active, playHosts []string, handler bool) {
-	r.Callback.TaskStart(task, handler)
+	r.Callback.TaskStart(task, r.taskDisplayName(task, active), handler)
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(r.Opts.Forks)
 	for _, host := range active {
