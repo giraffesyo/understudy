@@ -1,0 +1,8 @@
+---
+- name: assert greeting
+  assert:
+    that:
+      - "greeting == expected_greeting"
+- name: record greeting
+  set_fact:
+    mini_ran: "{{ greeting }}"

@@ -137,7 +137,7 @@ func loadRole(ref *RoleRef, baseDir string, rolesPath []string) (*roleContent, e
 		if err != nil {
 			return nil, err
 		}
-		for _, t := range flattenWithSrcDir(tasks, dir) {
+		for _, t := range flattenRole(tasks, dir, ref.Name) {
 			role.tasks = append(role.tasks, t)
 		}
 	}
@@ -149,7 +149,7 @@ func loadRole(ref *RoleRef, baseDir string, rolesPath []string) (*roleContent, e
 		if err != nil {
 			return nil, err
 		}
-		role.handlers = flattenWithSrcDir(handlers, dir)
+		role.handlers = flattenRole(handlers, dir, ref.Name)
 	}
 
 	var err error
@@ -195,9 +195,14 @@ func loadRole(ref *RoleRef, baseDir string, rolesPath []string) (*roleContent, e
 	return role, nil
 }
 
-func flattenWithSrcDir(tasks []*Task, dir string) []*Task {
+// flattenRole stamps the role's source dir and name onto every task, so src
+// resolution and "role : task" banners work uniformly.
+func flattenRole(tasks []*Task, dir, roleName string) []*Task {
 	for _, t := range tasks {
 		t.SrcDir = dir
+		if roleName != "" && t.RoleName == "" {
+			t.RoleName = roleName
+		}
 	}
 	return tasks
 }
@@ -218,9 +223,64 @@ func findRoleDir(name, baseDir string, rolesPath []string) string {
 	return ""
 }
 
+// RoleInclude is a role loaded at runtime for include_role/import_role.
+type RoleInclude struct {
+	Name     string
+	Dir      string
+	Tasks    []*Task
+	Handlers []*Task
+	Defaults map[string]any
+	Vars     map[string]any
+}
+
+// LoadRoleForInclude loads a role for include_role: its task file (tasksFrom,
+// default "main"), handlers, defaults, and vars. It does not process meta
+// dependencies — include_role pulls only the named role's content.
+func LoadRoleForInclude(name, baseDir string, rolesPath []string, tasksFrom string) (*RoleInclude, error) {
+	dir := findRoleDir(name, baseDir, rolesPath)
+	if dir == "" {
+		return nil, fmt.Errorf("the role %q was not found in %s/roles or the configured roles_path", name, baseDir)
+	}
+	if tasksFrom == "" {
+		tasksFrom = "main"
+	}
+	ri := &RoleInclude{Name: name, Dir: dir}
+	if node, path, err := loadYAMLBase(filepath.Join(dir, "tasks"), tasksFrom); err != nil {
+		return nil, err
+	} else if node != nil {
+		tasks, err := parseTaskListIn(node, path, false, &blockCounter{}, nil)
+		if err != nil {
+			return nil, err
+		}
+		ri.Tasks = flattenRole(tasks, dir, name)
+	}
+	if node, path, err := loadYAMLMain(filepath.Join(dir, "handlers")); err != nil {
+		return nil, err
+	} else if node != nil {
+		handlers, err := parseTaskListIn(node, path, true, &blockCounter{}, nil)
+		if err != nil {
+			return nil, err
+		}
+		ri.Handlers = flattenRole(handlers, dir, name)
+	}
+	var err error
+	if ri.Defaults, err = loadVarsMain(filepath.Join(dir, "defaults")); err != nil {
+		return nil, err
+	}
+	if ri.Vars, err = loadVarsMain(filepath.Join(dir, "vars")); err != nil {
+		return nil, err
+	}
+	return ri, nil
+}
+
 // loadYAMLMain loads <dir>/main.yml (or .yaml) as a parse node.
 func loadYAMLMain(dir string) (*yaml.Node, string, error) {
-	for _, name := range []string{"main.yml", "main.yaml", "main"} {
+	return loadYAMLBase(dir, "main")
+}
+
+// loadYAMLBase loads <dir>/<base>.yml (or .yaml, or bare) as a parse node.
+func loadYAMLBase(dir, base string) (*yaml.Node, string, error) {
+	for _, name := range []string{base + ".yml", base + ".yaml", base} {
 		path := filepath.Join(dir, name)
 		data, err := os.ReadFile(path)
 		if err != nil {

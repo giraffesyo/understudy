@@ -1,0 +1,44 @@
+---
+# include_role: dynamic role inclusion as a task — defaults, var override,
+# when-gating, fact visibility to the rest of the play, and handler notify.
+- name: include_role
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: include demo with an overridden greeting
+      include_role:
+        name: demo
+      vars:
+        greeting: hello
+        expected_greeting: hello
+
+    - name: role fact is visible after include_role
+      assert:
+        that:
+          - "demo_ran == 'hello'"
+
+    - name: flush handlers so the notified role handler runs
+      meta: flush_handlers
+
+    - name: the role handler ran
+      assert:
+        that:
+          - "demo_handler_ran is defined and demo_handler_ran"
+
+    - name: include demo again using its defaults
+      include_role:
+        name: demo
+      vars:
+        expected_greeting: hi
+
+    - name: default greeting took effect
+      assert:
+        that:
+          - "demo_ran == 'hi'"
+
+    - name: skipped include_role when false runs nothing
+      include_role:
+        name: demo
+      vars:
+        expected_greeting: never
+      when: false

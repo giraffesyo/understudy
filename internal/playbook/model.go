@@ -88,6 +88,7 @@ type Task struct {
 	Delegate     string
 	Blocks       []BlockRef // enclosing blocks, outermost first
 	SrcDir       string     // role root for src resolution ("" = playbook dir)
+	RoleName     string     // owning role (for "role : task" banners); "" = play task
 	Src          Pos
 }
 
