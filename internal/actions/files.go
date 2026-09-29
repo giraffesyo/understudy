@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/fsutil"
@@ -22,6 +24,14 @@ func init() {
 func runCopy(ctx context.Context, actx *Context, args map[string]any, _ string) *agentproto.Result {
 	var content []byte
 	original := ""
+
+	if err := checkFileArgs("copy", args); err != nil {
+		return agentproto.Fail("%v", err)
+	}
+	if rs, _ := args["remote_src"].(bool); rs || args["remote_src"] == "yes" || args["remote_src"] == "true" {
+		// The source lives on the target: the module reads it there.
+		return forwardToCopy(ctx, actx, args, nil, "")
+	}
 
 	if c, ok := args["content"]; ok {
 		switch t := c.(type) {
@@ -40,7 +50,7 @@ func runCopy(ctx context.Context, actx *Context, args map[string]any, _ string) 
 			return agentproto.Fail("copy: %v", err)
 		}
 		if info.IsDir() {
-			return agentproto.Fail("copy: directory sources are not supported yet (src=%s)", src)
+			return copyLocalTree(ctx, actx, args, src, resolved)
 		}
 		content, err = os.ReadFile(resolved)
 		if err != nil {
@@ -57,6 +67,9 @@ func runCopy(ctx context.Context, actx *Context, args map[string]any, _ string) 
 // runTemplate renders the local template with host vars, then places the
 // rendered bytes via the copy module (identical change semantics).
 func runTemplate(ctx context.Context, actx *Context, args map[string]any, _ string) *agentproto.Result {
+	if err := checkFileArgs("template", args); err != nil {
+		return agentproto.Fail("%v", err)
+	}
 	src, ok := args["src"].(string)
 	if !ok || src == "" {
 		return agentproto.Fail("template requires 'src'")
@@ -88,18 +101,17 @@ func runTemplate(ctx context.Context, actx *Context, args map[string]any, _ stri
 func forwardToCopy(ctx context.Context, actx *Context, args map[string]any, content []byte, original string) *agentproto.Result {
 	fwd := make(map[string]any, len(args)+2)
 	for k, v := range args {
-		switch k {
-		case "src", "content", "backup", "dest", "mode", "owner", "group", "force", "directory_mode":
+		if forwardedFileArgs[k] {
 			fwd[k] = v
-		case "validate", "variable_start_string", "variable_end_string",
-			"block_start_string", "block_end_string", "trim_blocks", "lstrip_blocks", "newline_sequence":
-			return agentproto.Fail("the %q option is not supported yet", k)
 		}
 	}
-	delete(fwd, "src")
-	delete(fwd, "content")
-	fwd["_checksum"] = fsutil.Sha256Bytes(content)
-	fwd["_original"] = original
+	remote := content == nil && original == ""
+	if !remote {
+		delete(fwd, "src")
+		delete(fwd, "remote_src")
+		fwd["_checksum"] = fsutil.Sha256Bytes(content)
+		fwd["_original"] = original
+	}
 
 	req := &agentproto.TaskRequest{
 		Proto:      agentproto.ProtoVersion,
@@ -144,4 +156,118 @@ func resolveSrc(actx *Context, src, subdir string) string {
 	return ""
 }
 
-var _ = fmt.Sprintf
+// forwardedFileArgs are the copy/template options the target-side copy
+// module implements.
+var forwardedFileArgs = map[string]bool{
+	"src": true, "dest": true, "mode": true, "owner": true, "group": true,
+	"backup": true, "force": true, "directory_mode": true, "validate": true,
+	"follow": true, "unsafe_writes": true, "remote_src": true,
+}
+
+// fileActionArgs lists what each action accepts; anything else fails like
+// Ansible's "Unsupported parameters" rather than being silently dropped.
+var fileActionArgs = map[string]map[string]bool{
+	"copy":     {"content": true, "local_follow": true, "decrypt": true},
+	"template": {"newline_sequence": true, "trim_blocks": true, "lstrip_blocks": true},
+}
+
+func checkFileArgs(action string, args map[string]any) error {
+	var bad []string
+	for k := range args {
+		if !forwardedFileArgs[k] && !fileActionArgs[action][k] {
+			bad = append(bad, k)
+		}
+	}
+	if len(bad) > 0 {
+		sort.Strings(bad)
+		return fmt.Errorf("Unsupported parameters for (%s) module: %s", action, strings.Join(bad, ", "))
+	}
+	if action == "template" {
+		// Ansible's defaults (trim_blocks on, lstrip_blocks off, \n) are the
+		// engine's behavior; other values would silently render differently.
+		if v, ok := args["trim_blocks"]; ok && !isTruthy(v) {
+			return fmt.Errorf("template: trim_blocks: false is not supported yet")
+		}
+		if v, ok := args["lstrip_blocks"]; ok && isTruthy(v) {
+			return fmt.Errorf("template: lstrip_blocks: true is not supported yet")
+		}
+		if v, ok := args["newline_sequence"]; ok && v != "\n" {
+			return fmt.Errorf("template: newline_sequence other than \\n is not supported yet")
+		}
+	}
+	return nil
+}
+
+func isTruthy(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		switch strings.ToLower(t) {
+		case "yes", "true", "on", "1", "y":
+			return true
+		}
+	}
+	return false
+}
+
+// copyLocalTree implements copy of a local directory: "dir/" copies its
+// contents into dest, "dir" copies the directory itself (cp -r rules).
+// Each file goes through the copy module; directories are created first.
+func copyLocalTree(ctx context.Context, actx *Context, args map[string]any, src, resolved string) *agentproto.Result {
+	dest, _ := args["dest"].(string)
+	root := dest
+	if !strings.HasSuffix(src, "/") {
+		root = filepath.Join(dest, filepath.Base(resolved))
+	}
+	agg := &agentproto.Result{Extra: map[string]any{"dest": dest, "src": resolved}}
+	err := filepath.WalkDir(resolved, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(resolved, path)
+		target := filepath.Join(root, rel)
+		if d.IsDir() {
+			dirArgs := map[string]any{"path": target, "state": "directory"}
+			if m, ok := args["directory_mode"]; ok {
+				dirArgs["mode"] = m
+			}
+			for _, k := range []string{"owner", "group"} {
+				if v, ok := args[k]; ok {
+					dirArgs[k] = v
+				}
+			}
+			res, err := actx.RunModule(ctx, &agentproto.TaskRequest{
+				Proto: agentproto.ProtoVersion, Op: "task", Module: "file",
+				Args: dirArgs, CheckMode: actx.CheckMode,
+			}, nil)
+			if err != nil {
+				return err
+			}
+			if res.Failed {
+				return fmt.Errorf("%s", res.Msg)
+			}
+			agg.Changed = agg.Changed || res.Changed
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fileArgs := make(map[string]any, len(args))
+		for k, v := range args {
+			fileArgs[k] = v
+		}
+		fileArgs["dest"] = target
+		res := forwardToCopy(ctx, actx, fileArgs, content, path)
+		if res.Failed {
+			return fmt.Errorf("%s", res.Msg)
+		}
+		agg.Changed = agg.Changed || res.Changed
+		return nil
+	})
+	if err != nil {
+		return agentproto.Fail("copy: %v", err)
+	}
+	return agg
+}

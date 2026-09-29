@@ -108,8 +108,10 @@ func lineinfileModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	}
 
 	if p.Bool("backup") && exists {
-		backupPath := path + ".understudy-backup"
-		os.WriteFile(backupPath, original, 0o600)
+		backupPath, err := fsutil.Backup(path)
+		if err != nil {
+			return agentproto.Fail("backup of %s failed: %v", path, err)
+		}
 		res.Extra = map[string]any{"backup_file": backupPath}
 	}
 	// Preserve the existing file's mode and owner across the rewrite (new

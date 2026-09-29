@@ -133,8 +133,10 @@ func blockinfileModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		return res
 	}
 	if p.Bool("backup") && exists {
-		backupPath := path + ".understudy-backup"
-		os.WriteFile(backupPath, original, 0o600)
+		backupPath, err := fsutil.Backup(path)
+		if err != nil {
+			return agentproto.Fail("backup of %s failed: %v", path, err)
+		}
 		res.Extra = map[string]any{"backup_file": backupPath}
 	}
 	// Preserve mode + owner across the rewrite (new files get 0644);

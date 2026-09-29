@@ -3,6 +3,7 @@
 package fsutil
 
 import (
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -79,6 +80,12 @@ func Sha256File(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// Sha1Bytes returns the hex SHA-1 of a byte slice (Ansible's checksum).
+func Sha1Bytes(data []byte) string {
+	sum := sha1.Sum(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // Sha256Bytes returns the hex sha256 of a byte slice.
