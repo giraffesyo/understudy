@@ -22,7 +22,11 @@ var taskKeywords = map[string]bool{
 	"vars": true, "environment": true, "notify": true, "tags": true,
 	"no_log": true, "delegate_to": true, "args": true, "listen": true,
 	"check_mode": true, "diff": true, "run_once": true, "any_errors_fatal": true,
-	"async": true, "poll": true,
+	"async": true, "poll": true, "delegate_facts": true, "throttle": true,
+	"timeout": true, "ignore_unreachable": true, "remote_user": true,
+	"connection": true, "collections": true, "module_defaults": true,
+	"debugger": true, "become_flags": true, "become_exe": true, "port": true,
+	"action": true, "local_action": true,
 }
 
 // playKeywords are recognized play-level keys.
@@ -227,8 +231,22 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 			default:
 				return nil, errAt(file, val, "max_fail_percentage must be a number")
 			}
-		case "remote_user", "connection", "any_errors_fatal", "force_handlers":
-			// Parsed but handled elsewhere (or benignly ignored in v0.1).
+		case "remote_user":
+			play.RemoteUser, _ = val.Str()
+		case "connection":
+			play.Connection, _ = val.Str()
+		case "any_errors_fatal":
+			b, err := decodeBool(val, file, "any_errors_fatal")
+			if err != nil {
+				return nil, err
+			}
+			play.AnyErrorsFatal = b
+		case "force_handlers":
+			b, err := decodeBool(val, file, "force_handlers")
+			if err != nil {
+				return nil, err
+			}
+			play.ForceHandlers = b
 		}
 	}
 	return play, nil
@@ -343,6 +361,13 @@ func parseImportTasks(item, pathNode *yaml.Node, file string, handlers bool, bc 
 			inh.NoLog, err = decodeBool(val, file, "no_log")
 		case "delegate_to":
 			inh.Delegate, _ = val.Str()
+		case "any_errors_fatal":
+			var b bool
+			if b, err = decodeBool(val, file, "any_errors_fatal"); err == nil {
+				inh.AnyErrorsFatal = &b
+			}
+		case "run_once":
+			inh.RunOnce, err = decodeBool(val, file, "run_once")
 		}
 		if err != nil {
 			return nil, err
@@ -557,6 +582,10 @@ func applyBlockInheritance(t *Task, inh *Task) {
 	if t.Delegate == "" {
 		t.Delegate = inh.Delegate
 	}
+	if t.AnyErrorsFatal == nil {
+		t.AnyErrorsFatal = inh.AnyErrorsFatal
+	}
+	t.RunOnce = t.RunOnce || inh.RunOnce
 }
 
 func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
@@ -578,7 +607,24 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			moduleKeys = append(moduleKeys, key)
 		}
 	}
-	if len(moduleKeys) == 0 {
+	// action:/local_action: spell the module as a value instead of a key.
+	for _, key := range []string{"action", "local_action"} {
+		if val := node.MapGet(key); val != nil {
+			if len(moduleKeys) > 0 {
+				return nil, errAt(file, val, "conflicting action statements: %s, %s", key, moduleKeys[0])
+			}
+			if err := parseActionValue(task, val, file); err != nil {
+				return nil, err
+			}
+			if key == "local_action" {
+				task.Delegate = "localhost"
+			}
+			moduleKeys = []string{""}
+		}
+	}
+	if len(moduleKeys) == 1 && moduleKeys[0] == "" {
+		// Module and args already set from action:/local_action:.
+	} else if len(moduleKeys) == 0 {
 		return nil, errAt(file, node, "no module found in task (keys: %s)", strings.Join(keys, ", "))
 	}
 	if len(moduleKeys) > 1 {
@@ -586,17 +632,19 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			"multiple module-like keys in one task: %s (only one module per task)",
 			strings.Join(moduleKeys, ", "))
 	}
-	moduleName := normalizeModuleName(moduleKeys[0])
-	if !ModuleKnown(moduleName) && !executorStatement(moduleName) {
-		return nil, errAt(file, node.MapGet(moduleKeys[0]),
-			"couldn't resolve module/action %q", moduleKeys[0])
-	}
-	task.Module = moduleName
+	if moduleKeys[0] != "" {
+		moduleName := normalizeModuleName(moduleKeys[0])
+		if !ModuleKnown(moduleName) && !executorStatement(moduleName) {
+			return nil, errAt(file, node.MapGet(moduleKeys[0]),
+				"couldn't resolve module/action %q", moduleKeys[0])
+		}
+		task.Module = moduleName
 
-	// Module args: map form, k=v string form, or null.
-	argsNode := node.MapGet(moduleKeys[0])
-	if err := parseModuleArgs(task, argsNode, file); err != nil {
-		return nil, err
+		// Module args: map form, k=v string form, or null.
+		argsNode := node.MapGet(moduleKeys[0])
+		if err := parseModuleArgs(task, argsNode, file); err != nil {
+			return nil, err
+		}
 	}
 
 	for _, key := range keys {
@@ -726,8 +774,31 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 				return nil, err
 			}
 			task.CheckMode = &b
-		case "diff", "run_once", "any_errors_fatal":
-			// Accepted; wired in later milestones.
+		case "run_once":
+			b, err := decodeBool(val, file, "run_once")
+			if err != nil {
+				return nil, err
+			}
+			task.RunOnce = b
+		case "delegate_facts":
+			b, err := decodeBool(val, file, "delegate_facts")
+			if err != nil {
+				return nil, err
+			}
+			task.DelegateFacts = b
+		case "any_errors_fatal":
+			b, err := decodeBool(val, file, "any_errors_fatal")
+			if err != nil {
+				return nil, err
+			}
+			task.AnyErrorsFatal = &b
+		case "remote_user":
+			task.RemoteUser, _ = val.Str()
+		case "connection":
+			task.Connection, _ = val.Str()
+		case "diff", "throttle", "timeout", "ignore_unreachable", "collections",
+			"module_defaults", "debugger", "become_flags", "become_exe", "port":
+			// Accepted: no effect on execution outcome here.
 		case "async":
 			// Async with poll > 0 runs synchronously (same outcome; the
 			// timeout is not enforced yet). poll: 0 = fire-and-forget.
@@ -755,6 +826,48 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 		}
 	}
 	return task, nil
+}
+
+// parseActionValue handles action:/local_action: — "module k=v ..." or a
+// mapping with a module: key plus args.
+func parseActionValue(task *Task, node *yaml.Node, file string) error {
+	v, err := node.Decode()
+	if err != nil {
+		return err
+	}
+	if m, ok := yaml.PlainMap(v); ok {
+		mod, _ := m["module"].(string)
+		if mod == "" {
+			return errAt(file, node, "action: mapping form requires a module key")
+		}
+		task.Module = normalizeModuleName(mod)
+		args := map[string]any{}
+		for k, val := range m {
+			if k != "module" {
+				args[k] = val
+			}
+		}
+		if len(args) > 0 {
+			task.Args = args
+		}
+	} else {
+		s, ok := v.(string)
+		if !ok || strings.TrimSpace(s) == "" {
+			return errAt(file, node, "action: must name a module")
+		}
+		fields := strings.SplitN(strings.TrimSpace(s), " ", 2)
+		rest := ""
+		if len(fields) == 2 {
+			rest = fields[1]
+		}
+		if err := ParseAdhocArgs(task, fields[0], rest); err != nil {
+			return errAt(file, node, "%v", err)
+		}
+	}
+	if !ModuleKnown(task.Module) && !executorStatement(task.Module) {
+		return errAt(file, node, "couldn't resolve module/action %q", task.Module)
+	}
+	return nil
 }
 
 // parseModuleArgs handles the three arg spellings:

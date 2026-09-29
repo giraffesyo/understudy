@@ -1,0 +1,47 @@
+---
+# delegate_to (other inventory hosts, per-item, localhost), delegate_facts,
+# run_once fan-out of register/set_fact, and any_errors_fatal aborting the
+# rest of the playbook. Uses the sibling delegation.inventory.
+- hosts: web
+  gather_facts: false
+  tasks:
+    - debug: {msg: "{{ inventory_hostname }} {{ role_name }}"}
+      delegate_to: d1
+    - command: /bin/echo hi
+      delegate_to: "{{ item }}"
+      loop: [d1, w1]
+      changed_when: false
+    - set_fact: {sf: "{{ inventory_hostname }}"}
+      delegate_to: d1
+    - set_fact: {sf2: yes}
+      delegate_to: d1
+      delegate_facts: true
+    - debug: {msg: "{{ hostvars['d1'].sf2 | default('none') }} {{ sf }}"}
+    - command: /bin/echo once
+      run_once: true
+      register: once
+      changed_when: false
+    - debug: {msg: "{{ once.stdout }}"}
+    - set_fact: {rf: "{{ inventory_hostname }}"}
+      run_once: true
+    - debug: {var: rf}
+    - debug: {msg: delegated once}
+      run_once: true
+      delegate_to: d1
+    - command: /bin/echo x
+      delegate_to: localhost
+      changed_when: false
+    - command: /bin/echo x
+      delegate_to: 127.0.0.1
+      changed_when: false
+- hosts: all
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - fail: {msg: boom}
+      when: inventory_hostname == 'w2'
+    - debug: {msg: unreachable}
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: {msg: next play runs}

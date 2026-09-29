@@ -3,6 +3,7 @@ package connection
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -49,13 +50,25 @@ func NewManager(vars HostVars, opts ManagerOptions) *Manager {
 	return &Manager{Vars: vars, Opts: opts, hosts: map[string]*hostConn{}}
 }
 
-func (m *Manager) hostConn(host string) *hostConn {
+// Keywords are the connection-related play/task keywords. They sit between
+// the host's own vars (ansible_connection, ansible_user: win) and the CLI
+// defaults (-c, -u: lose), as in Ansible.
+type Keywords struct {
+	Connection string
+	RemoteUser string
+}
+
+func (k Keywords) cacheKey(host string) string {
+	return host + "\x00" + k.Connection + "\x00" + k.RemoteUser
+}
+
+func (m *Manager) hostConn(key string) *hostConn {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	hc, ok := m.hosts[host]
+	hc, ok := m.hosts[key]
 	if !ok {
 		hc = &hostConn{}
-		m.hosts[host] = hc
+		m.hosts[key] = hc
 	}
 	return hc
 }
@@ -63,9 +76,14 @@ func (m *Manager) hostConn(host string) *hostConn {
 // Get returns the connection for a host, dialing on first use.
 // inProcess=true means modules run in-process (local connection).
 func (m *Manager) Get(ctx context.Context, host string) (Connection, bool, error) {
-	hc := m.hostConn(host)
+	return m.GetWith(ctx, host, Keywords{})
+}
+
+// GetWith is Get under play/task connection keywords.
+func (m *Manager) GetWith(ctx context.Context, host string, kw Keywords) (Connection, bool, error) {
+	hc := m.hostConn(kw.cacheKey(host))
 	hc.once.Do(func() {
-		hc.conn, hc.inProcess, hc.err = m.dial(ctx, host)
+		hc.conn, hc.inProcess, hc.err = m.dial(ctx, host, kw)
 	})
 	return hc.conn, hc.inProcess, hc.err
 }
@@ -74,14 +92,19 @@ func (m *Manager) Get(ctx context.Context, host string) (Connection, bool, error
 // agent binary on first use. Lazy so `raw` works on targets the agent
 // doesn't support.
 func (m *Manager) Agent(ctx context.Context, host string) (*AgentClient, error) {
-	conn, inProcess, err := m.Get(ctx, host)
+	return m.AgentWith(ctx, host, Keywords{})
+}
+
+// AgentWith is Agent under play/task connection keywords.
+func (m *Manager) AgentWith(ctx context.Context, host string, kw Keywords) (*AgentClient, error) {
+	conn, inProcess, err := m.GetWith(ctx, host, kw)
 	if err != nil {
 		return nil, err
 	}
 	if inProcess {
 		return nil, fmt.Errorf("internal error: local connections do not use the agent")
 	}
-	hc := m.hostConn(host)
+	hc := m.hostConn(kw.cacheKey(host))
 	hc.agentOnce.Do(func() {
 		path, err := Bootstrap(ctx, conn, m.Opts.RemoteTmp)
 		if err != nil {
@@ -115,10 +138,14 @@ func (m *Manager) intVar(host, name string, fallback int) int {
 	return fallback
 }
 
-func (m *Manager) dial(ctx context.Context, host string) (Connection, bool, error) {
-	kind := m.Opts.Connection
+func (m *Manager) dial(ctx context.Context, host string, kw Keywords) (Connection, bool, error) {
+	// Host var > play/task keyword > -c.
+	kind := m.strVar(host, "ansible_connection", "")
 	if kind == "" {
-		kind = m.strVar(host, "ansible_connection", "")
+		kind = kw.Connection
+	}
+	if kind == "" {
+		kind = m.Opts.Connection
 	}
 	if kind == "" || kind == "smart" {
 		if host == "localhost" || host == "127.0.0.1" {
@@ -135,7 +162,7 @@ func (m *Manager) dial(ctx context.Context, host string) (Connection, bool, erro
 		cfg := SSHConfig{
 			Host:            m.strVar(host, "ansible_host", host),
 			Port:            m.intVar(host, "ansible_port", 22),
-			User:            m.strVar(host, "ansible_user", m.strVar(host, "ansible_ssh_user", m.Opts.RemoteUser)),
+			User:            m.strVar(host, "ansible_user", m.strVar(host, "ansible_ssh_user", firstNonEmpty(kw.RemoteUser, m.Opts.RemoteUser))),
 			Password:        m.strVar(host, "ansible_password", m.strVar(host, "ansible_ssh_pass", m.Opts.Password)),
 			HostKeyChecking: m.Opts.HostKeyChecking,
 			Timeout:         m.Opts.Timeout,
@@ -153,16 +180,32 @@ func (m *Manager) dial(ctx context.Context, host string) (Connection, bool, erro
 	return nil, false, fmt.Errorf("unknown connection type %q for host %s", kind, host)
 }
 
-// Reset closes a host's cached connection so the next use redials
+// Reset closes a host's cached connections so the next use redials
 // (meta: reset_connection).
 func (m *Manager) Reset(host string) {
 	m.mu.Lock()
-	hc, ok := m.hosts[host]
-	delete(m.hosts, host)
-	m.mu.Unlock()
-	if ok && hc.conn != nil {
-		hc.conn.Close()
+	var closing []*hostConn
+	for key, hc := range m.hosts {
+		if strings.HasPrefix(key, host+"\x00") {
+			closing = append(closing, hc)
+			delete(m.hosts, key)
+		}
 	}
+	m.mu.Unlock()
+	for _, hc := range closing {
+		if hc.conn != nil {
+			hc.conn.Close()
+		}
+	}
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // CloseAll tears down every cached connection.

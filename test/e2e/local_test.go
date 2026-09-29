@@ -512,13 +512,10 @@ func TestDelegateToLocalhost(t *testing.T) {
         that:
           - d.stdout == "on-control-node"
           - inventory_hostname == "localhost"
-    - name: unsupported delegate target errors clearly
-      command: echo nope
-      delegate_to: otherhost
-      ignore_errors: true
-      register: bad
-    - assert:
-        that: "'not supported yet' in bad.msg"
+    - name: templated delegate target, facts delegated
+      set_fact: {marker: yes}
+      delegate_to: "{{ 'local' ~ 'host' }}"
+      delegate_facts: true
 `, executor.Options{})
 	if code != 0 {
 		t.Fatalf("exit=%d\n%s", code, out)

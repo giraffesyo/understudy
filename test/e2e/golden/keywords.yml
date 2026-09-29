@@ -1,0 +1,22 @@
+---
+# action:/local_action: syntax (string and mapping), play-level connection
+# keyword, accepted no-op keywords (throttle, timeout), ansible_connection.
+- hosts: nodes
+  gather_facts: false
+  connection: local
+  tasks:
+    - action: command /bin/echo via-action
+      changed_when: false
+    - action:
+        module: debug
+        msg: "mapping action {{ inventory_hostname }}"
+    - local_action: command /bin/echo local
+      changed_when: false
+    - local_action:
+        module: debug
+        msg: "local mapping"
+    - command: /bin/echo throttled
+      throttle: 1
+      timeout: 30
+      changed_when: false
+    - debug: {msg: "{{ ansible_connection | default('unset') }}"}
