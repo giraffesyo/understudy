@@ -988,14 +988,10 @@ func (r *Runner) resolveLoop(task *playbook.Task, vctx *vars.Context) ([]any, bo
 // runOnce executes one occurrence (one loop item or the whole task).
 func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, vctx *vars.Context, item any) *agentproto.Result {
 	// when: gate.
-	if len(task.When) > 0 {
-		ok, err := vctx.EvalWhen(task.When)
-		if err != nil {
-			return agentproto.Fail("The conditional check failed: %v", err)
-		}
-		if !ok {
-			return &agentproto.Result{Skipped: true, Msg: "Conditional result was False"}
-		}
+	if skip, err := whenSkip(vctx, task.When); err != nil {
+		return agentproto.Fail("The conditional check failed: %v", err)
+	} else if skip != nil {
+		return skip
 	}
 
 	// Template module args, dropping omitted ones.
@@ -1086,6 +1082,10 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			ok, err := resCtx.EvalWhen(task.FailedWhen)
 			if err != nil {
 				return agentproto.Fail("error evaluating failed_when: %v", err)
+			}
+			if res.Failed && !ok {
+				// ansible-core 2.19+ records that a failure was overridden.
+				setExtra(res, "failed_when_suppressed_exception", "(traceback unavailable)")
 			}
 			res.Failed = ok
 			setExtra(res, "failed_when_result", ok)
@@ -1550,4 +1550,30 @@ func (t *turnstile) release() {
 	t.free++
 	t.mu.Unlock()
 	t.cond.Broadcast()
+}
+
+// whenSkip evaluates when: conditions in order. Like Ansible, a skip
+// reports the first condition that was false (a literal false as the
+// boolean itself). nil means the task runs.
+func whenSkip(vctx *vars.Context, when []string) (*agentproto.Result, error) {
+	for _, cond := range when {
+		if cond == "" {
+			continue
+		}
+		ok, err := vctx.EvalWhen([]string{cond})
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			var failed any = cond
+			if strings.EqualFold(cond, "false") {
+				failed = false
+			}
+			return &agentproto.Result{Skipped: true, Extra: map[string]any{
+				"false_condition": failed,
+				"skip_reason":     "Conditional result was False",
+			}}, nil
+		}
+	}
+	return nil, nil
 }

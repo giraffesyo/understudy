@@ -190,7 +190,9 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 // search path: the template's own directory, then role and playbook
 // template directories).
 func (e *Engine) RenderFile(src string, vars VarGetter, pos Position, searchPath []string) (string, error) {
-	nodes, err := e.parseTemplate(src, pos)
+	// Jinja (keep_trailing_newline=False) drops one trailing newline; Ansible
+	// then restores the source's trailing newlines the output lacks.
+	nodes, err := e.parseTemplate(strings.TrimSuffix(src, "\n"), pos)
 	if err != nil {
 		return "", err
 	}
@@ -200,7 +202,15 @@ func (e *Engine) RenderFile(src string, vars VarGetter, pos Position, searchPath
 	if err := ec.execTemplate(nodes, out); err != nil {
 		return "", err
 	}
-	return b.String(), nil
+	res := b.String()
+	if want, have := trailingNewlines(src), trailingNewlines(res); want > have {
+		res += strings.Repeat("\n", want-have)
+	}
+	return res, nil
+}
+
+func trailingNewlines(s string) int {
+	return len(s) - len(strings.TrimRight(s, "\n"))
 }
 
 // RenderString renders a template and always returns text — the template
