@@ -2,8 +2,6 @@ package modules
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -30,6 +28,11 @@ var replaceSpec = args.Spec{
 	"mode":          {Type: "any"},
 	"owner":         {},
 	"group":         {},
+	"seuser":        {},
+	"serole":        {},
+	"setype":        {},
+	"selevel":       {},
+	"attributes":    {Aliases: []string{"attr"}},
 }
 
 // replaceModule is ansible.builtin.replace: re.subn of a MULTILINE pattern
@@ -43,21 +46,20 @@ func replaceModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	if enc := strings.ToLower(p.Str("encoding")); enc != "utf-8" && enc != "utf8" {
 		return agentproto.Fail("replace: encoding %q is not supported (utf-8 only)", p.Str("encoding"))
 	}
-	path := p.Str("path")
-	info, err := os.Stat(path)
-	if err != nil {
-		return &agentproto.Result{Failed: true, Msg: fmt.Sprintf("Path %s does not exist !", path),
-			Extra: map[string]any{"rc": int64(257)}}
-	}
-	if info.IsDir() {
+	path := pyExpandPath(p.Str("path"))
+	if isDir(path) {
 		return &agentproto.Result{Failed: true, Msg: fmt.Sprintf("Path %s is a directory !", path),
 			Extra: map[string]any{"rc": int64(256)}}
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return agentproto.Fail("Unable to read the contents of '%s': %v", path, err)
+	if !pathExists(path) {
+		return &agentproto.Result{Failed: true, Msg: fmt.Sprintf("Path %s does not exist !", path),
+			Extra: map[string]any{"rc": int64(257)}}
 	}
-	contents := string(data)
+	lines, err := readLines(path) // text mode: universal newlines
+	if err != nil {
+		return moduleCrash(err)
+	}
+	contents := strings.Join(lines, "")
 
 	// after/before narrow the substitution to a DOTALL subsection.
 	section, lo, hi := contents, 0, len(contents)
@@ -71,7 +73,11 @@ func replaceModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		pattern = "(?P<subsection>.*)" + before
 	}
 	if pattern != "" {
-		sre, err := compilePyPattern("(?s)" + pattern)
+		sre, fail := pyCompile(pattern)
+		if fail != nil {
+			return fail
+		}
+		sre, err = compilePyPattern("(?s)" + pattern)
 		if err != nil {
 			return agentproto.Fail("%v", err)
 		}
@@ -85,16 +91,22 @@ func replaceModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		section = contents[lo:hi]
 	}
 
+	if _, fail := pyCompile(p.Str("regexp")); fail != nil {
+		return fail
+	}
 	re, err := compilePyPattern("(?m)" + p.Str("regexp"))
 	if err != nil {
 		return agentproto.Fail("%v", err)
 	}
 	replaced, count, err := pySubn(re, p.Str("replace"), section)
 	if err != nil {
-		return agentproto.Fail("%v", err)
+		if te, ok := err.(*pyTplError); ok && te.indexError {
+			return &agentproto.Result{Failed: true, Msg: "Task failed: Module failed: " + te.msg}
+		}
+		return agentproto.Fail("Unable to process replace due to error: %v", err)
 	}
 
-	res := &agentproto.Result{Extra: map[string]any{}}
+	res := &agentproto.Result{Extra: map[string]any{"rc": int64(0)}}
 	msg := ""
 	changed := count > 0 && replaced != section
 	newContents := contents
@@ -102,53 +114,31 @@ func replaceModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		newContents = contents[:lo] + replaced + contents[hi:]
 		msg = fmt.Sprintf("%d replacements made", count)
 		if env.DiffMode {
-			res.Diff = []agentproto.Diff{{BeforeHeader: path, Before: contents, AfterHeader: path, After: newContents}}
+			res.Diff = map[string]any{"before_header": path, "before": contents,
+				"after_header": path, "after": newContents}
 		}
 	}
 	if changed && !env.CheckMode {
-		if v := p.Str("validate"); v != "" {
-			if err := fsutil.Validate(v, path, []byte(newContents)); err != nil {
-				return validateFailure(err)
-			}
-		}
-		if p.Bool("backup") {
+		if p.Bool("backup") && pathExists(path) {
 			b, err := fsutil.Backup(path)
 			if err != nil {
-				return agentproto.Fail("backup of %s failed: %v", path, err)
+				return moduleCrash(err)
 			}
 			res.Extra["backup_file"] = b
 		}
-		real, err := filepath.EvalSymlinks(path) // always change the real file
-		if err != nil {
-			real = path
-		}
-		if err := fsutil.AtomicRewrite(real, strings.NewReader(newContents), 0o644); err != nil {
-			return agentproto.Fail("writing %s: %v", path, err)
+		if fail := writeChanges(env, []byte(newContents), pyRealpath(path), p.Str("validate"), p.Bool("unsafe_writes")); fail != nil {
+			return fail
 		}
 	}
-	if !env.CheckMode && (p.Has("mode") || p.Str("owner") != "" || p.Str("group") != "") {
-		var mode any
-		if p.Has("mode") {
-			mode = p.Any("mode")
-		}
-		attrChanged, err := fsutil.ApplyFileAttrs(path, mode, p.Str("owner"), p.Str("group"), true)
-		if err != nil {
-			return agentproto.Fail("%v", err)
-		}
-		if attrChanged {
-			if msg != "" {
-				msg += " and "
-			}
-			msg += "ownership, perms or SE linux context changed"
-			changed = true
-		}
+	msg, changed, fail := checkFileAttrs(env, loadFileAttrs(p, path, false), changed, msg, nil)
+	if fail != nil {
+		return fail
 	}
 	res.Changed = changed
 	res.Msg = msg
 	if msg == "" {
 		setMsgEmpty(res)
 	}
-	res.Extra["rc"] = int64(0) // replace always reports rc=0
 	return res
 }
 
@@ -160,9 +150,171 @@ func setMsgEmpty(res *agentproto.Result) {
 	res.Extra["msg"] = ""
 }
 
+// pyTplError is an error from Python's replacement-template parser:
+// re.error, or IndexError for an unknown group name.
+type pyTplError struct {
+	msg        string
+	indexError bool
+}
+
+func (e *pyTplError) Error() string { return e.msg }
+
+// pyTplPart is a literal (group < 0) or a group reference.
+type pyTplPart struct {
+	lit   string
+	group int
+}
+
+func isPyIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r > 127 {
+			continue
+		}
+		if i > 0 && r >= '0' && r <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// parsePyTemplate is sre_parse.parse_template: \1..\99, \g<n>, \g<name>,
+// octal and character escapes, with Python's errors and positions.
+func parsePyTemplate(re *regexp.Regexp, repl string) ([]pyTplPart, error) {
+	var parts []pyTplPart
+	var lit strings.Builder
+	flush := func() {
+		if lit.Len() > 0 {
+			parts = append(parts, pyTplPart{lit: lit.String(), group: -1})
+			lit.Reset()
+		}
+	}
+	errAt := func(msg string, pos int) error {
+		return &pyTplError{msg: fmt.Sprintf("%s at position %d", msg, pos)}
+	}
+	groups := re.NumSubexp()
+	addGroup := func(idx, pos int) error {
+		if idx > groups {
+			return errAt(fmt.Sprintf("invalid group reference %d", idx), pos)
+		}
+		flush()
+		parts = append(parts, pyTplPart{group: idx})
+		return nil
+	}
+	isDigit := func(c byte) bool { return c >= '0' && c <= '9' }
+	isOct := func(c byte) bool { return c >= '0' && c <= '7' }
+	i := 0
+	for i < len(repl) {
+		c := repl[i]
+		if c != '\\' {
+			lit.WriteByte(c)
+			i++
+			continue
+		}
+		if i+1 >= len(repl) {
+			return nil, errAt("bad escape (end of pattern)", len(repl)-1)
+		}
+		start := i
+		e := repl[i+1]
+		i += 2
+		switch {
+		case e == 'g':
+			if i >= len(repl) || repl[i] != '<' {
+				return nil, errAt("missing <", i)
+			}
+			i++
+			end := strings.IndexByte(repl[i:], '>')
+			if end < 0 {
+				return nil, errAt("missing >, unterminated name", i)
+			}
+			name := repl[i : i+end]
+			i += end + 1
+			if name == "" {
+				return nil, errAt("missing group name", i-1)
+			}
+			var idx int
+			if n, err := strconv.Atoi(name); err == nil && !strings.ContainsAny(name, "+-") {
+				idx = n
+			} else if !isPyIdentifier(name) {
+				return nil, errAt(fmt.Sprintf("bad character in group name %s", pyStrRepr(name)), i-len(name)-1)
+			} else {
+				idx = re.SubexpIndex(name)
+				if idx < 0 {
+					return nil, &pyTplError{msg: fmt.Sprintf("unknown group name %s", pyStrRepr(name)), indexError: true}
+				}
+			}
+			if err := addGroup(idx, i-len(name)-1); err != nil {
+				return nil, err
+			}
+		case e == '0':
+			j := i
+			for j < len(repl) && j < i+2 && isOct(repl[j]) {
+				j++
+			}
+			n, _ := strconv.ParseInt("0"+repl[i:j], 8, 32)
+			lit.WriteRune(rune(n & 0xff))
+			i = j
+		case isDigit(e):
+			this := repl[start:i]
+			if i < len(repl) && isDigit(repl[i]) {
+				this += string(repl[i])
+				i++
+				if isOct(e) && isOct(this[2]) && i < len(repl) && isOct(repl[i]) {
+					this += string(repl[i])
+					i++
+					n, _ := strconv.ParseInt(this[1:], 8, 32)
+					if n > 0o377 {
+						return nil, errAt(fmt.Sprintf("octal escape value %s outside of range 0-0o377", this), start)
+					}
+					lit.WriteRune(rune(n))
+					continue
+				}
+			}
+			n, _ := strconv.Atoi(this[1:])
+			if err := addGroup(n, start+1); err != nil {
+				return nil, err
+			}
+		default:
+			if esc, ok := map[byte]string{'a': "\a", 'b': "\b", 'f': "\f", 'n': "\n", 'r': "\r", 't': "\t", 'v': "\v", '\\': "\\"}[e]; ok {
+				lit.WriteString(esc)
+			} else if e >= 'a' && e <= 'z' || e >= 'A' && e <= 'Z' {
+				return nil, errAt("bad escape "+repl[start:i], start)
+			} else {
+				lit.WriteString(repl[start:i])
+			}
+		}
+	}
+	flush()
+	return parts, nil
+}
+
+// expandPyTemplate renders a parsed template for one match (unmatched
+// groups expand to "").
+func expandPyTemplate(parts []pyTplPart, s string, m []int) string {
+	var b strings.Builder
+	for _, p := range parts {
+		if p.group < 0 {
+			b.WriteString(p.lit)
+			continue
+		}
+		if 2*p.group+1 < len(m) && m[2*p.group] >= 0 {
+			b.WriteString(s[m[2*p.group]:m[2*p.group+1]])
+		}
+	}
+	return b.String()
+}
+
 // pySubn is Python's re.subn(pattern, repl, s): every non-overlapping match
-// replaced, repl interpreted with Python's escape and group syntax.
+// replaced, repl interpreted with Python's escape and group syntax (parsed
+// up front, so a bad template fails even without matches).
 func pySubn(re *regexp.Regexp, repl, s string) (string, int, error) {
+	parts, err := parsePyTemplate(re, repl)
+	if err != nil {
+		return "", 0, err
+	}
 	matches := re.FindAllStringSubmatchIndex(s, -1)
 	if len(matches) == 0 {
 		return s, 0, nil
@@ -171,79 +323,18 @@ func pySubn(re *regexp.Regexp, repl, s string) (string, int, error) {
 	last := 0
 	for _, m := range matches {
 		b.WriteString(s[last:m[0]])
-		out, err := pyExpand(re, repl, s, m)
-		if err != nil {
-			return "", 0, err
-		}
-		b.WriteString(out)
+		b.WriteString(expandPyTemplate(parts, s, m))
 		last = m[1]
 	}
 	b.WriteString(s[last:])
 	return b.String(), len(matches), nil
 }
 
-// pyExpand renders one replacement: \1, \g<1>, \g<name>, and the character
-// escapes Python's re module processes in templates.
+// pyExpand is match.expand(template) for one match.
 func pyExpand(re *regexp.Regexp, repl, s string, m []int) (string, error) {
-	group := func(idx int) (string, error) {
-		if idx < 0 || 2*idx+1 >= len(m) {
-			return "", fmt.Errorf("invalid group reference %d", idx)
-		}
-		if m[2*idx] < 0 {
-			return "", nil // unmatched group -> empty (Python 3.5+)
-		}
-		return s[m[2*idx]:m[2*idx+1]], nil
+	parts, err := parsePyTemplate(re, repl)
+	if err != nil {
+		return "", err
 	}
-	var b strings.Builder
-	for i := 0; i < len(repl); i++ {
-		c := repl[i]
-		if c != '\\' || i+1 >= len(repl) {
-			b.WriteByte(c)
-			continue
-		}
-		i++
-		switch n := repl[i]; {
-		case n >= '0' && n <= '9':
-			j := i + 1
-			if j < len(repl) && repl[j] >= '0' && repl[j] <= '9' {
-				j++
-			}
-			idx, _ := strconv.Atoi(repl[i:j])
-			g, err := group(idx)
-			if err != nil {
-				return "", err
-			}
-			b.WriteString(g)
-			i = j - 1
-		case n == 'g' && i+1 < len(repl) && repl[i+1] == '<':
-			end := strings.IndexByte(repl[i+2:], '>')
-			if end < 0 {
-				return "", fmt.Errorf("missing > in group reference")
-			}
-			name := repl[i+2 : i+2+end]
-			idx, err := strconv.Atoi(name)
-			if err != nil {
-				idx = re.SubexpIndex(name)
-				if idx < 0 {
-					return "", fmt.Errorf("unknown group name %q", name)
-				}
-			}
-			g, err := group(idx)
-			if err != nil {
-				return "", err
-			}
-			b.WriteString(g)
-			i += 2 + end
-		default:
-			if esc, ok := map[byte]string{'n': "\n", 't': "\t", 'r': "\r", 'f': "\f", 'v': "\v", 'a': "\a", 'b': "\b", '\\': "\\"}[n]; ok {
-				b.WriteString(esc)
-			} else if (n >= 'a' && n <= 'z') || (n >= 'A' && n <= 'Z') {
-				return "", fmt.Errorf("bad escape \\%c in replacement", n)
-			} else {
-				b.WriteByte('\\')
-				b.WriteByte(n)
-			}
-		}
-	}
-	return b.String(), nil
+	return expandPyTemplate(parts, s, m), nil
 }

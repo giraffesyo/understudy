@@ -1,0 +1,113 @@
+---
+# Result dicts of find. Each file record's timestamps, inode and device
+# differ between runs, so records are printed without them; everything
+# else (order, counts, msg, skipped_paths, stat keys) is compared.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/fd"
+    volatile: [atime, mtime, ctime, inode, dev]
+    top: "{{ r | dict2items | rejectattr('key', 'equalto', 'files') | items2dict }}"
+    paths: "{{ r.files | map(attribute='path') | list }}"
+    first: "{{ r.files[0] | dict2items | rejectattr('key', 'in', volatile) | items2dict }}"
+  tasks:
+    - file: {path: "{{ d }}/sub/.h2", state: directory}
+    - file: {path: "{{ d }}/empty", state: directory, mode: "0700"}
+    - copy: {content: "alpha\nbeta\n", dest: "{{ d }}/a.txt", mode: "0644"}
+    - copy: {content: "log line\n", dest: "{{ d }}/b.log", mode: "0600"}
+    - copy: {content: "h\n", dest: "{{ d }}/.hidden"}
+    - copy: {content: "gamma\n", dest: "{{ d }}/sub/c.txt"}
+    - copy: {content: "x\n", dest: "{{ d }}/sub/.h2/x.txt"}
+    - file: {path: "{{ d }}/link", src: a.txt, state: link}
+
+    - name: find files (defaults)
+      find: {paths: "{{ d }}"}
+      register: r
+    - debug: {var: top}
+    - debug: {var: paths}
+    - debug: {var: first}
+
+    - name: find recursively with hidden files
+      find: {paths: "{{ d }}", recurse: true, hidden: true}
+      register: r
+    - debug: {var: top}
+    - debug: {var: paths}
+
+    - name: find by glob pattern with checksum
+      find: {paths: "{{ d }}", patterns: "*.txt", recurse: true, get_checksum: true}
+      register: r
+    - debug: {var: top}
+    - debug: {var: paths}
+    - debug: {msg: "{{ r.files | map(attribute='checksum') | list }}"}
+
+    - name: find by regex with excludes
+      find: {paths: "{{ d }}", patterns: '^[ab]\.', excludes: '.*log$', use_regex: true}
+      register: r
+    - debug: {var: paths}
+
+    - name: find directories
+      find: {paths: "{{ d }}", file_type: directory, recurse: true}
+      register: r
+    - debug: {var: top}
+    - debug: {var: paths}
+
+    - name: find links
+      find: {paths: "{{ d }}", file_type: link}
+      register: r
+    - debug: {var: paths}
+    - debug: {var: first}
+
+    - name: find any type at depth 1
+      find: {paths: "{{ d }}", file_type: any, recurse: true, depth: 1}
+      register: r
+    - debug: {var: top}
+    - debug: {var: paths}
+
+    - name: find by contents
+      find: {paths: "{{ d }}", contains: "beta", recurse: true}
+      register: r
+    - debug: {var: paths}
+
+    - name: find by size and mode
+      find: {paths: "{{ d }}", size: "10", mode: "0644"}
+      register: r
+    - debug: {var: paths}
+
+    - name: find young files
+      find: {paths: "{{ d }}", age: "-1d"}
+      register: r
+    - debug: {var: paths}
+
+    - name: find with a limit
+      find: {paths: "{{ d }}", recurse: true, limit: 1}
+      register: r
+    - debug: {var: top}
+
+    - name: find in a missing directory
+      find: {paths: ["{{ d }}/missing", "{{ d }}/a.txt"]}
+      register: r
+    - debug: {var: r}
+
+    - name: find with a bad age fails
+      find: {paths: "{{ d }}", age: "3x"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: find with a bad size fails
+      find: {paths: "{{ d }}", size: "big"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: find with a bad limit fails
+      find: {paths: "{{ d }}", limit: 0}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: find with a non-string mode fails
+      find: {paths: "{{ d }}", mode: 420}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}

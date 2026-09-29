@@ -1,0 +1,132 @@
+---
+# Result dicts of blockinfile: insert, update, no-op, remove, markers,
+# positioning, attribute changes, diffs, and failures. backup_file names
+# embed a pid and timestamp, so that key is checked for shape instead.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/bi"
+    f: "{{ workdir }}/bi/cfg"
+    nobackup: "{{ r | dict2items | rejectattr('key', 'equalto', 'backup_file') | items2dict }}"
+  tasks:
+    - file: {path: "{{ d }}", state: directory}
+    - copy: {content: "top\n[section]\nkey=1\nbottom\n", dest: "{{ f }}"}
+
+    - name: insert a block at EOF
+      blockinfile: {path: "{{ f }}", block: "x=1\ny=2"}
+      register: r
+    - debug: {var: r}
+
+    - name: same block again (no-op)
+      blockinfile: {path: "{{ f }}", block: "x=1\ny=2"}
+      register: r
+    - debug: {var: r}
+
+    - name: update the block with diff
+      blockinfile: {path: "{{ f }}", block: "x=10\ny=2\n"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: second block with custom markers after a match
+      blockinfile:
+        path: "{{ f }}"
+        marker: "; {mark} custom"
+        block: "custom=1"
+        insertafter: '^\[section\]'
+      register: r
+    - debug: {var: r}
+
+    - name: third block before BOF with backup and blank lines
+      blockinfile:
+        path: "{{ f }}"
+        marker: "# {mark} bof"
+        block: "first=1"
+        insertbefore: BOF
+        backup: true
+        append_newline: true
+      register: r
+    - debug: {var: nobackup}
+    - debug: {msg: "{{ r.backup_file is match('.*/cfg\\.[0-9]+\\.[0-9-]+@[0-9:]+~$') }}"}
+
+    - name: prepend a newline before a block inserted before a match
+      blockinfile:
+        path: "{{ f }}"
+        marker: "# {mark} before-bottom"
+        block: "near=bottom"
+        insertbefore: "^bottom"
+        prepend_newline: true
+      register: r
+    - debug: {var: r}
+
+    - name: remove the first block
+      blockinfile: {path: "{{ f }}", state: absent}
+      register: r
+    - debug: {var: r}
+
+    - name: remove it again (no-op)
+      blockinfile: {path: "{{ f }}", state: absent}
+      register: r
+    - debug: {var: r}
+
+    - name: empty block removes too
+      blockinfile: {path: "{{ f }}", marker: "; {mark} custom", block: ""}
+      register: r
+    - debug: {var: r}
+
+    - name: mode change only
+      blockinfile: {path: "{{ f }}", marker: "# {mark} bof", block: "first=1", mode: "0600"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: create a new file
+      blockinfile: {path: "{{ d }}/sub/new", block: "hello", create: true}
+      register: r
+    - debug: {var: r}
+
+    - name: missing file fails
+      blockinfile: {path: "{{ d }}/nope", block: "x"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: absent on a missing file fails too (create is false)
+      blockinfile: {path: "{{ d }}/nope", state: absent}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: absent on a missing file with create
+      blockinfile: {path: "{{ d }}/nope", state: absent, create: true}
+      register: r
+    - debug: {var: r}
+
+    - name: directory path fails
+      blockinfile: {path: "{{ d }}", block: "x"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: bad insertafter regexp fails
+      blockinfile: {path: "{{ f }}", block: "q=1", marker: "# {mark} q", insertafter: "(oops"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: insertafter and insertbefore together fail
+      blockinfile: {path: "{{ f }}", block: "q=1", insertafter: "a", insertbefore: "b"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: validate failure
+      blockinfile: {path: "{{ f }}", block: "q=1", marker: "# {mark} q", validate: "grep -q nomatch %s"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: final content
+      command: "cat {{ f }}"
+      register: out
+    - debug: {var: out.stdout_lines}

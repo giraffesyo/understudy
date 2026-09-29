@@ -10,6 +10,40 @@ import (
 	"strings"
 )
 
+// MutuallyExclusive is check_mutually_exclusive over the raw (aliased)
+// arguments: every group with more than one member present is reported.
+func (s Spec) MutuallyExclusive(raw map[string]any, groups ...[]string) error {
+	present := map[string]bool{}
+	for key := range raw {
+		for name, def := range s {
+			if key == name {
+				present[name] = true
+			}
+			for _, a := range def.Aliases {
+				if key == a {
+					present[name] = true
+				}
+			}
+		}
+	}
+	var bad []string
+	for _, g := range groups {
+		n := 0
+		for _, name := range g {
+			if present[name] {
+				n++
+			}
+		}
+		if n > 1 {
+			bad = append(bad, strings.Join(g, "|"))
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("parameters are mutually exclusive: %s", strings.Join(bad, ", "))
+	}
+	return nil
+}
+
 // Spec maps argument names to their definitions.
 type Spec map[string]Def
 
@@ -57,12 +91,21 @@ func (s Spec) Parse(raw map[string]any) (*Parsed, error) {
 		return nil, fmt.Errorf("Unsupported parameters: %s", strings.Join(unknown, ", "))
 	}
 
+	// Ansible's check_required_arguments: every missing one, sorted.
+	var missing []string
+	for name, def := range s {
+		if v, present := values[name]; def.Required && (!present || v == nil) {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return nil, fmt.Errorf("missing required arguments: %s", strings.Join(missing, ", "))
+	}
+
 	for name, def := range s {
 		val, present := values[name]
 		if !present || val == nil {
-			if def.Required {
-				return nil, fmt.Errorf("missing required argument: %s", name)
-			}
 			if def.Default != nil {
 				values[name] = def.Default
 			}

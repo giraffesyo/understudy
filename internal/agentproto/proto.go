@@ -6,7 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"strconv"
+	"strings"
 )
 
 const (
@@ -37,14 +37,6 @@ type TaskRequest struct {
 	Background bool              `json:"background,omitempty"`  // async poll:0 fire-and-forget
 }
 
-// Diff is a before/after pair rendered by --diff.
-type Diff struct {
-	Before       string `json:"before,omitempty"`
-	After        string `json:"after,omitempty"`
-	BeforeHeader string `json:"before_header,omitempty"`
-	AfterHeader  string `json:"after_header,omitempty"`
-}
-
 // Result is the outcome of one module invocation. Its shape mirrors
 // Ansible's task result: well-known fields are typed, module-specific keys
 // ride in Extra and are flattened into the same JSON object.
@@ -56,19 +48,57 @@ type Result struct {
 	RC           *int           `json:"-"`
 	Stdout       string         `json:"-"`
 	Stderr       string         `json:"-"`
-	Diff         []Diff         `json:"-"`
+	Diff         any            `json:"-"` // the module's "diff" value: a dict or a list of dicts
 	AnsibleFacts map[string]any `json:"-"`
 	Extra        map[string]any `json:"-"`
+
+	// Cause is the message of the exception a module passed to fail_json
+	// (Ansible's exception chain): not part of the result dict, but the
+	// error display appends it to Msg (see ErrorMessage).
+	Cause string `json:"-"`
+
+	// ErrorChain, when set, displays the failure as ansible-core shows an
+	// exception with a cause: the outer error (with the task's source
+	// context) "<<< caused by >>>" the inner one.
+	ErrorChain *ErrorChain `json:"-"`
 
 	// Control-plane display hints; never cross the agent wire.
 	Origin        string `json:"-"` // "action" (control-side) or "module"
 	VerboseAlways bool   `json:"-"` // shown with its JSON even at -v0 (debug, assert)
 	DelegatedTo   string `json:"-"` // delegate_to target, when not the host itself
+	ShowDiff      bool   `json:"-"` // diff mode is on for the task: display Diff
 }
+
+// ErrorChain is a two-level exception chain for error display.
+type ErrorChain struct {
+	Outer string // outer event message, shown with the source context
+	Inner string // cause message
+	Help  string // the cause's help text
+}
+
+// causeKey carries Result.Cause across the agent wire.
+const causeKey = "_understudy_cause"
+
+// originKey carries Origin "action" across the wire: a module that
+// performs action-plugin work (copy) reports action-level failures.
+const originKey = "_understudy_origin"
 
 // Fail builds a failed result with a formatted message.
 func Fail(format string, args ...any) *Result {
 	return &Result{Failed: true, Msg: fmt.Sprintf(format, args...)}
+}
+
+// ErrorMessage is the brief error message ansible-core displays for a
+// failure: Msg, with a chained Cause appended the way
+// _event_utils.deduplicate_message_parts does.
+func (r *Result) ErrorMessage() string {
+	if r.Cause == "" {
+		return r.Msg
+	}
+	if strings.HasSuffix(r.Msg, r.Cause) {
+		return r.Msg
+	}
+	return strings.TrimRight(r.Msg, ". ") + ": " + r.Cause
 }
 
 // IntPtr is a helper for the RC field.
@@ -90,6 +120,12 @@ func (r *Result) MarshalJSON() ([]byte, error) {
 	if r.Msg != "" {
 		m["msg"] = r.Msg
 	}
+	if r.Cause != "" {
+		m[causeKey] = r.Cause
+	}
+	if r.Origin == "action" {
+		m[originKey] = r.Origin
+	}
 	if r.RC != nil {
 		m["rc"] = *r.RC
 	}
@@ -99,7 +135,7 @@ func (r *Result) MarshalJSON() ([]byte, error) {
 	if r.Stderr != "" || r.RC != nil {
 		m["stderr"] = r.Stderr
 	}
-	if len(r.Diff) > 0 {
+	if r.Diff != nil {
 		m["diff"] = r.Diff
 	}
 	if len(r.AnsibleFacts) > 0 {
@@ -118,7 +154,7 @@ func (r *Result) UnmarshalJSON(data []byte) error {
 	}
 	// Keep integers integers (as the in-process path does): JSON has one
 	// number type, but templates distinguish 8 from 8.0.
-	normalizeNumbers(m)
+	m = numbers(m).(map[string]any)
 	take := func(key string) (any, bool) {
 		v, ok := m[key]
 		if ok {
@@ -143,6 +179,12 @@ func (r *Result) UnmarshalJSON(data []byte) error {
 			m["msg"] = ""
 		}
 	}
+	if v, ok := take(causeKey); ok {
+		r.Cause, _ = v.(string)
+	}
+	if v, ok := take(originKey); ok {
+		r.Origin, _ = v.(string)
+	}
 	if v, ok := take("rc"); ok {
 		switch n := v.(type) {
 		case int64:
@@ -158,9 +200,7 @@ func (r *Result) UnmarshalJSON(data []byte) error {
 		r.Stderr, _ = v.(string)
 	}
 	if v, ok := take("diff"); ok {
-		if raw, err := json.Marshal(v); err == nil {
-			json.Unmarshal(raw, &r.Diff)
-		}
+		r.Diff = v
 	}
 	if v, ok := take("ansible_facts"); ok {
 		r.AnsibleFacts, _ = v.(map[string]any)
@@ -169,28 +209,6 @@ func (r *Result) UnmarshalJSON(data []byte) error {
 		r.Extra = m
 	}
 	return nil
-}
-
-// normalizeNumbers replaces json.Number values in place: int64 when the
-// literal is an integer, float64 otherwise.
-func normalizeNumbers(v any) any {
-	switch t := v.(type) {
-	case json.Number:
-		if n, err := strconv.ParseInt(string(t), 10, 64); err == nil {
-			return n
-		}
-		f, _ := t.Float64()
-		return f
-	case map[string]any:
-		for k, x := range t {
-			t[k] = normalizeNumbers(x)
-		}
-	case []any:
-		for i, x := range t {
-			t[i] = normalizeNumbers(x)
-		}
-	}
-	return v
 }
 
 // ToVars converts a result to the map shape a registered variable exposes,
@@ -218,6 +236,9 @@ func (r *Result) ToVars() map[string]any {
 	if len(r.AnsibleFacts) > 0 {
 		m["ansible_facts"] = r.AnsibleFacts
 	}
+	if r.Diff != nil {
+		m["diff"] = r.Diff
+	}
 	return m
 }
 
@@ -237,4 +258,28 @@ func splitLines(s string) []any {
 		out = append(out, s[start:])
 	}
 	return out
+}
+
+// numbers converts decoded json.Numbers the way Python's json module
+// would: integer literals to int64, the rest to float64.
+func numbers(v any) any {
+	switch t := v.(type) {
+	case json.Number:
+		if i, err := t.Int64(); err == nil {
+			return i
+		}
+		f, _ := t.Float64()
+		return f
+	case map[string]any:
+		for k, e := range t {
+			t[k] = numbers(e)
+		}
+		return t
+	case []any:
+		for i, e := range t {
+			t[i] = numbers(e)
+		}
+		return t
+	}
+	return v
 }

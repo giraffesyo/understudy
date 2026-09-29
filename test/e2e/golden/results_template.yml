@@ -1,0 +1,77 @@
+---
+# Result dicts of template. A changed render reports "src", the
+# transferred temp file on the target (<remote tmp>/ansible-tmp-<time>-
+# <pid>-<random>/.source<ext>), unique per run: those results are printed
+# without it and its shape is checked instead. Diffs are not displayed
+# here: their "after" header names the controller's temp render file.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/t"
+    v: one
+    nosrc: "{{ r | dict2items | rejectattr('key', 'in', ['src', 'backup_file']) | items2dict }}"
+  tasks:
+    - name: setup directory
+      file: {path: "{{ d }}", state: directory}
+
+    - name: render a template
+      template: {src: results.j2, dest: "{{ d }}/out.txt"}
+      register: r
+    - debug: {var: nosrc}
+    - debug: {msg: "{{ r.src is match('.*/ansible-tmp-[^/]*/\\.source\\.txt$') }}"}
+
+    - name: render it again (idempotent)
+      template: {src: results.j2, dest: "{{ d }}/out.txt"}
+      register: r
+    - debug: {var: r}
+
+    - name: render with a mode
+      template: {src: results.j2, dest: "{{ d }}/out.txt", mode: "0600"}
+      register: r
+    - debug: {var: r}
+
+    - name: render changed content with a backup
+      template: {src: results.j2, dest: "{{ d }}/out.txt", backup: true}
+      vars: {v: two}
+      register: r
+    - debug: {var: nosrc}
+
+    - name: render into a directory
+      template: {src: results.j2, dest: "{{ d }}/"}
+      register: r
+    - debug: {var: nosrc}
+
+    - name: render into a directory again
+      template: {src: results.j2, dest: "{{ d }}"}
+      register: r
+    - debug: {var: r}
+
+    - name: render with force=false onto an existing file
+      template: {src: results.j2, dest: "{{ d }}/out.txt", force: false}
+      vars: {v: three}
+      register: r
+    - debug: {var: nosrc}
+
+    - name: render to a missing directory fails
+      template: {src: results.j2, dest: "{{ d }}/missing/out.txt"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: render a missing template fails
+      template: {src: no_such_template.j2, dest: "{{ d }}/x.txt"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: render with a failing validate
+      template: {src: results.j2, dest: "{{ d }}/v.txt", validate: "grep -q nomatch %s"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: render with state fails
+      template: {src: results.j2, dest: "{{ d }}/x.txt", state: file}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}

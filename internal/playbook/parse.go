@@ -829,7 +829,13 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			task.RemoteUser, _ = val.Str()
 		case "connection":
 			task.Connection, _ = val.Str()
-		case "diff", "throttle", "timeout", "ignore_unreachable", "collections",
+		case "diff":
+			b, err := decodeBool(val, file, "diff")
+			if err != nil {
+				return nil, err
+			}
+			task.Diff = &b
+		case "throttle", "timeout", "ignore_unreachable", "collections",
 			"module_defaults", "debugger", "become_flags", "become_exe", "port":
 			// Accepted: no effect on execution outcome here.
 		case "async":
