@@ -25,7 +25,7 @@ func groupModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		return agentproto.Fail("%v", err)
 	}
 	name := p.Str("name")
-	res := &agentproto.Result{Extra: map[string]any{"name": name}}
+	res := &agentproto.Result{Extra: map[string]any{"name": name, "state": p.Str("state")}}
 
 	currentGID := groupID(env, name)
 	exists := currentGID != ""
@@ -70,7 +70,10 @@ func groupModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		}
 	}
 	if gid := groupID(env, name); gid != "" {
-		res.Extra["gid"] = gid
+		res.Extra["gid"] = atoiOr(strings.TrimSpace(gid))
+	} else if p.Has("gid") {
+		res.Extra["gid"] = p.Int("gid")
 	}
+	res.Extra["system"] = p.Bool("system")
 	return res
 }

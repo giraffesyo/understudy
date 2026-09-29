@@ -46,7 +46,7 @@ func userModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		return agentproto.Fail("%v", err)
 	}
 	name := p.Str("name")
-	res := &agentproto.Result{Extra: map[string]any{"name": name}}
+	res := &agentproto.Result{Extra: map[string]any{"name": name, "state": p.Str("state")}}
 
 	current, exists := getentPasswd(env, name)
 
@@ -55,6 +55,8 @@ func userModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 			return res
 		}
 		res.Changed = true
+		res.Extra["force"] = false
+		res.Extra["remove"] = p.Bool("remove")
 		if env.CheckMode {
 			return res
 		}
@@ -81,10 +83,9 @@ func userModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		if out, err := runOut(env, "useradd", argv...); err != nil {
 			return agentproto.Fail("useradd %s failed: %v: %s", name, err, tail(out))
 		}
-		if entry, ok := getentPasswd(env, name); ok {
-			res.Extra["uid"] = entry.uid
-			res.Extra["home"] = entry.home
-		}
+		res.Extra["create_home"] = p.Bool("create_home")
+		res.Extra["system"] = p.Bool("system")
+		addUserInfo(env, res, name, p, wantGroups)
 		return res
 	}
 
@@ -124,19 +125,50 @@ func userModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		argv = append(argv, "-p", p.Str("password"))
 	}
 
+	res.Extra["append"] = p.Bool("append")
+	res.Extra["move_home"] = false
 	if len(argv) == 0 {
-		res.Extra["uid"] = current.uid
+		addUserInfo(env, res, name, p, wantGroups)
 		return res
 	}
 	res.Changed = true
 	if env.CheckMode {
+		addUserInfo(env, res, name, p, wantGroups)
 		return res
 	}
 	argv = append(argv, name)
 	if out, err := runOut(env, "usermod", argv...); err != nil {
 		return agentproto.Fail("usermod %s failed: %v: %s", name, err, tail(out))
 	}
+	addUserInfo(env, res, name, p, wantGroups)
 	return res
+}
+
+// addUserInfo reports the account as Ansible's user module does: uid,
+// group (gid), comment, home and shell from the passwd entry, plus groups
+// and a masked password when those were requested.
+func addUserInfo(env *RunEnv, res *agentproto.Result, name string, p *args.Parsed, groups []string) {
+	if entry, ok := getentPasswd(env, name); ok {
+		res.Extra["uid"] = atoiOr(entry.uid)
+		res.Extra["group"] = atoiOr(entry.gid)
+		res.Extra["comment"] = entry.comment
+		res.Extra["home"] = entry.home
+		res.Extra["shell"] = entry.shell
+	}
+	if len(groups) > 0 {
+		res.Extra["groups"] = strings.Join(groups, ",")
+	}
+	if p.Str("password") != "" {
+		res.Extra["password"] = "NOT_LOGGING_PASSWORD"
+	}
+}
+
+func atoiOr(s string) any {
+	var n int64
+	if _, err := fmt.Sscan(s, &n); err == nil {
+		return n
+	}
+	return s
 }
 
 func buildUserArgs(p *args.Parsed, wantGroups []string, creating bool) []string {
