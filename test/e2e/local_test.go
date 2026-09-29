@@ -996,3 +996,29 @@ func TestAsyncJobsAndStatus(t *testing.T) {
 		t.Fatalf("exit=%d\n%s", code, out)
 	}
 }
+
+func TestParallelBlockOptIn(t *testing.T) {
+	start := time.Now()
+	code, out, stats := run(t, `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - vars: {understudy_parallel: true}
+      block:
+        - command: sleep 2
+        - command: sleep 2
+        - block:
+            - set_fact: {first: 1}
+            - assert: {that: "first == 1"}
+    - debug: {msg: after}
+`, executor.Options{})
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s", code, out)
+	}
+	if d := time.Since(start); d > 3500*time.Millisecond {
+		t.Errorf("parallel block took %v; the two 2s tasks should overlap", d)
+	}
+	if st := stats["localhost"]; st == nil || st.OK != 5 || st.Changed != 2 {
+		t.Errorf("stats = %+v", st)
+	}
+}

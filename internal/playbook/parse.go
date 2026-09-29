@@ -551,7 +551,8 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 			continue
 		}
 		refs := append(append([]BlockRef{}, enclosing...),
-			BlockRef{ID: id, Section: sec.section, HasRescue: hasRescue})
+			BlockRef{ID: id, Section: sec.section, HasRescue: hasRescue,
+				Parallel: sec.section == SectionBlock && truthyVar(inh.Vars["understudy_parallel"])})
 		tasks, err := parseTaskListIn(secNode, file, handlers, bc, refs)
 		if err != nil {
 			return nil, err
@@ -1157,4 +1158,17 @@ func parseVarsPrompt(node *yaml.Node, file string) ([]VarPrompt, error) {
 		out = append(out, vp)
 	}
 	return out, nil
+}
+
+func truthyVar(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		switch strings.ToLower(t) {
+		case "yes", "true", "on", "1":
+			return true
+		}
+	}
+	return false
 }
