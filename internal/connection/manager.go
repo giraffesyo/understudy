@@ -24,6 +24,8 @@ type ManagerOptions struct {
 	Timeout         time.Duration
 	RemoteTmp       string
 	KeyPassphrase   func() (string, error)
+	SSHArgs         []string // --ssh-common-args / --ssh-extra-args
+	Warn            func(string)
 }
 
 // Manager caches one connection (and bootstrapped agent) per host.
@@ -170,6 +172,30 @@ func (m *Manager) dial(ctx context.Context, host string, kw Keywords) (Connectio
 		}
 		if key := m.strVar(host, "ansible_ssh_private_key_file", m.Opts.PrivateKey); key != "" {
 			cfg.PrivateKeys = append(cfg.PrivateKeys, key)
+		}
+		// OpenSSH client options: host vars override the CLI flags.
+		sshArgs := append([]string{}, m.Opts.SSHArgs...)
+		for _, v := range []string{"ansible_ssh_common_args", "ansible_ssh_extra_args"} {
+			if a := m.strVar(host, v, ""); a != "" {
+				sshArgs = append(sshArgs, a)
+			}
+		}
+		if len(sshArgs) > 0 {
+			o, err := parseSSHArgs(sshArgs...)
+			if err != nil {
+				return nil, false, err
+			}
+			cfg.ProxyJump, cfg.ProxyCommand = o.ProxyJump, o.ProxyCommand
+			cfg.PrivateKeys = append(cfg.PrivateKeys, o.IdentityFiles...)
+			if o.Port != 0 && m.intVar(host, "ansible_port", 0) == 0 {
+				cfg.Port = o.Port
+			}
+			if o.StrictHostKeys != nil {
+				cfg.HostKeyChecking = *o.StrictHostKeys
+			}
+			if len(o.Ignored) > 0 && m.Opts.Warn != nil {
+				m.Opts.Warn(fmt.Sprintf("ignoring SSH client options %v: no equivalent in understudy's native SSH client", o.Ignored))
+			}
 		}
 		conn, err := DialSSH(cfg)
 		if err != nil {
