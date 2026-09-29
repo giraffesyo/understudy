@@ -230,8 +230,16 @@ func (p *Parsed) Bool(name string) bool {
 
 // Int returns an int argument (0 if absent).
 func (p *Parsed) Int(name string) int64 {
-	n, _ := p.values[name].(int64)
-	return n
+	// Spec defaults are untyped Go constants (int); parsed values are int64.
+	switch n := p.values[name].(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
+	}
+	return 0
 }
 
 // List returns a list argument (nil if absent).
