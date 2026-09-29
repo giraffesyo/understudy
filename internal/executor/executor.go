@@ -288,6 +288,7 @@ func (r *Runner) runPlayBatch(ctx context.Context, play *playbook.Play, playHost
 		gather := &playbook.Task{
 			Name:    "Gathering Facts",
 			Module:  "setup",
+			Args:    play.GatherArgs,
 			LoopVar: "item",
 			Src:     play.Src,
 		}
@@ -1322,6 +1323,10 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 		}
 		stripped := make(map[string]any, len(res.AnsibleFacts))
 		for k, v := range res.AnsibleFacts {
+			if k == "ansible_local" {
+				stripped[k] = v // namespace_facts keeps ansible_local as-is
+				continue
+			}
 			stripped[strings.TrimPrefix(k, "ansible_")] = v
 		}
 		for _, h := range r.factHosts(host, target, task) {
