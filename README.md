@@ -163,7 +163,9 @@ rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 `connection`/`remote_user`, `action`/`local_action`, `async`/`poll` (including
 fire-and-forget).
 
-**Templating** — a Jinja2-compatible engine with `if`/`for`/`set`, ~70
+**Templating** — a Jinja2-compatible engine with `if`/`for`/`set`, macros and
+`call`, `include`/`import`/`extends`, block `set`/`filter`/`with`, recursive
+loops and `namespace()`, ~70
 filters (`default`, `combine`, `selectattr`, `regex_replace`, `to_json`,
 `map`, `ternary`, `hash`, …), ~50 tests (`version`, `match`, task-result
 tests, …), chainable strict `Undefined`, and the native-types rule for
@@ -227,8 +229,7 @@ than silently diverging. Known boundaries:
 - **Targets**: the agent supports `linux/amd64` and `linux/arm64`. Other
   platforms fall back to the `raw` module.
 - **Not yet implemented** (these error clearly, they are not silently
-  ignored): `strategy` other than linear, `vars_prompt`, template macros /
-  `include`/`extends`, and
+  ignored): `strategy` other than linear, `vars_prompt`, and
   lookups beyond `env`/`file`/`fileglob`/`first_found`/`dict`/`password`.
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
   strings; regular expressions use Go's RE2 (lookaround and backreferences

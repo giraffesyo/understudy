@@ -16,15 +16,17 @@ type ifBranch struct {
 }
 
 type forNode struct {
-	loopVars []string // one name, or several for tuple unpacking
-	iter     Expr
-	cond     Expr // optional inline `if` clause
-	body     []tmplNode
-	els      []tmplNode // {% else %}: runs when the iterable is empty
+	loopVars  []string // one name, or several for tuple unpacking
+	iter      Expr
+	cond      Expr // optional inline `if` clause
+	recursive bool
+	body      []tmplNode
+	els       []tmplNode // {% else %}: runs when the iterable is empty
 }
 
 type setNode struct {
 	name string
+	attr string // {% set ns.attr = ... %}
 	val  Expr
 }
 
@@ -50,10 +52,39 @@ func (p *parser) parseStatement() (tmplNode, error) {
 	case "set":
 		p.next()
 		return p.parseSet()
-	case "elif", "else", "endif", "endfor", "endraw":
+	case "macro":
+		p.next()
+		return p.parseMacro()
+	case "call":
+		p.next()
+		return p.parseCallBlock()
+	case "filter":
+		p.next()
+		return p.parseFilterBlock()
+	case "with":
+		p.next()
+		return p.parseWith()
+	case "include":
+		p.next()
+		return p.parseInclude()
+	case "import":
+		p.next()
+		return p.parseImport()
+	case "from":
+		p.next()
+		return p.parseFromImport()
+	case "extends":
+		p.next()
+		return p.parseExtends()
+	case "block":
+		p.next()
+		return p.parseBlockStmt()
+	case "elif", "else", "endif", "endfor", "endraw", "endmacro", "endcall", "endfilter",
+		"endwith", "endblock", "endset":
 		return nil, p.errf("unexpected '{%% %s %%}': no matching open block", t.val)
-	case "macro", "call", "include", "import", "from", "extends", "block", "filter", "do", "with":
-		return nil, p.errf("'{%% %s %%}' is not supported yet", t.val)
+	case "do":
+		// ansible-core does not enable jinja2.ext.do.
+		return nil, p.errf("Encountered unknown tag 'do'.")
 	}
 	return nil, p.errf("unknown statement '{%% %s %%}'", t.val)
 }
@@ -74,7 +105,7 @@ func (p *parser) blockTag(names ...string) (string, error) {
 	for _, name := range names {
 		if t.val == name {
 			p.next()
-			if name == "else" || name == "endif" || name == "endfor" {
+			if name != "elif" { // elif is followed by its condition
 				if _, err := p.expect(tokBlockEnd); err != nil {
 					return "", err
 				}
@@ -211,7 +242,8 @@ func (p *parser) parseFor() (tmplNode, error) {
 		node.cond = cond
 	}
 	if p.isName("recursive") {
-		return nil, p.errf("'recursive' for loops are not supported yet")
+		p.next()
+		node.recursive = true
 	}
 	if _, err := p.expect(tokBlockEnd); err != nil {
 		return nil, err
@@ -245,8 +277,20 @@ func (p *parser) parseSet() (tmplNode, error) {
 	if err != nil {
 		return nil, err
 	}
+	attr := ""
+	if p.kind() == tokDot {
+		p.next()
+		a, err := p.expect(tokName)
+		if err != nil {
+			return nil, err
+		}
+		attr = a.val
+	}
+	if attr == "" && (p.kind() == tokBlockEnd || p.kind() == tokPipe) {
+		return p.parseSetBlock(t.val)
+	}
 	if p.kind() != tokAssign {
-		return nil, p.errf("expected '=' in set statement ({%% set x = value %%}); block-form set is not supported yet")
+		return nil, p.errf("expected '=' in set statement")
 	}
 	p.next()
 	val, err := p.parseExpression()
@@ -256,7 +300,7 @@ func (p *parser) parseSet() (tmplNode, error) {
 	if _, err := p.expect(tokBlockEnd); err != nil {
 		return nil, err
 	}
-	return &setNode{name: t.val, val: val}, nil
+	return &setNode{name: t.val, attr: attr, val: val}, nil
 }
 
 // renderOutput accumulates rendered template text.
@@ -279,23 +323,6 @@ func (o *renderOutput) writeValue(v any) {
 		return
 	}
 	o.b.WriteString(toStr(v))
-}
-
-// loopInfo is the `loop` variable inside {% for %}.
-type loopInfo struct {
-	index, length int
-}
-
-func (li loopInfo) toMapping() map[string]any {
-	return map[string]any{
-		"index":     int64(li.index + 1),
-		"index0":    int64(li.index),
-		"revindex":  int64(li.length - li.index),
-		"revindex0": int64(li.length - li.index - 1),
-		"first":     li.index == 0,
-		"last":      li.index == li.length-1,
-		"length":    int64(li.length),
-	}
 }
 
 // execNodes renders a node list into the output collector.
@@ -330,9 +357,24 @@ func (ec *EvalCtx) execNodes(nodes []tmplNode, out *renderOutput) error {
 			if err != nil {
 				return err
 			}
+			if t.attr != "" {
+				target, _ := ec.lookupName(t.name)
+				ns, ok := target.(*namespaceValue)
+				if !ok {
+					return ec.errf(0, "cannot assign attribute on non-namespace object")
+				}
+				ns.attrs[t.attr] = v
+				continue
+			}
 			ec.locals[t.name] = v
 		default:
-			return fmt.Errorf("internal error: unknown template node %T", n)
+			handled, err := ec.execExt(n, out)
+			if err != nil {
+				return err
+			}
+			if !handled {
+				return fmt.Errorf("internal error: unknown template node %T", n)
+			}
 		}
 	}
 	return nil
@@ -362,6 +404,13 @@ func (ec *EvalCtx) execFor(node *forNode, out *renderOutput) error {
 	if err != nil {
 		return err
 	}
+	return ec.runLoop(node, iterVal, 0, out)
+}
+
+// runLoop renders a for loop over iterVal at the given recursion depth.
+// Each iteration runs in its own scope, so {% set %} inside the body does
+// not leak out (Jinja semantics; namespace() objects are the escape hatch).
+func (ec *EvalCtx) runLoop(node *forNode, iterVal any, depth int, out *renderOutput) error {
 	if u, ok := iterVal.(Undefined); ok {
 		return &UndefinedError{Pos: ec.pos, Name: u.Name}
 	}
@@ -381,10 +430,11 @@ func (ec *EvalCtx) execFor(node *forNode, out *renderOutput) error {
 	if node.cond != nil {
 		var kept []any
 		for _, item := range items {
-			if err := ec.bindLoopVars(node.loopVars, item); err != nil {
+			frame := ec.child()
+			if err := frame.bindLoopVars(node.loopVars, item); err != nil {
 				return err
 			}
-			cond, err := ec.eval(node.cond)
+			cond, err := frame.eval(node.cond)
 			if err != nil {
 				return err
 			}
@@ -397,34 +447,20 @@ func (ec *EvalCtx) execFor(node *forNode, out *renderOutput) error {
 
 	if len(items) == 0 {
 		if node.els != nil {
-			return ec.execNodes(node.els, out)
+			return ec.child().execNodes(node.els, out)
 		}
 		return nil
 	}
 
-	// Save and restore shadowed locals: Jinja loop vars are scoped.
-	saved := map[string]any{}
-	savedOK := map[string]bool{}
-	shadowed := append([]string{"loop"}, node.loopVars...)
-	for _, name := range shadowed {
-		saved[name], savedOK[name] = ec.locals[name]
-	}
-	defer func() {
-		for _, name := range shadowed {
-			if savedOK[name] {
-				ec.locals[name] = saved[name]
-			} else {
-				delete(ec.locals, name)
-			}
-		}
-	}()
-
+	changedState := &loopChanged{}
 	for i, item := range items {
-		ec.locals["loop"] = loopInfo{index: i, length: len(items)}.toMapping()
-		if err := ec.bindLoopVars(node.loopVars, item); err != nil {
+		frame := ec.child()
+		frame.locals["loop"] = &loopValue{index: i, items: items, depth: depth,
+			node: node, ec: ec, changed: changedState}
+		if err := frame.bindLoopVars(node.loopVars, item); err != nil {
 			return err
 		}
-		if err := ec.execNodes(node.body, out); err != nil {
+		if err := frame.execNodes(node.body, out); err != nil {
 			return err
 		}
 	}

@@ -406,16 +406,32 @@ func TestEvalBool(t *testing.T) {
 	}
 }
 
-func TestUnsupportedStatementsRejected(t *testing.T) {
+func TestTemplateStatements(t *testing.T) {
 	e := New()
-	for _, src := range []string{
-		"{% macro f() %}{% endmacro %}",
-		"{% include 'x.j2' %}",
-		"{% extends 'base' %}",
+	for src, want := range map[string]string{
+		"{% macro f(a, b=2) %}{{ a }}{{ b }}{% endmacro %}{{ f(1) }}{{ f(1, b=3) }}":                       "1213",
+		"{% set ns = namespace(n=0) %}{% for i in [1,2] %}{% set ns.n = ns.n + i %}{% endfor %}{{ ns.n }}": "3",
+		"{% set x = 'out' %}{% for i in [1] %}{% set x = 'in' %}{% endfor %}{{ x }}":                       "out",
+		"{% set b %}inner{% endset %}{{ b | upper }}":                                                      "INNER",
+		"{% filter upper %}a{{ 'b' }}{% endfilter %}":                                                      "AB",
+		"{% with v = 5 %}{{ v }}{% endwith %}":                                                             "5",
+		"{% for i in 'ab' %}{{ loop.revindex }}{{ loop.cycle('x','y') }}{% endfor %}":                      "2x1y",
+	} {
+		out, err := e.RenderString(src, MapVars{}, testPos)
+		if err != nil || out != want {
+			t.Errorf("%s = %q, %v; want %q", src, out, err, want)
+		}
+	}
+	// ansible-core does not enable the do extension; a string template
+	// has no search path, so composition fails as "not found".
+	for src, want := range map[string]string{
+		"{% do x %}":           "unknown tag 'do'",
+		"{% include 'x.j2' %}": "template not found",
+		"{% extends 'base' %}": "template not found",
 	} {
 		_, err := e.RenderTemplate(src, nil, testPos)
-		if err == nil || !strings.Contains(err.Error(), "not supported yet") {
-			t.Errorf("%s: error = %v, want 'not supported yet'", src, err)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: error = %v, want %q", src, err, want)
 		}
 	}
 }

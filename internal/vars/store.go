@@ -6,6 +6,7 @@ package vars
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"sync"
 
@@ -90,9 +91,15 @@ func (s *Store) AddVarsFile(vars map[string]any) { s.set(LPlayVarsFiles, "", var
 // SetExtraVars installs -e vars (highest precedence).
 func (s *Store) SetExtraVars(vars map[string]any) { s.set(LExtraVars, "", vars) }
 
+// Final marks a value that is already the product of templating (a
+// registered result, a set_fact value, a gathered fact, a loop item):
+// reading it never templates it again, as in Ansible, where such values
+// are unsafe/final — command output containing "{{" stays literal.
+type Final struct{ V any }
+
 // SetHostFact records set_fact/register results for one host.
 func (s *Store) SetHostFact(host, name string, value any) {
-	s.set(LHostFacts, host, map[string]any{name: value})
+	s.set(LHostFacts, host, map[string]any{name: Final{value}})
 }
 
 // SetInventoryVars installs a host's merged inventory vars (group vars in
@@ -106,12 +113,19 @@ func (s *Store) SetInventoryVars(host string, vars map[string]any) {
 func (s *Store) RawHostVar(host, name string) (any, bool) {
 	flat := s.flatten(host)
 	v, ok := flat[name]
+	if f, isFinal := v.(Final); isFinal {
+		v = f.V
+	}
 	return v, ok
 }
 
 // SetFacts records gathered facts for one host.
 func (s *Store) SetFacts(host string, facts map[string]any) {
-	s.set(LFacts, host, facts)
+	final := make(map[string]any, len(facts))
+	for k, v := range facts {
+		final[k] = Final{v}
+	}
+	s.set(LFacts, host, final)
 }
 
 // ClearFacts drops a host's gathered facts (meta: clear_facts); set_fact
@@ -284,6 +298,8 @@ func (c *Context) deepTemplate(v any) (any, error) {
 		return c.store.engine.RenderTemplate(t, c, c.pos)
 	case yaml.UnsafeString:
 		return t, nil // never re-templated
+	case Final:
+		return t.V, nil
 	case yaml.VaultedString:
 		if c.store.VaultDecrypt == nil {
 			return nil, fmt.Errorf("an encrypted value was found but no vault password was provided (use --vault-password-file or --ask-vault-pass)")
@@ -346,9 +362,12 @@ func (c *Context) TemplateString(s string) (out any, err error) {
 
 // RenderFile renders template-file content: output is always text and the
 // given position (the template file itself) is used for errors.
-func (c *Context) RenderFile(src string, pos template.Position) (out string, err error) {
+func (c *Context) RenderFile(src string, pos template.Position, searchPath ...string) (out string, err error) {
 	defer capturePanic(&err)
-	return c.store.engine.RenderString(src, c, pos)
+	if len(searchPath) == 0 {
+		searchPath = []string{filepath.Dir(pos.File)}
+	}
+	return c.store.engine.RenderFile(src, c, pos, searchPath)
 }
 
 // EvalWhen evaluates a when: clause list (implicit AND).

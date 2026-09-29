@@ -1,0 +1,20 @@
+---
+# Templating output is final: registered output, set_fact results and
+# strings built in expressions are never templated again.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    secret: SECRET
+  tasks:
+    - command: echo "{{ '{{' }} secret }}"
+      register: out
+    - debug: {var: out.stdout}
+    - debug: {var: out.stdout_lines}
+    - debug: {msg: "{{ out.stdout }}"}
+    - set_fact: {sf: "{{ '{{' }} secret }}"}
+    - debug: {var: sf}
+    - debug: {msg: "{{ sf }}"}
+    - set_fact: {sf2: "{{ out.stdout }}"}
+    - debug: {var: sf2}
+    - set_fact: {lst: "{{ out.stdout_lines + ['{{ secret }}'] }}"}
+    - debug: {var: lst}

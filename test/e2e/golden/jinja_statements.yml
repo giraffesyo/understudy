@@ -1,0 +1,21 @@
+---
+# Jinja composition and statements: macros (defaults, varargs/kwargs,
+# caller), call blocks, import/from-import, include (with context, lists,
+# ignore missing), extends/block/super, block set, filter/with blocks,
+# loop scoping vs namespace(), loop attributes, recursive loops, raw.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    shared: SHARED
+    tree:
+      - {name: a, kids: [{name: b, kids: []}, {name: c, kids: [{name: d, kids: []}]}]}
+      - {name: e, kids: []}
+  tasks:
+    - template: {src: jinja/main.j2, dest: "{{ workdir }}/main.out"}
+    - template: {src: jinja/child.j2, dest: "{{ workdir }}/child.out"}
+    - command: cat "{{ workdir }}/main.out"
+      register: m
+    - debug: {var: m.stdout_lines}
+    - command: cat "{{ workdir }}/child.out"
+      register: c
+    - debug: {var: c.stdout_lines}
