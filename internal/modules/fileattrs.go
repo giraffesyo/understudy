@@ -43,6 +43,12 @@ func (d *fileDiff) set(key string, before, after any) {
 	if d == nil {
 		return
 	}
+	if d.Before == nil {
+		d.Before = map[string]any{}
+	}
+	if d.After == nil {
+		d.After = map[string]any{}
+	}
 	d.Before[key] = before
 	d.After[key] = after
 }
@@ -56,6 +62,69 @@ func (d *fileDiff) value() map[string]any {
 func textDiff(beforeHeader, before, afterHeader, after string) map[string]any {
 	return map[string]any{"before_header": beforeHeader, "before": before,
 		"after_header": afterHeader, "after": after}
+}
+
+// attrDiffValue is the "(file attributes)" diff entry lineinfile-style
+// modules return: the headers plus whatever set_fs_attributes recorded.
+func attrDiffValue(d *fileDiff, path string) map[string]any {
+	m := map[string]any{
+		"before_header": path + " (file attributes)",
+		"after_header":  path + " (file attributes)",
+	}
+	if d.Before != nil {
+		m["before"] = d.Before
+	}
+	if d.After != nil {
+		m["after"] = d.After
+	}
+	return m
+}
+
+// checkFileAttrs is the check_file_attrs helper lineinfile, blockinfile
+// and replace share: attribute changes extend the message.
+func checkFileAttrs(env *RunEnv, fa fileAttrs, changed bool, msg string, diff *fileDiff) (string, bool, *agentproto.Result) {
+	attrChanged, fail := setFSAttrs(env, fa, false, diff)
+	if fail != nil {
+		return msg, changed, fail
+	}
+	if attrChanged {
+		if changed {
+			msg += " and "
+		}
+		changed = true
+		msg += "ownership, perms or SE linux context changed"
+	}
+	return msg, changed, nil
+}
+
+// writeChanges is the write_changes helper of lineinfile/blockinfile:
+// content goes to a temp file, is optionally validated, then atomically
+// moved onto the real path.
+func writeChanges(env *RunEnv, content []byte, dest, validate string, unsafeWrites bool) *agentproto.Result {
+	tmp, err := os.CreateTemp("", "tmp")
+	if err != nil {
+		return moduleCrash(err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return moduleCrash(err)
+	}
+	tmp.Close()
+	if validate != "" {
+		if !strings.Contains(validate, "%s") {
+			return agentproto.Fail("validate must contain %%s: %s", validate)
+		}
+		rc, _, errOut := runValidate(env, strings.ReplaceAll(validate, "%s", tmpName))
+		if rc != 0 {
+			return agentproto.Fail("failed to validate: rc:%d error:%s", rc, errOut)
+		}
+	}
+	if err := fsutil.AtomicMove(tmpName, dest, true); err != nil {
+		return moduleCrash(err)
+	}
+	return nil
 }
 
 // failErr is a module failure carried as a Go error through the helpers.

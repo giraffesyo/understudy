@@ -10,6 +10,40 @@ import (
 	"strings"
 )
 
+// MutuallyExclusive is check_mutually_exclusive over the raw (aliased)
+// arguments: every group with more than one member present is reported.
+func (s Spec) MutuallyExclusive(raw map[string]any, groups ...[]string) error {
+	present := map[string]bool{}
+	for key := range raw {
+		for name, def := range s {
+			if key == name {
+				present[name] = true
+			}
+			for _, a := range def.Aliases {
+				if key == a {
+					present[name] = true
+				}
+			}
+		}
+	}
+	var bad []string
+	for _, g := range groups {
+		n := 0
+		for _, name := range g {
+			if present[name] {
+				n++
+			}
+		}
+		if n > 1 {
+			bad = append(bad, strings.Join(g, "|"))
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("parameters are mutually exclusive: %s", strings.Join(bad, ", "))
+	}
+	return nil
+}
+
 // Spec maps argument names to their definitions.
 type Spec map[string]Def
 

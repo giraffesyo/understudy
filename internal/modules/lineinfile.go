@@ -1,7 +1,7 @@
 package modules
 
 import (
-	"bytes"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -16,116 +16,441 @@ func init() {
 }
 
 var lineinfileSpec = args.Spec{
-	"path":         {Required: true, Aliases: []string{"dest", "name", "destfile"}},
-	"line":         {Aliases: []string{"value"}},
-	"regexp":       {Aliases: []string{"regex"}},
-	"state":        {Default: "present", Choices: []string{"present", "absent"}},
-	"insertafter":  {},
-	"insertbefore": {},
-	"backrefs":     {Type: "bool", Default: false},
-	"create":       {Type: "bool", Default: false},
-	"backup":       {Type: "bool", Default: false},
-	"firstmatch":   {Type: "bool", Default: false},
-	"mode":         {Type: "any"},
-	"owner":        {},
-	"group":        {},
+	"path":          {Required: true, Aliases: []string{"dest", "destfile", "name"}},
+	"state":         {Default: "present", Choices: []string{"absent", "present"}},
+	"regexp":        {Aliases: []string{"regex"}},
+	"search_string": {},
+	"line":          {Aliases: []string{"value"}},
+	"encoding":      {Default: "utf-8"},
+	"insertafter":   {},
+	"insertbefore":  {},
+	"backrefs":      {Type: "bool", Default: false},
+	"create":        {Type: "bool", Default: false},
+	"backup":        {Type: "bool", Default: false},
+	"firstmatch":    {Type: "bool", Default: false},
+	"validate":      {},
+	"mode":          {Type: "any"},
+	"owner":         {},
+	"group":         {},
+	"seuser":        {},
+	"serole":        {},
+	"setype":        {},
+	"selevel":       {},
+	"attributes":    {Aliases: []string{"attr"}},
+	"unsafe_writes": {Type: "bool", Default: false},
 }
 
-// lineinfileModule ensures a single line is present (or absent) in a file.
-// Changed only when the resulting bytes differ.
+// lineinfileRun holds one invocation (the module's parameters).
+type lineinfileRun struct {
+	env                 *RunEnv
+	p                   *args.Parsed
+	path                string
+	regexp, search      *string
+	line                *string
+	insertAfter, insBef *string
+}
+
+func optStr(p *args.Parsed, k string) *string {
+	if !p.Has(k) {
+		return nil
+	}
+	s := p.Str(k)
+	return &s
+}
+
+// lineinfileModule ports ansible.builtin.lineinfile: results carry msg,
+// backup and a [content, file attributes] diff list, like Ansible's.
 func lineinfileModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
+	if err := lineinfileSpec.MutuallyExclusive(rawArgs,
+		[]string{"insertbefore", "insertafter"}, []string{"regexp", "search_string"},
+		[]string{"backrefs", "search_string"}); err != nil {
+		return agentproto.Fail("%v", err)
+	}
 	p, err := lineinfileSpec.Parse(rawArgs)
 	if err != nil {
 		return agentproto.Fail("%v", err)
 	}
-	path := p.Str("path")
-	state := p.Str("state")
-	line := p.Str("line")
-	pattern := p.Str("regexp")
-	backrefs := p.Bool("backrefs")
+	if enc := strings.ToLower(p.Str("encoding")); enc != "utf-8" && enc != "utf8" {
+		return agentproto.Fail("lineinfile: encoding %q is not supported (utf-8 only)", p.Str("encoding"))
+	}
+	l := &lineinfileRun{env: env, p: p, path: pyExpandPath(p.Str("path")),
+		regexp: optStr(p, "regexp"), search: optStr(p, "search_string"), line: optStr(p, "line"),
+		insertAfter: optStr(p, "insertafter"), insBef: optStr(p, "insertbefore")}
 
-	if state == "present" && !p.Has("line") {
-		return agentproto.Fail("line is required with state=present")
-	}
-	if backrefs && pattern == "" {
-		return agentproto.Fail("backrefs=true requires regexp")
-	}
-	if p.Str("insertafter") != "" && p.Str("insertbefore") != "" {
-		return agentproto.Fail("insertafter and insertbefore are mutually exclusive")
-	}
-
-	var re *regexp.Regexp
-	if pattern != "" {
-		re, err = compilePyPattern(pattern)
-		if err != nil {
-			return agentproto.Fail("regexp: %v", err)
+	var warnings []any
+	if (l.regexp != nil && *l.regexp == "") || (l.search != nil && *l.search == "") {
+		name := "search string"
+		msg := "The %s is an empty string, which will match every line in the file. " +
+			"This may have unintended consequences, such as replacing the last line in the file rather than appending."
+		if l.regexp != nil && *l.regexp == "" {
+			name = "regular expression"
+			msg += " If this is desired, use '^' to match every line in the file and avoid this warning."
 		}
+		warnings = append(warnings, fmt.Sprintf(msg, name))
 	}
-
-	original, err := os.ReadFile(path)
-	exists := err == nil
-	if !exists {
-		if state == "absent" {
-			return &agentproto.Result{Msg: "file not present"}
+	res := l.run()
+	if len(warnings) > 0 {
+		if res.Extra == nil {
+			res.Extra = map[string]any{}
 		}
-		if !p.Bool("create") {
-			return agentproto.Fail("file %s does not exist (use create=true)", path)
-		}
-		original = nil
-	}
-
-	hadTrailingNewline := len(original) == 0 || bytes.HasSuffix(original, []byte("\n"))
-	lines := splitFileLines(original)
-
-	var newLines []string
-	var changedMsg string
-	if state == "absent" {
-		newLines = removeLines(lines, re, line, p.Has("line"))
-		changedMsg = "line(s) removed"
-	} else {
-		newLines, changedMsg, err = ensureLine(lines, re, line, backrefs,
-			p.Str("insertafter"), p.Str("insertbefore"), p.Bool("firstmatch"))
-		if err != nil {
-			return agentproto.Fail("%v", err)
-		}
-	}
-
-	newContent := joinFileLines(newLines, hadTrailingNewline || len(lines) == 0)
-	changed := !bytes.Equal(original, newContent) || !exists
-
-	res := &agentproto.Result{Changed: changed, Msg: changedMsg}
-	if !changed {
-		res.Msg = ""
-	}
-	if env.DiffMode && changed {
-		res.Diff = []any{textDiff(path, string(original), path, string(newContent))}
-	}
-	if !changed || env.CheckMode {
-		return res
-	}
-
-	if p.Bool("backup") && exists {
-		backupPath, err := fsutil.Backup(path)
-		if err != nil {
-			return agentproto.Fail("backup of %s failed: %v", path, err)
-		}
-		res.Extra = map[string]any{"backup_file": backupPath}
-	}
-	// Preserve the existing file's mode and owner across the rewrite (new
-	// files get 0644); explicit mode/owner/group override afterward.
-	if err := fsutil.AtomicRewrite(path, bytes.NewReader(newContent), 0o644); err != nil {
-		return agentproto.Fail("writing %s: %v", path, err)
-	}
-	if p.Has("mode") || p.Str("owner") != "" || p.Str("group") != "" {
-		var mode any
-		if p.Has("mode") {
-			mode = p.Any("mode")
-		}
-		if _, err := fsutil.ApplyFileAttrs(path, mode, p.Str("owner"), p.Str("group"), true); err != nil {
-			return agentproto.Fail("%v", err)
-		}
+		res.Extra["warnings"] = warnings
 	}
 	return res
+}
+
+func (l *lineinfileRun) run() *agentproto.Result {
+	if isDir(l.path) {
+		return &agentproto.Result{Failed: true, Msg: fmt.Sprintf("Path %s is a directory !", l.path),
+			Extra: map[string]any{"rc": int64(256)}}
+	}
+	if l.p.Str("state") == "present" {
+		if l.p.Bool("backrefs") && l.regexp == nil {
+			return agentproto.Fail("regexp is required with backrefs=true")
+		}
+		if l.line == nil {
+			return agentproto.Fail("line is required with state=present")
+		}
+		ia, ib := l.insertAfter, l.insBef
+		if ia == nil && ib == nil {
+			eof := "EOF"
+			ia = &eof
+		}
+		return l.present(ia, ib)
+	}
+	if l.regexp == nil && l.search == nil && l.line == nil {
+		return agentproto.Fail("one of line, search_string, or regexp is required with state=absent")
+	}
+	return l.absent()
+}
+
+// readLines is open(path).readlines() in text mode: universal newlines
+// ("\r\n" and "\r" become "\n"), line endings kept.
+func readLines(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	s := strings.ReplaceAll(pyToText(data), "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	var lines []string
+	for s != "" {
+		i := strings.IndexByte(s, '\n')
+		if i < 0 {
+			lines = append(lines, s)
+			break
+		}
+		lines = append(lines, s[:i+1])
+		s = s[i+1:]
+	}
+	return lines, nil
+}
+
+// pySearch is re.search on a line that still carries its "\n": Python's
+// "$" also matches before a final newline, so the newline is dropped.
+func pySearch(re *regexp.Regexp, line string) []int {
+	return re.FindStringSubmatchIndex(strings.TrimSuffix(line, "\n"))
+}
+
+func (l *lineinfileRun) fileAttrs() fileAttrs {
+	return loadFileAttrs(l.p, l.path, false)
+}
+
+func (l *lineinfileRun) contentDiff() map[string]any {
+	return map[string]any{"before": "", "after": "",
+		"before_header": l.path + " (content)", "after_header": l.path + " (content)"}
+}
+
+func (l *lineinfileRun) present(insertAfter, insertBefore *string) *agentproto.Result {
+	env, path := l.env, l.path
+	diff := l.contentDiff()
+	var lines []string
+	if !pathExists(path) {
+		if !l.p.Bool("create") {
+			return &agentproto.Result{Failed: true, Msg: fmt.Sprintf("Destination %s does not exist !", path),
+				Extra: map[string]any{"rc": int64(257)}}
+		}
+		if dir := dirOf(path); dir != "" && !pathExists(dir) && !env.CheckMode {
+			if err := os.MkdirAll(dir, 0o777); err != nil {
+				return agentproto.Fail("Error creating %s (%s)", dir, pyOSError(err))
+			}
+		}
+	} else {
+		var err error
+		if lines, err = readLines(path); err != nil {
+			return moduleCrash(err)
+		}
+	}
+	if env.DiffMode {
+		diff["before"] = strings.Join(lines, "")
+	}
+
+	var reM, reIns *regexp.Regexp
+	var fail *agentproto.Result
+	if l.regexp != nil {
+		if reM, fail = pyCompile(*l.regexp); fail != nil {
+			return fail
+		}
+	}
+	if insertAfter != nil && *insertAfter != "BOF" && *insertAfter != "EOF" {
+		if reIns, fail = pyCompile(*insertAfter); fail != nil {
+			return fail
+		}
+	} else if insertBefore != nil && *insertBefore != "BOF" {
+		if reIns, fail = pyCompile(*insertBefore); fail != nil {
+			return fail
+		}
+	}
+
+	line := *l.line
+	firstmatch := l.p.Bool("firstmatch")
+	index := [2]int{-1, -1}
+	var match []int
+	var matchLine string
+	matched := false
+	exactLineMatch := false
+	if reM != nil {
+		for n, cur := range lines {
+			if m := pySearch(reM, cur); m != nil {
+				index[0], match, matchLine, matched = n, m, strings.TrimSuffix(cur, "\n"), true
+				if firstmatch {
+					break
+				}
+			}
+		}
+	}
+	if l.search != nil {
+		for n, cur := range lines {
+			if strings.Contains(cur, *l.search) {
+				index[0], matched = n, true
+				if firstmatch {
+					break
+				}
+			}
+		}
+	}
+	if !matched {
+		for n, cur := range lines {
+			if line == strings.TrimRight(cur, "\r\n") {
+				index[0] = n
+				exactLineMatch = true
+			} else if reIns != nil && pySearch(reIns, cur) != nil {
+				if insertAfter != nil {
+					index[1] = n + 1
+					if firstmatch {
+						break
+					}
+				}
+				if insertBefore != nil {
+					index[1] = n
+					if firstmatch {
+						break
+					}
+				}
+			}
+		}
+	}
+
+	msg := ""
+	changed := false
+	const sep = "\n"
+	insertAt := func(i int, s string) {
+		lines = append(lines[:i], append([]string{s}, lines[i:]...)...)
+	}
+	isAfter := insertAfter != nil && *insertAfter != ""
+	isBefore := insertBefore != nil && *insertBefore != ""
+	switch {
+	case index[0] != -1:
+		newLine := line
+		if l.p.Bool("backrefs") && match != nil {
+			expanded, err := pyExpand(reM, line, matchLine, match)
+			if err != nil {
+				return &agentproto.Result{Failed: true, Msg: "Task failed: Module failed: " + err.Error()}
+			}
+			newLine = expanded
+		}
+		if !strings.HasSuffix(newLine, sep) {
+			newLine += sep
+		}
+		if l.regexp == nil && l.search == nil && !matched && !exactLineMatch {
+			if isAfter && *insertAfter != "EOF" {
+				if len(lines) > 0 && !strings.HasSuffix(lines[len(lines)-1], "\n") && !strings.HasSuffix(lines[len(lines)-1], "\r") {
+					lines[len(lines)-1] += sep
+				}
+				if len(lines) == index[1] {
+					if strings.TrimRight(lines[index[1]-1], "\r\n") != line {
+						lines = append(lines, line+sep)
+						msg, changed = "line added", true
+					}
+				} else if strings.TrimRight(lines[index[1]], "\r\n") != line {
+					insertAt(index[1], line+sep)
+					msg, changed = "line added", true
+				}
+			} else if isBefore && *insertBefore != "BOF" {
+				if index[1] <= 0 {
+					if strings.TrimRight(lines[pyIndex(index[1], len(lines))], "\r\n") != line {
+						insertAt(pyIndex(index[1], len(lines)), line+sep)
+						msg, changed = "line added", true
+					}
+				} else if strings.TrimRight(lines[index[1]-1], "\r\n") != line {
+					insertAt(index[1], line+sep)
+					msg, changed = "line added", true
+				}
+			}
+		} else if lines[index[0]] != newLine {
+			lines[index[0]] = newLine
+			msg, changed = "line replaced", true
+		}
+	case l.p.Bool("backrefs"):
+		// Nothing: without a match the backrefs cannot be populated.
+	case (insertBefore != nil && *insertBefore == "BOF") || (insertAfter != nil && *insertAfter == "BOF"):
+		insertAt(0, line+sep)
+		msg, changed = "line added", true
+	case (insertAfter != nil && *insertAfter == "EOF") || index[1] == -1:
+		if len(lines) > 0 && !strings.HasSuffix(lines[len(lines)-1], "\n") && !strings.HasSuffix(lines[len(lines)-1], "\r") {
+			lines = append(lines, sep)
+		}
+		lines = append(lines, line+sep)
+		msg, changed = "line added", true
+	case isAfter && index[1] != -1:
+		if len(lines) == index[1] {
+			if strings.TrimRight(lines[index[1]-1], "\r\n") != line {
+				lines = append(lines, line+sep)
+				msg, changed = "line added", true
+			}
+		} else if line != strings.TrimRight(lines[index[1]], "\n\r") {
+			insertAt(index[1], line+sep)
+			msg, changed = "line added", true
+		}
+	default:
+		insertAt(index[1], line+sep)
+		msg, changed = "line added", true
+	}
+
+	if env.DiffMode {
+		diff["after"] = strings.Join(lines, "")
+	}
+	backupDest := ""
+	if changed && !env.CheckMode {
+		if l.p.Bool("backup") && pathExists(path) {
+			b, err := fsutil.Backup(path)
+			if err != nil {
+				return moduleCrash(err)
+			}
+			backupDest = b
+		}
+		if fail := writeChanges(env, []byte(strings.Join(lines, "")), pyRealpath(path), l.p.Str("validate"), l.p.Bool("unsafe_writes")); fail != nil {
+			return fail
+		}
+	}
+	if env.CheckMode && !pathExists(path) {
+		res := &agentproto.Result{Changed: changed, Msg: msg, Diff: diff,
+			Extra: map[string]any{"backup": backupDest}}
+		if msg == "" {
+			setMsgEmpty(res)
+		}
+		return res
+	}
+	return l.finish(changed, msg, backupDest, diff, nil)
+}
+
+// pyIndex resolves a Python index (negative counts from the end).
+func pyIndex(i, n int) int {
+	if i < 0 {
+		return i + n
+	}
+	return i
+}
+
+func dirOf(p string) string {
+	i := strings.LastIndexByte(p, '/')
+	if i < 0 {
+		return ""
+	}
+	if i == 0 {
+		return "/"
+	}
+	return p[:i]
+}
+
+// finish runs check_file_attrs and assembles the exit_json result.
+func (l *lineinfileRun) finish(changed bool, msg, backupDest string, diff map[string]any, found *int) *agentproto.Result {
+	attr := &fileDiff{}
+	msg, changed, fail := checkFileAttrs(l.env, l.fileAttrs(), changed, msg, attr)
+	if fail != nil {
+		return fail
+	}
+	res := &agentproto.Result{Changed: changed, Msg: msg,
+		Diff:  []any{diff, attrDiffValue(attr, l.path)},
+		Extra: map[string]any{"backup": backupDest}}
+	if found != nil {
+		res.Extra["found"] = int64(*found)
+	}
+	if msg == "" {
+		setMsgEmpty(res)
+	}
+	return res
+}
+
+func (l *lineinfileRun) absent() *agentproto.Result {
+	env, path := l.env, l.path
+	if !pathExists(path) {
+		return &agentproto.Result{Msg: "file not present"}
+	}
+	diff := l.contentDiff()
+	lines, err := readLines(path)
+	if err != nil {
+		return moduleCrash(err)
+	}
+	if env.DiffMode {
+		diff["before"] = strings.Join(lines, "")
+	}
+	var re *regexp.Regexp
+	if l.regexp != nil {
+		var fail *agentproto.Result
+		if re, fail = pyCompile(*l.regexp); fail != nil {
+			return fail
+		}
+	}
+	found := 0
+	var kept []string
+	for _, cur := range lines {
+		var hit bool
+		switch {
+		case l.regexp != nil:
+			hit = pySearch(re, cur) != nil
+		case l.search != nil:
+			hit = strings.Contains(cur, *l.search)
+		default:
+			hit = *l.line == strings.TrimRight(cur, "\r\n")
+		}
+		if hit {
+			found++
+		} else {
+			kept = append(kept, cur)
+		}
+	}
+	changed := found > 0
+	if env.DiffMode {
+		diff["after"] = strings.Join(kept, "")
+	}
+	backupDest := ""
+	if changed && !env.CheckMode {
+		if l.p.Bool("backup") {
+			b, err := fsutil.Backup(path)
+			if err != nil {
+				return moduleCrash(err)
+			}
+			backupDest = b
+		}
+		if fail := writeChanges(env, []byte(strings.Join(kept, "")), pyRealpath(path), l.p.Str("validate"), l.p.Bool("unsafe_writes")); fail != nil {
+			return fail
+		}
+	}
+	msg := ""
+	if changed {
+		msg = fmt.Sprintf("%d line(s) removed", found)
+	}
+	return l.finish(changed, msg, backupDest, diff, &found)
 }
 
 // compilePyPattern rejects RE2-unsupported Python regex constructs with a
@@ -165,142 +490,4 @@ func joinFileLines(lines []string, trailingNewline bool) []byte {
 		out += "\n"
 	}
 	return []byte(out)
-}
-
-func removeLines(lines []string, re *regexp.Regexp, line string, haveLine bool) []string {
-	var out []string
-	for _, l := range lines {
-		switch {
-		case re != nil && re.MatchString(l):
-			continue
-		case re == nil && haveLine && l == line:
-			continue
-		}
-		out = append(out, l)
-	}
-	return out
-}
-
-// ensureLine implements state=present: replace the (last) regexp match, or
-// insert relative to insertafter/insertbefore, or append at EOF.
-func ensureLine(lines []string, re *regexp.Regexp, line string, backrefs bool, insertAfter, insertBefore string, firstmatch bool) ([]string, string, error) {
-	// Find the match to replace: last match wins unless firstmatch.
-	matchIdx := -1
-	if re != nil {
-		for i, l := range lines {
-			if re.MatchString(l) {
-				matchIdx = i
-				if firstmatch {
-					break
-				}
-			}
-		}
-	} else {
-		for i, l := range lines {
-			if l == line {
-				matchIdx = i
-				if firstmatch {
-					break
-				}
-			}
-		}
-	}
-
-	if matchIdx >= 0 {
-		replacement := line
-		if backrefs {
-			// Expand \1-style backrefs from the matched line.
-			m := re.FindStringSubmatchIndex(lines[matchIdx])
-			replacement = string(re.ExpandString(nil, pyReplToGo(line), lines[matchIdx], m))
-		}
-		out := append([]string{}, lines...)
-		out[matchIdx] = replacement
-		return out, "line replaced", nil
-	}
-	if backrefs {
-		// No match with backrefs: leave the file alone (Ansible semantics).
-		return lines, "", nil
-	}
-
-	// Insertion point.
-	insertAt := len(lines) // EOF default
-	switch {
-	case insertBefore == "BOF":
-		insertAt = 0
-	case insertBefore != "":
-		bre, err := compilePyPattern(insertBefore)
-		if err != nil {
-			return nil, "", err
-		}
-		for i, l := range lines {
-			if bre.MatchString(l) {
-				insertAt = i
-				if firstmatch {
-					break
-				}
-			}
-		}
-	case insertAfter != "" && insertAfter != "EOF":
-		are, err := compilePyPattern(insertAfter)
-		if err != nil {
-			return nil, "", err
-		}
-		for i, l := range lines {
-			if are.MatchString(l) {
-				insertAt = i + 1
-				if firstmatch {
-					break
-				}
-			}
-		}
-	}
-
-	out := make([]string, 0, len(lines)+1)
-	out = append(out, lines[:insertAt]...)
-	out = append(out, line)
-	out = append(out, lines[insertAt:]...)
-	return out, "line added", nil
-}
-
-// pyReplToGo converts Python replacement backrefs (\1, \g<name>) to Go's
-// ${1}/${name} for ExpandString.
-func pyReplToGo(repl string) string {
-	var b strings.Builder
-	for i := 0; i < len(repl); i++ {
-		c := repl[i]
-		if c == '$' {
-			b.WriteString("$$")
-			continue
-		}
-		if c == '\\' && i+1 < len(repl) {
-			next := repl[i+1]
-			switch {
-			case next >= '0' && next <= '9':
-				b.WriteString("${")
-				b.WriteByte(next)
-				i++
-				for i+1 < len(repl) && repl[i+1] >= '0' && repl[i+1] <= '9' {
-					i++
-					b.WriteByte(repl[i])
-				}
-				b.WriteString("}")
-				continue
-			case next == 'g' && i+2 < len(repl) && repl[i+2] == '<':
-				if end := strings.IndexByte(repl[i+3:], '>'); end >= 0 {
-					b.WriteString("${" + repl[i+3:i+3+end] + "}")
-					i += 3 + end
-					continue
-				}
-			case next == '\\':
-				b.WriteByte('\\')
-				i++
-				continue
-			}
-			b.WriteByte(next)
-			i++
-			continue
-		}
-		b.WriteByte(c)
-	}
-	return b.String()
 }

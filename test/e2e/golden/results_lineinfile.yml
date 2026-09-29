@@ -1,0 +1,168 @@
+---
+# Result dicts of lineinfile: msg/backup/diff shapes for add, replace,
+# remove, no-op, attribute-only changes, check-style diffs and failures.
+# backup file names embed a pid and timestamp, so that key is checked for
+# shape instead of printed.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/li"
+    f: "{{ workdir }}/li/cfg"
+    nobackup: "{{ r | dict2items | rejectattr('key', 'equalto', 'backup') | items2dict }}"
+  tasks:
+    - file: {path: "{{ d }}", state: directory}
+    - copy: {content: "a=1\nb=2\n# comment\nc=3\n", dest: "{{ f }}"}
+
+    - name: add a line at EOF
+      lineinfile: {path: "{{ f }}", line: "d=4"}
+      register: r
+    - debug: {var: r}
+
+    - name: add it again (no-op)
+      lineinfile: {path: "{{ f }}", line: "d=4"}
+      register: r
+    - debug: {var: r}
+
+    - name: replace via regexp
+      lineinfile: {path: "{{ f }}", regexp: "^b=", line: "b=20"}
+      register: r
+    - debug: {var: r}
+
+    - name: replace via regexp with diff
+      lineinfile: {path: "{{ f }}", regexp: "^b=", line: "b=21"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: backrefs replace
+      lineinfile: {path: "{{ f }}", regexp: '^(c)=(\d+)$', line: '\1=\2\2', backrefs: true}
+      register: r
+    - debug: {var: r}
+
+    - name: backrefs without a match leaves the file
+      lineinfile: {path: "{{ f }}", regexp: '^zzz(.*)$', line: 'x\1', backrefs: true}
+      register: r
+    - debug: {var: r}
+
+    - name: insertbefore a match
+      lineinfile: {path: "{{ f }}", line: "before-comment", insertbefore: "^# comment"}
+      register: r
+    - debug: {var: r}
+
+    - name: insertafter a match
+      lineinfile: {path: "{{ f }}", line: "after-a", insertafter: "^a="}
+      register: r
+    - debug: {var: r}
+
+    - name: insertbefore BOF
+      lineinfile: {path: "{{ f }}", line: "first", insertbefore: BOF}
+      register: r
+    - debug: {var: r}
+
+    - name: search_string replace
+      lineinfile: {path: "{{ f }}", search_string: "d=4", line: "d=40"}
+      register: r
+    - debug: {var: r}
+
+    - name: remove by regexp with a backup
+      lineinfile: {path: "{{ f }}", regexp: "^after-", state: absent, backup: true}
+      register: r
+    - debug: {var: nobackup}
+    - debug: {msg: "{{ r.backup is match('.*/cfg\\.[0-9]+\\.[0-9-]+@[0-9:]+~$') }}"}
+
+    - name: remove by line with diff
+      lineinfile: {path: "{{ f }}", line: "first", state: absent}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: remove something absent
+      lineinfile: {path: "{{ f }}", line: "nothing-here", state: absent}
+      register: r
+    - debug: {var: r}
+
+    - name: mode change only
+      lineinfile: {path: "{{ f }}", line: "a=1", mode: "0600"}
+      register: r
+    - debug: {var: r}
+
+    - name: content and mode change
+      lineinfile: {path: "{{ f }}", line: "e=5", mode: "0644"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: create a new file
+      lineinfile: {path: "{{ d }}/new/created", line: "hello", create: true}
+      register: r
+    - debug: {var: r}
+
+    - name: missing file fails
+      lineinfile: {path: "{{ d }}/nope", line: "x"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: absent on a missing file
+      lineinfile: {path: "{{ d }}/nope", line: "x", state: absent}
+      register: r
+    - debug: {var: r}
+
+    - name: directory path fails
+      lineinfile: {path: "{{ d }}", line: "x"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: present without line fails
+      lineinfile: {path: "{{ f }}", regexp: "x"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: backrefs without regexp fails
+      lineinfile: {path: "{{ f }}", line: "x", backrefs: true}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: absent without line or regexp fails
+      lineinfile: {path: "{{ f }}", state: absent}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: insertafter and insertbefore together fail
+      lineinfile: {path: "{{ f }}", line: "x", insertafter: "a", insertbefore: "b"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: unbalanced regexp fails
+      lineinfile: {path: "{{ f }}", regexp: "(a", line: "x"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: bad character class fails
+      lineinfile: {path: "{{ f }}", regexp: "[a", line: "x"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: nothing to repeat fails
+      lineinfile: {path: "{{ f }}", regexp: "*a", line: "x"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: validate failure
+      lineinfile: {path: "{{ f }}", line: "zz", validate: "grep -q nomatch %s"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: final content
+      command: "cat {{ f }}"
+      register: out
+    - debug: {var: out.stdout_lines}
