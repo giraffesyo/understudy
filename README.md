@@ -159,7 +159,9 @@ rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 **Task keywords** — `when`, `loop` / `with_*` (via lookups), `register`,
 `until`/`retries`/`delay`, `changed_when`, `failed_when`, `ignore_errors`,
 `become`/`become_user`, `vars`, `environment`, `no_log`, `check_mode`,
-`delegate_to: localhost`, `async`/`poll` (including fire-and-forget).
+`delegate_to` (any host) and `delegate_facts`, `run_once`, `any_errors_fatal`,
+`connection`/`remote_user`, `action`/`local_action`, `async`/`poll` (including
+fire-and-forget).
 
 **Templating** — a Jinja2-compatible engine with `if`/`for`/`set`, ~70
 filters (`default`, `combine`, `selectattr`, `regex_replace`, `to_json`,
@@ -226,7 +228,7 @@ than silently diverging. Known boundaries:
   platforms fall back to the `raw` module.
 - **Not yet implemented** (these error clearly, they are not silently
   ignored): `strategy` other than linear, `vars_prompt`, template macros /
-  `include`/`extends`, `delegate_to` to hosts other than localhost, and
+  `include`/`extends`, and
   lookups beyond `env`/`file`/`fileglob`/`first_found`/`dict`/`password`.
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
   strings; regular expressions use Go's RE2 (lookaround and backreferences
