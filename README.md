@@ -151,7 +151,8 @@ understudy vault view group_vars/all/vault.yml --vault-password-file .vault-pass
 **Language & structure** — plays, roles (with `meta` dependencies, defaults,
 and vars), `import_tasks`/`import_role` (static) and
 `include_tasks`/`include_role` (dynamic: per-host targets, loops, `when`),
-handlers with `notify`/`listen`, `block`/`rescue`/`always`, tags, `serial`
+handlers with `notify`/`listen`, `block`/`rescue`/`always`, tags, `vars_prompt`, the `linear`, `free` and
+`host_pinned` strategies, `serial`
 rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 `end_play`, `end_host`, `end_batch`, `clear_host_errors`, `clear_facts`,
 `reset_connection`, `refresh_inventory`, `noop`).
@@ -230,7 +231,7 @@ than silently diverging. Known boundaries:
 - **Targets**: the agent supports `linux/amd64` and `linux/arm64`. Other
   platforms fall back to the `raw` module.
 - **Not yet implemented** (these error clearly, they are not silently
-  ignored): `strategy` other than linear, `vars_prompt`, and network lookups (`url`, `dig`, ...).
+  ignored): the `debug` strategy and network lookups (`url`, `dig`, ...).
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
   strings; regular expressions use Go's RE2 (lookaround and backreferences
   in *patterns* are rejected with a clear error rather than mis-matched).

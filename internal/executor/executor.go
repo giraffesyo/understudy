@@ -85,9 +85,11 @@ type Runner struct {
 	ended        map[string]bool            // meta: end_host (per play)
 	runOnceHosts []string                   // hosts a running run_once task fans out to
 	curPlay      *playbook.Play
-	aborted      bool // any_errors_fatal: stop the playbook
-	playEnded    bool // meta: end_play
-	batchEnded   bool // meta: end_batch
+	warned       map[string]bool
+	freeSem      *turnstile // free strategy: forks shared fairly across hosts
+	aborted      bool       // any_errors_fatal: stop the playbook
+	playEnded    bool       // meta: end_play
+	batchEnded   bool       // meta: end_batch
 	mu           sync.Mutex
 }
 
@@ -186,6 +188,9 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 	if len(play.Roles) > 0 {
 		return fmt.Errorf("internal error: play %q has unresolved roles (playbook.ResolveRoles was not called)", play.Name)
 	}
+	if err := r.promptVars(play); err != nil {
+		return err
+	}
 	r.Callback.PlayStart(play)
 	r.mu.Lock()
 	r.curPlay = play
@@ -268,6 +273,12 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 // runPlayBatch runs the full play (facts + sections + handler flushes) for
 // one batch of hosts.
 func (r *Runner) runPlayBatch(ctx context.Context, play *playbook.Play, playHosts []string) error {
+	if freeStrategy(play) {
+		inner := r.Callback
+		r.Callback = &freeCallback{Callback: inner, names: map[*playbook.Task]freeBanner{}}
+		r.freeSem = newTurnstile(r.Opts.Forks, r.activeOf(playHosts))
+		defer func() { r.Callback, r.freeSem = inner, nil }()
+	}
 	r.resetNotified()
 	r.mu.Lock()
 	r.blockFailed = map[string]map[int]bool{}
@@ -283,7 +294,7 @@ func (r *Runner) runPlayBatch(ctx context.Context, play *playbook.Play, playHost
 		r.runTaskAcrossHosts(ctx, play, gather, r.activeOf(playHosts), playHosts, false)
 	}
 	for _, section := range [][]*playbook.Task{play.PreTasks, play.Tasks, play.PostTasks} {
-		if err := r.runTaskList(ctx, play, section, playHosts, nil, 0); err != nil {
+		if err := r.runSection(ctx, play, section, playHosts); err != nil {
 			return err
 		}
 		if r.playEnded || r.batchEnded {
@@ -548,7 +559,7 @@ func (r *Runner) taskDisplayName(task *playbook.Task, active []string) string {
 // runTaskAcrossHosts executes one task on all active hosts with forks
 // parallelism (one errgroup per task = the linear-strategy barrier).
 func (r *Runner) runTaskAcrossHosts(ctx context.Context, play *playbook.Play, task *playbook.Task, active, playHosts []string, handler bool) {
-	r.Callback.TaskStart(task, r.taskDisplayName(task, active), handler)
+	r.taskStart(task, r.taskDisplayName(task, active), handler)
 	if task.RunOnce && len(active) > 0 {
 		// run_once: the first host runs; register/facts/notify fan out to
 		// every host of the batch.
@@ -563,9 +574,15 @@ func (r *Runner) runTaskAcrossHosts(ctx context.Context, play *playbook.Play, ta
 		active = active[:1]
 	}
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(r.Opts.Forks)
+	if r.freeSem == nil {
+		g.SetLimit(r.Opts.Forks)
+	}
 	for _, host := range active {
 		g.Go(func() error {
+			if r.freeSem != nil {
+				r.freeSem.acquire(host)
+				defer r.freeSem.release()
+			}
 			r.runTaskOnHost(gctx, play, task, host, playHosts)
 			return nil
 		})
@@ -1391,4 +1408,141 @@ func setExtra(res *agentproto.Result, key string, v any) {
 		res.Extra = map[string]any{}
 	}
 	res.Extra[key] = v
+}
+
+// runSection runs one task section. The linear strategy moves all hosts
+// through each task together; free and host_pinned let every host walk the
+// section on its own, so a slow host never holds the others back. forks
+// bounds concurrent task executions through a FIFO semaphore, so hosts
+// take turns task by task as in Ansible's free strategy.
+func (r *Runner) runSection(ctx context.Context, play *playbook.Play, tasks []*playbook.Task, playHosts []string) error {
+	if !freeStrategy(play) {
+		return r.runTaskList(ctx, play, tasks, playHosts, nil, 0)
+	}
+	g, gctx := errgroup.WithContext(ctx)
+	for _, host := range r.activeOf(playHosts) {
+		g.Go(func() error {
+			return r.runTaskList(gctx, play, tasks, playHosts, []string{host}, 0)
+		})
+	}
+	return g.Wait()
+}
+
+func freeStrategy(play *playbook.Play) bool {
+	return play != nil && (play.Strategy == "free" || play.Strategy == "host_pinned")
+}
+
+// taskStart announces a task. Under the free strategies results from
+// different tasks interleave, so the banner is deferred to the first
+// result of that task (freeCallback), as Ansible prints it.
+func (r *Runner) taskStart(task *playbook.Task, name string, handler bool) {
+	if fc, ok := r.Callback.(*freeCallback); ok {
+		fc.announce(task, name, handler)
+		return
+	}
+	r.Callback.TaskStart(task, name, handler)
+}
+
+// freeCallback wraps the output callback during free-strategy plays:
+// every result is preceded by its task's banner whenever the previous
+// output belonged to a different task. Banner and result print atomically.
+type freeCallback struct {
+	Callback
+	mu    sync.Mutex
+	names map[*playbook.Task]freeBanner
+	last  *playbook.Task
+}
+
+type freeBanner struct {
+	name    string
+	handler bool
+}
+
+func (f *freeCallback) announce(task *playbook.Task, name string, handler bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.names[task] = freeBanner{name, handler}
+}
+
+func (f *freeCallback) banner(task *playbook.Task) {
+	if f.last == task {
+		return
+	}
+	f.last = task
+	if b, ok := f.names[task]; ok {
+		f.Callback.TaskStart(task, b.name, b.handler)
+	}
+}
+
+func (f *freeCallback) HostResult(host string, task *playbook.Task, res *agentproto.Result, ignored bool, item any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.banner(task)
+	f.Callback.HostResult(host, task, res, ignored, item)
+}
+
+func (f *freeCallback) LoopResult(host string, task *playbook.Task, res *agentproto.Result, ignored bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.banner(task)
+	f.Callback.LoopResult(host, task, res, ignored)
+}
+
+func (f *freeCallback) HostUnreachable(host string, task *playbook.Task, msg string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.banner(task)
+	f.Callback.HostUnreachable(host, task, msg)
+}
+
+func (f *freeCallback) Included(task *playbook.Task, target string, hosts []string, item any, hasItem bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.banner(task)
+	f.Callback.Included(task, target, hosts, item, hasItem)
+}
+
+// turnstile hands out forks slots to hosts in queue order. Hosts start
+// queued in inventory order and rejoin at the tail each time they want
+// their next task, so with forks=1 hosts take turns task by task exactly
+// like Ansible's free strategy.
+type turnstile struct {
+	mu     sync.Mutex
+	cond   *sync.Cond
+	free   int
+	queue  []string
+	queued map[string]bool
+}
+
+func newTurnstile(slots int, hosts []string) *turnstile {
+	t := &turnstile{free: slots, queued: map[string]bool{}}
+	t.cond = sync.NewCond(&t.mu)
+	for _, h := range hosts {
+		t.queue = append(t.queue, h)
+		t.queued[h] = true
+	}
+	return t
+}
+
+func (t *turnstile) acquire(host string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.queued[host] {
+		t.queue = append(t.queue, host)
+		t.queued[host] = true
+	}
+	for t.free == 0 || t.queue[0] != host {
+		t.cond.Wait()
+	}
+	t.queue = t.queue[1:]
+	t.queued[host] = false
+	t.free--
+	t.cond.Broadcast()
+}
+
+func (t *turnstile) release() {
+	t.mu.Lock()
+	t.free++
+	t.mu.Unlock()
+	t.cond.Broadcast()
 }

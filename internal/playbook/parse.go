@@ -41,10 +41,7 @@ var playKeywords = map[string]bool{
 }
 
 // Deferred play keys that must fail loudly rather than be ignored.
-var unsupportedPlayKeys = map[string]string{
-	"strategy":    "only the linear strategy is supported",
-	"vars_prompt": "'vars_prompt' is not supported yet",
-}
+var unsupportedPlayKeys = map[string]string{}
 
 type parseError struct {
 	file string
@@ -230,6 +227,21 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 				play.MaxFailPercentage = t
 			default:
 				return nil, errAt(file, val, "max_fail_percentage must be a number")
+			}
+		case "vars_prompt":
+			prompts, err := parseVarsPrompt(val, file)
+			if err != nil {
+				return nil, err
+			}
+			play.VarsPrompt = prompts
+		case "strategy":
+			s, _ := val.Str()
+			switch s {
+			case "linear", "free", "host_pinned":
+				play.Strategy = s
+			case "":
+			default:
+				return nil, errAt(file, val, "strategy %q is not supported (linear, free, host_pinned)", s)
 			}
 		case "remote_user":
 			play.RemoteUser, _ = val.Str()
@@ -1085,4 +1097,45 @@ func decodeStringList(node *yaml.Node) []string {
 		return out
 	}
 	return nil
+}
+
+// parseVarsPrompt reads vars_prompt: a list of {name, prompt, default,
+// private, confirm, encrypt, salt, salt_size, unsafe}.
+func parseVarsPrompt(node *yaml.Node, file string) ([]VarPrompt, error) {
+	v, err := node.Decode()
+	if err != nil {
+		return nil, err
+	}
+	list, ok := v.([]any)
+	if !ok {
+		return nil, errAt(file, node, "vars_prompt must be a list")
+	}
+	var out []VarPrompt
+	for _, item := range list {
+		m, ok := yaml.PlainMap(item)
+		if !ok {
+			return nil, errAt(file, node, "vars_prompt entries must be mappings")
+		}
+		name, _ := m["name"].(string)
+		if name == "" {
+			return nil, errAt(file, node, "vars_prompt entry requires a name")
+		}
+		vp := VarPrompt{Name: name, Private: true, Default: m["default"]}
+		vp.Prompt, _ = m["prompt"].(string)
+		if vp.Prompt == "" {
+			vp.Prompt = name
+		}
+		if b, ok := m["private"].(bool); ok {
+			vp.Private = b
+		}
+		vp.Confirm, _ = m["confirm"].(bool)
+		vp.Encrypt, _ = m["encrypt"].(string)
+		vp.Salt, _ = m["salt"].(string)
+		if n, ok := m["salt_size"].(int64); ok {
+			vp.SaltSize = int(n)
+		}
+		vp.Unsafe, _ = m["unsafe"].(bool)
+		out = append(out, vp)
+	}
+	return out, nil
 }

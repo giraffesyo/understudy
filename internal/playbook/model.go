@@ -29,6 +29,8 @@ type Play struct {
 	Connection     string // connection keyword
 	AnyErrorsFatal bool
 	ForceHandlers  bool
+	VarsPrompt     []VarPrompt
+	Strategy       string // linear (default), free, host_pinned
 	Serial         []any
 	// MaxFailPercentage aborts the play when more than this percent of a
 	// batch fails. -1 means unset (any failure removes only that host).
@@ -109,4 +111,16 @@ type RoleRef struct {
 	When   []string
 	Tags   []string
 	Src    Pos
+}
+
+// VarPrompt is one vars_prompt entry.
+type VarPrompt struct {
+	Name, Prompt string
+	Default      any
+	Private      bool
+	Confirm      bool
+	Encrypt      string
+	Salt         string
+	SaltSize     int
+	Unsafe       bool
 }

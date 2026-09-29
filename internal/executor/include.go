@@ -49,7 +49,7 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 		name = task.Module
 	}
 	name = r.taskDisplayName(&playbook.Task{Name: name, RoleName: task.RoleName, Src: task.Src}, active)
-	r.Callback.TaskStart(task, name, false)
+	r.taskStart(task, name, false)
 
 	pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
 	var units []*includeUnit

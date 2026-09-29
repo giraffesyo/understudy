@@ -3,6 +3,7 @@ package template
 import (
 	"crypto/sha256"
 	"crypto/sha512"
+	"fmt"
 	"hash"
 	"strconv"
 )
@@ -164,4 +165,20 @@ func cryptEncode(c []byte, use512 bool) string {
 		emit(0, c[31], c[30], 3)
 	}
 	return string(b)
+}
+
+// CryptHash hashes a password with the glibc crypt scheme Ansible's
+// vars_prompt encrypt: and password_hash use ("sha512_crypt" or
+// "sha256_crypt").
+func CryptHash(scheme, password, salt string, rounds int) (string, error) {
+	if rounds == 0 {
+		rounds = shaCryptRounds
+	}
+	switch scheme {
+	case "sha512_crypt":
+		return shaCrypt(password, salt, rounds, true), nil
+	case "sha256_crypt":
+		return shaCrypt(password, salt, rounds, false), nil
+	}
+	return "", fmt.Errorf("unsupported encrypt scheme %q (sha512_crypt or sha256_crypt)", scheme)
 }
