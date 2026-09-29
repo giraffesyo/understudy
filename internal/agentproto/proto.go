@@ -57,6 +57,11 @@ type Result struct {
 	// error display appends it to Msg (see ErrorMessage).
 	Cause string `json:"-"`
 
+	// ErrorChain, when set, displays the failure as ansible-core shows an
+	// exception with a cause: the outer error (with the task's source
+	// context) "<<< caused by >>>" the inner one.
+	ErrorChain *ErrorChain `json:"-"`
+
 	// Control-plane display hints; never cross the agent wire.
 	Origin        string `json:"-"` // "action" (control-side) or "module"
 	VerboseAlways bool   `json:"-"` // shown with its JSON even at -v0 (debug, assert)
@@ -64,8 +69,19 @@ type Result struct {
 	ShowDiff      bool   `json:"-"` // diff mode is on for the task: display Diff
 }
 
+// ErrorChain is a two-level exception chain for error display.
+type ErrorChain struct {
+	Outer string // outer event message, shown with the source context
+	Inner string // cause message
+	Help  string // the cause's help text
+}
+
 // causeKey carries Result.Cause across the agent wire.
 const causeKey = "_understudy_cause"
+
+// originKey carries Origin "action" across the wire: a module that
+// performs action-plugin work (copy) reports action-level failures.
+const originKey = "_understudy_origin"
 
 // Fail builds a failed result with a formatted message.
 func Fail(format string, args ...any) *Result {
@@ -106,6 +122,9 @@ func (r *Result) MarshalJSON() ([]byte, error) {
 	}
 	if r.Cause != "" {
 		m[causeKey] = r.Cause
+	}
+	if r.Origin == "action" {
+		m[originKey] = r.Origin
 	}
 	if r.RC != nil {
 		m["rc"] = *r.RC
@@ -160,6 +179,9 @@ func (r *Result) UnmarshalJSON(data []byte) error {
 	}
 	if v, ok := take(causeKey); ok {
 		r.Cause, _ = v.(string)
+	}
+	if v, ok := take(originKey); ok {
+		r.Origin, _ = v.(string)
 	}
 	if v, ok := take("rc"); ok {
 		switch n := v.(type) {

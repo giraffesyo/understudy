@@ -86,11 +86,12 @@ func Run(req *agentproto.TaskRequest, payload io.Reader) (res *agentproto.Result
 		Env:        req.Env,
 		Background: req.Background,
 	}
+	_, copyAction := req.Args[copyActionKey]
 	res = fn(env, req.Args)
 	if res == nil {
 		res = agentproto.Fail("module %s returned no result", req.Module)
 	}
-	if pathInfoModules[req.Module] && !res.Skipped {
+	if pathInfoModules[req.Module] && !res.Skipped && !copyAction {
 		addPathInfo(res)
 	}
 	return res

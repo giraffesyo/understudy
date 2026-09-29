@@ -1,0 +1,134 @@
+---
+# Result dicts of copy (content= and src=). Some keys can never match
+# between runs, so those results are printed without them (and the value's
+# shape is checked instead):
+#  - "src" of a changed copy: the transferred temp file on the target
+#    (<remote tmp>/ansible-tmp-<time>-<pid>-<random>/.source<ext>);
+#  - "src" of an untouched content= copy: the controller's temp file
+#    (~/.ansible/tmp/ansible-local-<pid><random>/.<random>);
+#  - "backup_file": <dest>.<pid>.<timestamp>~.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/c"
+    nosrc: "{{ r | dict2items | rejectattr('key', 'in', ['src', 'backup_file']) | items2dict }}"
+  tasks:
+    - name: setup directory
+      file: {path: "{{ d }}", state: directory}
+
+    - name: copy content to a new file
+      copy: {content: "hello\n", dest: "{{ d }}/a.txt"}
+      register: r
+    - debug: {var: nosrc}
+    - debug: {msg: "{{ r.src is match('.*/ansible-tmp-[^/]*/\\.source\\.txt$') }}"}
+
+    - name: copy content again (idempotent)
+      copy: {content: "hello\n", dest: "{{ d }}/a.txt"}
+      register: r
+    - debug: {var: r}
+
+    - name: copy content with a new mode only
+      copy: {content: "hello\n", dest: "{{ d }}/a.txt", mode: "0600"}
+      register: r
+    - debug: {var: r}
+
+    - name: copy content that changes the file, with backup
+      copy: {content: "hello again\n", dest: "{{ d }}/a.txt", backup: true}
+      register: r
+    - debug: {var: nosrc}
+    - debug: {msg: "{{ r.backup_file is match('.*/a\\.txt\\.[0-9]+\\.[0-9-]+@[0-9:]+~$') }}"}
+
+    - name: copy a file from the playbook directory
+      copy: {src: templates/loops.j2, dest: "{{ d }}/loops.txt", mode: "0640"}
+      register: r
+    - debug: {var: nosrc}
+
+    - name: copy the same file again
+      copy: {src: templates/loops.j2, dest: "{{ d }}/loops.txt", mode: "0640"}
+      register: r
+    - debug: {var: r}
+
+    - name: copy into an existing directory
+      copy: {src: templates/loops.j2, dest: "{{ d }}"}
+      register: r
+    - debug: {var: nosrc}
+
+    - name: copy into an existing directory again
+      copy: {src: templates/loops.j2, dest: "{{ d }}/"}
+      register: r
+    - debug: {var: r}
+
+    - name: force=false leaves an existing file alone
+      copy: {content: "other\n", dest: "{{ d }}/a.txt", force: false}
+      register: r
+    - debug: {var: nosrc}
+    - debug: {msg: "{{ r.src is match('.*/\\.ansible/tmp/ansible-local-[^/]*/\\.[^/]*$') }}"}
+
+    - name: copy with a diff
+      copy: {content: "one\ntwo\n", dest: "{{ d }}/a.txt"}
+      diff: true
+      register: r
+    - debug: {var: nosrc}
+
+    - name: copy content to a missing directory fails
+      copy: {content: "x", dest: "{{ d }}/missing/a.txt"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: copy content to a directory fails
+      copy: {content: "x", dest: "{{ d }}/"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: copy a missing src fails
+      copy: {src: no/such/file.txt, dest: "{{ d }}/x.txt"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: copy without src or content fails
+      copy: {dest: "{{ d }}/x.txt"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: copy with both src and content fails
+      copy: {src: templates/loops.j2, content: "x", dest: "{{ d }}/x.txt"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: copy with a bad mode fails
+      copy: {content: "hello again\n", dest: "{{ d }}/a.txt", mode: "bogus"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: copy with a failing validate
+      copy: {content: "bad\n", dest: "{{ d }}/v.txt", validate: "grep -q good %s"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: copy with a passing validate
+      copy: {content: "good\n", dest: "{{ d }}/v.txt", validate: "grep -q good %s"}
+      register: r
+    - debug: {var: nosrc}
+
+    - name: remote_src copy
+      copy: {src: "{{ d }}/v.txt", dest: "{{ d }}/v2.txt", remote_src: true}
+      register: r
+    - debug: {var: r}
+
+    - name: remote_src copy again
+      copy: {src: "{{ d }}/v.txt", dest: "{{ d }}/v2.txt", remote_src: true}
+      register: r
+    - debug: {var: r}
+
+    - name: remote_src copy of a missing file fails
+      copy: {src: "{{ d }}/nope.txt", dest: "{{ d }}/v3.txt", remote_src: true}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}

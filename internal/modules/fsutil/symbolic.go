@@ -137,6 +137,9 @@ func applyOperation(user, op byte, apply, mode uint32) uint32 {
 	}
 }
 
+// UnixBits is stat.S_IMODE of a FileMode.
+func UnixBits(mode os.FileMode) uint32 { return unixBits(mode) }
+
 // unixBits converts a FileMode to numeric st_mode permission bits.
 func unixBits(mode os.FileMode) uint32 {
 	n := uint32(mode.Perm())

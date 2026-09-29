@@ -1145,6 +1145,7 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		Background: task.Async > 0 && task.Poll == 0,
 		BaseDir:    r.Opts.BaseDir,
 		SrcDir:     task.SrcDir,
+		TaskDir:    taskDir(task),
 		Verbosity:  r.Opts.Verbosity,
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
 			return r.runModule(ctx, host, target, kw, inProcess, become, task, req, payload)
@@ -1202,6 +1203,14 @@ func (r *Runner) effectiveCheckMode(task *playbook.Task) bool {
 		return *task.CheckMode
 	}
 	return r.Opts.CheckMode
+}
+
+// taskDir is the directory of the file that defined the task.
+func taskDir(task *playbook.Task) string {
+	if task.Src.File == "" {
+		return ""
+	}
+	return filepath.Dir(task.Src.File)
 }
 
 // effectiveDiff resolves --diff against a task's diff: keyword.
@@ -1281,6 +1290,9 @@ func (r *Runner) runModule(ctx context.Context, host, target string, kw connecti
 // crashed (an unhandled exception in Ansible) carries ansible-core's full
 // "Task failed: Module failed: ..." message, shown verbatim.
 func moduleOrigin(res *agentproto.Result) string {
+	if res.Origin != "" {
+		return res.Origin
+	}
 	if res.Failed && strings.HasPrefix(res.Msg, "Task failed: Module failed: ") {
 		return "verbatim"
 	}

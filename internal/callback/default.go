@@ -339,11 +339,17 @@ func (d *Default) warnings(res *agentproto.Result) {
 // task's source excerpt. Identical blocks print once, as Display dedupes.
 func (d *Default) taskError(task *playbook.Task, res *agentproto.Result) {
 	var b strings.Builder
+	if ec := res.ErrorChain; ec != nil {
+		d.taskErrorChain(task, ec)
+		return
+	}
 	switch res.Origin {
 	case "verbatim":
 		fmt.Fprintf(&b, "[ERROR]: %s\n", res.Msg)
 	case "action":
 		fmt.Fprintf(&b, "[ERROR]: Task failed: Action failed: %s\n", res.ErrorMessage())
+	case "raised":
+		fmt.Fprintf(&b, "[ERROR]: Task failed: %s\n", res.ErrorMessage())
 	default:
 		fmt.Fprintf(&b, "[ERROR]: Task failed: Module failed: %s\n", res.ErrorMessage())
 	}
@@ -360,6 +366,41 @@ func (d *Default) taskError(task *playbook.Task, res *agentproto.Result) {
 	}
 	d.errors[block] = true
 	fmt.Fprint(d.Out, d.paint(cRed, strings.TrimRight(block, "\n")))
+	fmt.Fprint(d.Out, "\n\n")
+}
+
+// taskErrorChain is format_event_verbose_message for an error caused by
+// another: the brief chained message, the outer error with the task's
+// source context, then "<<< caused by >>>" and the cause with its help.
+func (d *Default) taskErrorChain(task *playbook.Task, ec *agentproto.ErrorChain) {
+	var b strings.Builder
+	brief := ec.Outer
+	if !strings.HasSuffix(ec.Outer, ec.Inner) {
+		brief = strings.TrimRight(ec.Outer, ". ") + ": " + ec.Inner
+	}
+	b.WriteString("[ERROR]: " + brief + "\n\n" + ec.Outer + "\n")
+	if task.Src.File != "" && task.Src.Line > 0 {
+		fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n", task.Src.File, task.Src.Line, task.Src.Col)
+		b.WriteString(strings.TrimRight(d.excerpt(task.Src.File, task.Src.Line, task.Src.Col), "\n") + "\n")
+	}
+	b.WriteString("\n<<< caused by >>>\n\n")
+	switch {
+	case ec.Help != "" && !strings.Contains(ec.Inner, "\n") && !strings.Contains(ec.Help, "\n"):
+		b.WriteString(ec.Inner + " " + ec.Help)
+	case ec.Help != "":
+		b.WriteString(ec.Inner + "\n\n" + ec.Help)
+	default:
+		b.WriteString(ec.Inner)
+	}
+	block := b.String()
+	if d.errors == nil {
+		d.errors = map[string]bool{}
+	}
+	if d.errors[block] {
+		return
+	}
+	d.errors[block] = true
+	fmt.Fprint(d.Out, d.paint(cRed, strings.TrimSpace(block)))
 	fmt.Fprint(d.Out, "\n\n")
 }
 

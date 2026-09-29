@@ -1,0 +1,70 @@
+---
+# copy and template result dicts under --check (harness: check_ prefix),
+# including --diff style output via the diff keyword.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/cc"
+    v: one
+  tasks:
+    - name: real setup directory
+      file: {path: "{{ d }}", state: directory}
+      check_mode: false
+
+    - name: real setup file
+      copy: {content: "a\nb\nc\n", dest: "{{ d }}/x.txt"}
+      check_mode: false
+
+    - name: predict a new file
+      copy: {content: "new\n", dest: "{{ d }}/new.txt"}
+      register: r
+    - debug: {var: r}
+
+    - name: predict a content change with diff
+      copy: {content: "a\nB\nc\n", dest: "{{ d }}/x.txt"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: predict a new file with diff
+      copy: {content: "new\n", dest: "{{ d }}/new.txt"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: predict no change
+      copy: {content: "a\nb\nc\n", dest: "{{ d }}/x.txt"}
+      register: r
+    - debug: {var: r}
+
+    - name: predict no change with diff
+      copy: {content: "a\nb\nc\n", dest: "{{ d }}/x.txt"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: predict a mode change only
+      copy: {content: "a\nb\nc\n", dest: "{{ d }}/x.txt", mode: "0600"}
+      register: r
+    - debug: {var: r}
+
+    - name: predict a copy into a missing directory
+      copy: {content: "x\n", dest: "{{ d }}/missing/x.txt"}
+      register: r
+    - debug: {var: r}
+
+    - name: predict a template render
+      template: {src: results.j2, dest: "{{ d }}/t.txt"}
+      register: r
+    - debug: {var: r}
+
+    - name: predict a remote_src copy
+      copy: {src: "{{ d }}/x.txt", dest: "{{ d }}/y.txt", remote_src: true}
+      register: r
+    - debug: {var: r}
+
+    - name: predict a no-newline diff
+      copy: {content: "a\nb", dest: "{{ d }}/x.txt"}
+      diff: true
+      register: r
+    - debug: {var: r}
