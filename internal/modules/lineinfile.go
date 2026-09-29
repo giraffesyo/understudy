@@ -198,10 +198,16 @@ func ensureLine(lines []string, re *regexp.Regexp, line string, backrefs bool, i
 				}
 			}
 		}
-	} else {
+	}
+	// No regexp match (or no regexp): an identical existing line is the
+	// match, so a regexp that no longer matches after its first run stays
+	// idempotent (Ansible's exact_line_match).
+	exactLine := false
+	if matchIdx < 0 {
 		for i, l := range lines {
 			if l == line {
 				matchIdx = i
+				exactLine = true
 				if firstmatch {
 					break
 				}
@@ -210,6 +216,9 @@ func ensureLine(lines []string, re *regexp.Regexp, line string, backrefs bool, i
 	}
 
 	if matchIdx >= 0 {
+		if exactLine {
+			return lines, "", nil
+		}
 		replacement := line
 		if backrefs {
 			// Expand \1-style backrefs from the matched line.
