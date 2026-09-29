@@ -609,7 +609,11 @@ func playbookCmd(args []string) int {
 	for _, b := range books {
 		all = append(all, b.plays...)
 	}
-	cb := callback.New(p.verbosity)
+	cb, err := buildCallback(p.verbosity, false)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR]: %v\n", err)
+		return 1
+	}
 	runner := executor.NewRunner(inv, cb, opts)
 	runner.Limit = p.limit
 	code, err := runner.Run(context.Background(), all)
@@ -776,8 +780,14 @@ func adhocCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
 		return 1
 	}
-	cb := callback.NewMinimal(p.verbosity)
-	cb.ArgOrder = argKeyOrder(p.moduleArgs)
+	cb, err := buildCallback(p.verbosity, true)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR]: %v\n", err)
+		return 1
+	}
+	if m, ok := cb.(*callback.Minimal); ok {
+		m.ArgOrder = argKeyOrder(p.moduleArgs)
+	}
 	runner := executor.NewRunner(inv, cb, opts)
 	runner.Limit = p.limit
 	code, err := runner.Run(context.Background(), []*playbook.Play{play})
@@ -844,4 +854,26 @@ func expandImports(play *playbook.Play, tasks []*playbook.Task) []*playbook.Task
 		out = append(out, expandImports(play, ri.Tasks)...)
 	}
 	return out
+}
+
+// buildCallback loads the configured stdout and aggregate callbacks.
+func buildCallback(verbosity int, adhoc bool) (executor.Callback, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	s := callback.Settings{
+		StdoutCallback:      cfg.StdoutCallback,
+		CallbacksEnabled:    cfg.CallbacksEnabled,
+		DisplayOkHosts:      cfg.DisplayOkHosts,
+		DisplaySkippedHosts: cfg.DisplaySkippedHosts,
+		Verbosity:           verbosity,
+		Adhoc:               adhoc,
+	}
+	if adhoc {
+		// The ad-hoc command uses minimal and ignores stdout_callback unless
+		// bin_ansible_callbacks is set; aggregate callbacks do not load.
+		s.StdoutCallback, s.CallbacksEnabled = "", nil
+	}
+	return callback.Build(s, func(msg string) { fmt.Fprintf(os.Stderr, "[WARNING]: %s\n", msg) })
 }

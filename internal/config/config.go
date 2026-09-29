@@ -20,14 +20,21 @@ type Config struct {
 	Timeout         time.Duration
 	RemoteTmp       string
 	Source          string // which file was loaded ("" = defaults)
+
+	StdoutCallback      string
+	CallbacksEnabled    []string
+	DisplayOkHosts      bool
+	DisplaySkippedHosts bool
 }
 
 // Defaults returns Ansible's defaults for the supported keys.
 func Defaults() *Config {
 	return &Config{
-		Forks:           5,
-		HostKeyChecking: true,
-		Timeout:         10 * time.Second,
+		Forks:               5,
+		HostKeyChecking:     true,
+		Timeout:             10 * time.Second,
+		DisplayOkHosts:      true,
+		DisplaySkippedHosts: true,
 	}
 }
 
@@ -103,6 +110,14 @@ func applyINI(cfg *Config, content string) {
 				}
 			case "remote_tmp":
 				cfg.RemoteTmp = val
+			case "stdout_callback":
+				cfg.StdoutCallback = val
+			case "callbacks_enabled", "callback_whitelist", "callback_enabled":
+				cfg.CallbacksEnabled = splitList(val)
+			case "display_ok_hosts":
+				cfg.DisplayOkHosts = iniBool(val, cfg.DisplayOkHosts)
+			case "display_skipped_hosts":
+				cfg.DisplaySkippedHosts = iniBool(val, cfg.DisplaySkippedHosts)
 			case "interpreter_python", "roles_path":
 				// Parsed and ignored in v0.1.
 			}
@@ -136,6 +151,20 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ANSIBLE_REMOTE_TMP"); v != "" {
 		cfg.RemoteTmp = v
 	}
+	if v := os.Getenv("ANSIBLE_STDOUT_CALLBACK"); v != "" {
+		cfg.StdoutCallback = v
+	}
+	for _, k := range []string{"ANSIBLE_CALLBACKS_ENABLED", "ANSIBLE_CALLBACK_WHITELIST"} {
+		if v := os.Getenv(k); v != "" {
+			cfg.CallbacksEnabled = splitList(v)
+		}
+	}
+	if v := os.Getenv("ANSIBLE_DISPLAY_OK_HOSTS"); v != "" {
+		cfg.DisplayOkHosts = iniBool(v, cfg.DisplayOkHosts)
+	}
+	if v := os.Getenv("ANSIBLE_DISPLAY_SKIPPED_HOSTS"); v != "" {
+		cfg.DisplaySkippedHosts = iniBool(v, cfg.DisplaySkippedHosts)
+	}
 }
 
 func iniBool(s string, def bool) bool {
@@ -165,4 +194,14 @@ func expandUser(p string) string {
 		}
 	}
 	return p
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
