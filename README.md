@@ -138,6 +138,10 @@ runs its direct tasks at the same time (a nested block is one unit and runs
 in order). Execution continues once all of them finish. Use it only for
 independent work, because siblings keep running when one fails; the block's
 `rescue`/`always` still see the failure afterwards.
+Package tasks understudy runs are serialized host-wide (dnf and apt only
+lock the final transaction, not their download cache), but a shell script
+that calls `dnf`/`apt` itself is not covered: don't run two such things in
+the same parallel block.
 
 ```yaml
 - name: build and install independently
