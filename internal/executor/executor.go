@@ -32,7 +32,10 @@ import (
 type Callback interface {
 	PlayStart(play *playbook.Play)
 	TaskStart(task *playbook.Task, displayName string, handler bool)
+	// HostResult reports one host's result; for loops it is called per item
+	// with the item's display label, then LoopResult reports the aggregate.
 	HostResult(host string, task *playbook.Task, res *agentproto.Result, ignored bool, item any)
+	LoopResult(host string, task *playbook.Task, res *agentproto.Result, ignored bool)
 	HostUnreachable(host string, task *playbook.Task, msg string)
 	Recap(stats map[string]*HostStats, order []string)
 }
@@ -902,7 +905,7 @@ type hostVars struct {
 }
 
 func newHostVars(r *Runner, pos template.Position, playHosts []string) *hostVars {
-	return &hostVars{r: r, pos: pos, playHosts: playHosts, names: r.Inv.SortedHostNames()}
+	return &hostVars{r: r, pos: pos, playHosts: playHosts, names: r.Inv.HostNames()}
 }
 
 func (h *hostVars) GetItem(host string) (any, bool) {
@@ -960,9 +963,24 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 		}
 		itemCtx = itemCtx.WithOverlay(overlay)
 		res := r.runOnce(ctx, play, task, host, itemCtx, item)
-		r.Callback.HostResult(host, task, res, task.IgnoreErrors && res.Failed, item)
+		// Per-item results carry the loop variable(s), as Ansible's do.
+		if res.Extra == nil {
+			res.Extra = map[string]any{}
+		}
+		res.Extra["ansible_loop_var"] = task.LoopVar
+		res.Extra[task.LoopVar] = item
+		if task.IndexVar != "" {
+			res.Extra["ansible_index_var"] = task.IndexVar
+			res.Extra[task.IndexVar] = int64(i)
+		}
+		label := item
+		if task.LoopLabel != nil {
+			if l, err := itemCtx.TemplateValue(task.LoopLabel); err == nil {
+				label = l
+			}
+		}
+		r.Callback.HostResult(host, task, res, false, label)
 		m := res.ToVars()
-		m[task.LoopVar] = item
 		itemResults = append(itemResults, m)
 		anyChanged = anyChanged || res.Changed
 		anyFailed = anyFailed || res.Failed
@@ -971,10 +989,18 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 	agg.Changed = anyChanged
 	agg.Failed = anyFailed
 	agg.Skipped = allSkipped
+	if itemResults == nil {
+		itemResults = []any{}
+	}
 	agg.Extra["results"] = itemResults
-	if anyFailed {
+	switch {
+	case len(items) == 0:
+		agg.Extra["skipped_reason"] = "No items in the list"
+	case anyFailed:
 		agg.Msg = "One or more items failed"
-	} else {
+	case allSkipped:
+		agg.Msg = "All items skipped"
+	default:
 		agg.Msg = "All items completed"
 	}
 	r.record(host, task, agg, itemResults)
@@ -1106,6 +1132,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 				return agentproto.Fail("error evaluating changed_when: %v", err)
 			}
 			res.Changed = ok
+			setExtra(res, "changed_when_result", ok)
 		}
 		if len(task.FailedWhen) > 0 {
 			ok, err := resCtx.EvalWhen(task.FailedWhen)
@@ -1113,6 +1140,12 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 				return agentproto.Fail("error evaluating failed_when: %v", err)
 			}
 			res.Failed = ok
+			setExtra(res, "failed_when_result", ok)
+			if ok {
+				// ansible-core's wording; the callback shows it verbatim.
+				res.Msg = "Task failed: Action failed: A 'failed_when' expression evaluated to 'True'."
+				res.Origin = "verbatim"
+			}
 		}
 	}
 	return res
@@ -1236,19 +1269,29 @@ func (r *Runner) runModule(ctx context.Context, host string, inProcess bool, bec
 		if m, ok := yaml.AsMap(req.Args).(map[string]any); ok {
 			req.Args = m
 		}
-		return modules.Run(req, payload), nil
+		res := modules.Run(req, payload)
+		res.Origin = "module"
+		return res, nil
 	}
 	agentClient, err := r.Conns.Agent(ctx, host)
 	if err != nil {
 		return nil, err
 	}
-	return agentClient.Run(ctx, req, payload, become)
+	res, err := agentClient.Run(ctx, req, payload, become)
+	if res != nil {
+		res.Origin = "module"
+	}
+	return res, err
 }
 
 // dispatch routes to a control-side action or the module runtime.
 func (r *Runner) dispatch(ctx context.Context, task *playbook.Task, actx *actions.Context, args map[string]any, freeForm string) *agentproto.Result {
 	if a := actions.Lookup(task.Module); a != nil {
-		return a.Run(ctx, actx, args, freeForm)
+		res := a.Run(ctx, actx, args, freeForm)
+		if res != nil && res.Origin == "" {
+			res.Origin = "action"
+		}
+		return res
 	}
 	if !modules.Exists(task.Module) {
 		return agentproto.Fail("unknown module %q", task.Module)
@@ -1271,6 +1314,8 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	ignored := task.IgnoreErrors && res.Failed
 	if loopItems == nil {
 		r.Callback.HostResult(host, task, res, ignored, nil)
+	} else {
+		r.Callback.LoopResult(host, task, res, ignored)
 	}
 	if task.Register != "" {
 		r.Store.SetHostFact(host, task.Register, res.ToVars())
@@ -1356,4 +1401,11 @@ func SortedHosts(stats map[string]*HostStats) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func setExtra(res *agentproto.Result, key string, v any) {
+	if res.Extra == nil {
+		res.Extra = map[string]any{}
+	}
+	res.Extra[key] = v
 }

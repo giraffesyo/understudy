@@ -3,6 +3,7 @@ package inventory
 import (
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 )
 
@@ -65,41 +66,62 @@ func (inv *Inventory) Match(pattern string) ([]*Host, error) {
 	return out, nil
 }
 
-// matchTerm resolves one pattern term to host names (inventory order:
-// sorted for determinism).
+// matchTerm resolves one pattern term the way Ansible's _enumerate_matches
+// does: hosts of every group whose name matches, then (for globs, or when no
+// group matched) hosts whose name matches, in inventory order, deduplicated.
 func (inv *Inventory) matchTerm(term string) ([]string, error) {
 	if term == "all" || term == "*" {
-		return inv.SortedHostNames(), nil
+		return inv.groupHostNames(inv.Groups["all"]), nil
 	}
 	if strings.HasPrefix(term, "~") {
 		return nil, fmt.Errorf("regex host patterns (~) are not supported yet")
 	}
-	if h, ok := inv.Hosts[term]; ok {
-		return []string{h.Name}, nil
+	isGlob := strings.ContainsAny(term, ".?*[")
+	match := func(name string) bool {
+		if name == term {
+			return true
+		}
+		ok, _ := path.Match(term, name)
+		return ok
 	}
-	if g, ok := inv.Groups[term]; ok {
-		return inv.groupHostNames(g), nil
+	var out []string
+	matchedGroup := false
+	for _, gName := range inv.groupNamesInOrder() {
+		if match(gName) {
+			matchedGroup = true
+			out = append(out, inv.groupHostNames(inv.Groups[gName])...)
+		}
 	}
-	if strings.ContainsAny(term, "*?[") {
-		var out []string
-		for _, name := range inv.SortedHostNames() {
-			if ok, _ := path.Match(term, name); ok {
-				out = append(out, name)
+	if !matchedGroup || isGlob {
+		for _, h := range inv.hostOrder {
+			if match(h.Name) {
+				out = append(out, h.Name)
 			}
 		}
-		if len(out) > 0 {
-			return out, nil
-		}
-		// Fall back to matching group names.
-		for gName, g := range inv.Groups {
-			if ok, _ := path.Match(term, gName); ok {
-				out = append(out, inv.groupHostNames(g)...)
-			}
-		}
-		return dedupe(out), nil
 	}
-	// Unknown name: Ansible warns and matches nothing.
-	return nil, nil
+	// Unknown names match nothing (Ansible warns).
+	return dedupe(out), nil
+}
+
+// groupNamesInOrder lists groups in creation order ("all", "ungrouped",
+// then as loaded), the order Ansible's groups dict iterates in.
+func (inv *Inventory) groupNamesInOrder() []string {
+	out := []string{"all"}
+	for _, g := range inv.Groups["all"].childOrder {
+		out = append(out, g.Name)
+	}
+	seen := map[string]bool{}
+	for _, n := range out {
+		seen[n] = true
+	}
+	var rest []string
+	for n := range inv.Groups {
+		if !seen[n] {
+			rest = append(rest, n)
+		}
+	}
+	sort.Strings(rest)
+	return append(out, rest...)
 }
 
 // splitPattern splits on ',' (preferred) or ':', avoiding splits inside

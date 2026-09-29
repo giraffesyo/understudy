@@ -2,7 +2,6 @@ package actions
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
@@ -36,23 +35,27 @@ func runDebug(_ context.Context, actx *Context, args map[string]any, _ string) *
 		// debug var= evaluates the NAME as an expression against host vars.
 		val, err := actx.Vars.EvalExpr(varName)
 		if err != nil {
-			if _, isUndef := err.(*template.UndefinedError); isUndef {
-				val = "VARIABLE IS NOT DEFINED!"
+			if ue, isUndef := err.(*template.UndefinedError); isUndef {
+				// ansible-core 2.19+ renders the template error in place.
+				val = fmt.Sprintf("<< error 1 - '%s' is undefined >>", ue.Name)
 			} else {
 				return agentproto.Fail("debug var=%s: %v", varName, err)
 			}
 		}
-		return &agentproto.Result{Extra: map[string]any{varName: jsonSafe(val)}}
+		return &agentproto.Result{VerboseAlways: true, Extra: map[string]any{varName: jsonSafe(val)}}
 	}
 	msg := "Hello world!"
 	if m, ok := args["msg"]; ok {
+		if m == nil {
+			return &agentproto.Result{VerboseAlways: true}
+		}
 		if s, isStr := m.(string); isStr {
 			msg = s
 		} else {
-			return &agentproto.Result{Extra: map[string]any{"msg": jsonSafe(m)}}
+			return &agentproto.Result{VerboseAlways: true, Extra: map[string]any{"msg": jsonSafe(m)}}
 		}
 	}
-	return &agentproto.Result{Msg: msg}
+	return &agentproto.Result{VerboseAlways: true, Msg: msg}
 }
 
 func runSetFact(_ context.Context, actx *Context, args map[string]any, _ string) *agentproto.Result {
@@ -104,7 +107,7 @@ func runAssert(_ context.Context, actx *Context, args map[string]any, _ string) 
 			return agentproto.Fail("assert: error evaluating %q: %v", expr, err)
 		}
 		if !ok {
-			msg := fmt.Sprintf("Assertion failed: %s", expr)
+			msg := "Assertion failed"
 			if m, has := args["fail_msg"].(string); has && m != "" {
 				msg = m
 			} else if m, has := args["msg"].(string); has && m != "" {
@@ -114,6 +117,8 @@ func runAssert(_ context.Context, actx *Context, args map[string]any, _ string) 
 				Failed: true,
 				Msg:    msg,
 				Extra:  map[string]any{"assertion": expr, "evaluated_to": false},
+
+				VerboseAlways: true,
 			}
 		}
 	}
@@ -121,7 +126,7 @@ func runAssert(_ context.Context, actx *Context, args map[string]any, _ string) 
 	if m, has := args["success_msg"].(string); has && m != "" {
 		msg = m
 	}
-	return &agentproto.Result{Msg: msg}
+	return &agentproto.Result{VerboseAlways: true, Msg: msg}
 }
 
 func toInt(v any) (int64, bool) {
@@ -139,11 +144,7 @@ func toInt(v any) (int64, bool) {
 // jsonSafe converts engine values (Omit, Undefined, UnsafeString) into
 // plain JSON-encodable values for result payloads.
 func jsonSafe(v any) any {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Sprintf("%v", v)
-	}
-	var out any
-	json.Unmarshal(data, &out)
-	return out
+	// Engine values (ordered maps, unsafe strings, lazy ranges) become plain
+	// JSON-shaped values; ints stay ints and floats stay floats.
+	return template.Plain(v)
 }

@@ -57,6 +57,10 @@ type Result struct {
 	Diff         []Diff         `json:"-"`
 	AnsibleFacts map[string]any `json:"-"`
 	Extra        map[string]any `json:"-"`
+
+	// Control-plane display hints; never cross the agent wire.
+	Origin        string `json:"-"` // "action" (control-side) or "module"
+	VerboseAlways bool   `json:"-"` // shown with its JSON even at -v0 (debug, assert)
 }
 
 // Fail builds a failed result with a formatted message.
@@ -125,6 +129,11 @@ func (r *Result) UnmarshalJSON(data []byte) error {
 	}
 	if v, ok := take("msg"); ok {
 		r.Msg = fmt.Sprintf("%v", v)
+		if v == "" {
+			// An explicitly empty msg (command's success result) is part
+			// of the result shape; keep it visible through Extra.
+			m["msg"] = ""
+		}
 	}
 	if v, ok := take("rc"); ok {
 		if f, isNum := v.(float64); isNum {

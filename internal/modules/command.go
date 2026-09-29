@@ -46,31 +46,65 @@ func mkCommand(shell bool) ModuleFunc {
 		removes, _ := argString(args, "removes")
 		stdinStr, hasStdin := argString(args, "stdin")
 
+		// Ansible reports cmd as the argv list for command, the string
+		// for shell.
+		var cmdField any = cmdline
+		if !shell {
+			if len(argv) == 0 {
+				var err error
+				argv, err = shlexSplit(cmdline)
+				if err != nil {
+					return agentproto.Fail("failed to parse command: %v", err)
+				}
+				if len(argv) == 0 {
+					return agentproto.Fail("no command given")
+				}
+			}
+			list := make([]any, len(argv))
+			for i, a := range argv {
+				list[i] = a
+			}
+			cmdField = list
+		}
+
 		// creates/removes idempotence guards.
+		notRun := func(msg, stdout string) *agentproto.Result {
+			return &agentproto.Result{
+				Msg:    msg,
+				RC:     agentproto.IntPtr(0),
+				Stdout: stdout,
+				Extra: map[string]any{
+					"cmd": cmdField, "start": nil, "end": nil, "delta": nil,
+				},
+			}
+		}
 		if creates != "" {
 			if _, err := os.Stat(expandPath(creates, chdir)); err == nil {
-				return &agentproto.Result{
-					Msg:   fmt.Sprintf("Did not run command since %q exists", creates),
-					RC:    agentproto.IntPtr(0),
-					Extra: map[string]any{"cmd": cmdline, "stdout_lines": []string{}},
-				}
+				return notRun(fmt.Sprintf("Did not run command since '%s' exists", creates),
+					fmt.Sprintf("skipped, since %s exists", creates))
 			}
 		}
 		if removes != "" {
 			if _, err := os.Stat(expandPath(removes, chdir)); err != nil {
-				return &agentproto.Result{
-					Msg:   fmt.Sprintf("Did not run command since %q does not exist", removes),
-					RC:    agentproto.IntPtr(0),
-					Extra: map[string]any{"cmd": cmdline},
-				}
+				return notRun(fmt.Sprintf("Did not run command since '%s' does not exist", removes),
+					fmt.Sprintf("skipped, since %s does not exist", removes))
 			}
 		}
 
 		if env.CheckMode {
-			return &agentproto.Result{
-				Skipped: true,
-				Msg:     "remote module (command) does not support check mode",
+			// Partial check-mode support, as in Ansible: without a
+			// creates/removes guard the command is skipped.
+			res := &agentproto.Result{
+				Changed: true,
+				RC:      agentproto.IntPtr(0),
+				Msg:     "Command would have run if not in check mode",
+				Extra:   map[string]any{"cmd": cmdField, "start": nil, "end": nil, "delta": nil},
 			}
+			if creates == "" && removes == "" {
+				res.Changed = false
+				res.Skipped = true
+			}
+			return res
 		}
 
 		if env.Background {
@@ -85,16 +119,6 @@ func mkCommand(shell bool) ModuleFunc {
 			}
 			cmd = exec.Command(sh, "-c", cmdline)
 		} else {
-			if len(argv) == 0 {
-				var err error
-				argv, err = shlexSplit(cmdline)
-				if err != nil {
-					return agentproto.Fail("failed to parse command: %v", err)
-				}
-				if len(argv) == 0 {
-					return agentproto.Fail("no command given")
-				}
-			}
 			path, err := lookPath(argv[0])
 			if err != nil {
 				return agentproto.Fail("Cannot find command %q: %v", argv[0], err)
@@ -123,7 +147,7 @@ func mkCommand(shell bool) ModuleFunc {
 
 		start := time.Now()
 		err := cmd.Run()
-		delta := time.Since(start)
+		end := time.Now()
 
 		rc := 0
 		if err != nil {
@@ -140,13 +164,16 @@ func mkCommand(shell bool) ModuleFunc {
 			Stdout:  strings.TrimRight(stdout.String(), "\r\n"),
 			Stderr:  strings.TrimRight(stderr.String(), "\r\n"),
 			Extra: map[string]any{
-				"cmd":   cmdline,
-				"delta": fmt.Sprintf("%f", delta.Seconds()),
+				"cmd":   cmdField,
+				"start": pyDatetime(start),
+				"end":   pyDatetime(end),
+				"delta": pyTimedelta(end.Sub(start)),
+				"msg":   "",
 			},
 		}
 		if rc != 0 {
 			res.Failed = true
-			res.Msg = "non-zero return code"
+			res.Msg = "The command exited with a non-zero return code."
 		}
 		return res
 	}
@@ -265,4 +292,24 @@ func shlexSplit(s string) ([]string, error) {
 		out = append(out, cur.String())
 	}
 	return out, nil
+}
+
+// pyDatetime formats like Python's str(datetime.datetime.now()).
+func pyDatetime(t time.Time) string {
+	return t.Format("2006-01-02 15:04:05.000000")
+}
+
+// pyTimedelta formats like Python's str(timedelta): "H:MM:SS.ffffff".
+func pyTimedelta(d time.Duration) string {
+	us := d.Microseconds()
+	h := us / 3_600_000_000
+	us -= h * 3_600_000_000
+	m := us / 60_000_000
+	us -= m * 60_000_000
+	s := us / 1_000_000
+	us -= s * 1_000_000
+	if us == 0 {
+		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%d:%02d:%02d.%06d", h, m, s, us)
 }
