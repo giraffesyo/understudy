@@ -106,6 +106,7 @@ type EvalCtx struct {
 }
 
 func (ec *EvalCtx) Engine() *Engine    { return ec.engine }
+func (ec *EvalCtx) Vars() VarGetter    { return ec.vars }
 func (ec *EvalCtx) Position() Position { return ec.pos }
 
 func (ec *EvalCtx) errf(off int, format string, args ...any) error {

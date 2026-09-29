@@ -1,6 +1,9 @@
 package template
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // registerGlobals installs callable globals: range, dict, lookup, query.
 func registerGlobals(e *Engine) {
@@ -77,13 +80,32 @@ func registerGlobals(e *Engine) {
 			if err != nil {
 				return nil, err
 			}
-			if wantList {
-				if l, isList := out.([]any); isList {
-					return l, nil
-				}
-				return []any{out}, nil
+			list, isList := out.([]any)
+			if !isList {
+				list = []any{out}
 			}
-			return out, nil
+			if wantList {
+				return list, nil
+			}
+			// lookup(): Ansible joins string results with ",", unwraps a
+			// single item, and otherwise returns the list.
+			allStrings := len(list) > 0
+			parts := make([]string, len(list))
+			for i, v := range list {
+				s, ok := asString(v)
+				if !ok {
+					allStrings = false
+					break
+				}
+				parts[i] = s
+			}
+			switch {
+			case allStrings:
+				return strings.Join(parts, ","), nil
+			case len(list) == 1:
+				return list[0], nil
+			}
+			return list, nil
 		}
 	}
 	e.Globals["lookup"] = mkLookup(false)

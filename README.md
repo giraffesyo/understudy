@@ -156,7 +156,8 @@ rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 `end_play`, `end_host`, `end_batch`, `clear_host_errors`, `clear_facts`,
 `reset_connection`, `refresh_inventory`, `noop`).
 
-**Task keywords** — `when`, `loop` / `with_*` (via lookups), `register`,
+**Task keywords** — `when`, `loop` / `with_*` (`items`, `nested`, `together`, `subelements`,
+`sequence`, `dict`, `indexed_items`, `flattened`, `lines`, `fileglob`, ...), `register`,
 `until`/`retries`/`delay`, `changed_when`, `failed_when`, `ignore_errors`,
 `become`/`become_user`, `vars`, `environment`, `no_log`, `check_mode`,
 `delegate_to` (any host) and `delegate_facts`, `run_once`, `any_errors_fatal`,
@@ -229,8 +230,7 @@ than silently diverging. Known boundaries:
 - **Targets**: the agent supports `linux/amd64` and `linux/arm64`. Other
   platforms fall back to the `raw` module.
 - **Not yet implemented** (these error clearly, they are not silently
-  ignored): `strategy` other than linear, `vars_prompt`, and
-  lookups beyond `env`/`file`/`fileglob`/`first_found`/`dict`/`password`.
+  ignored): `strategy` other than linear, `vars_prompt`, and network lookups (`url`, `dig`, ...).
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
   strings; regular expressions use Go's RE2 (lookaround and backreferences
   in *patterns* are rejected with a clear error rather than mis-matched).
