@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -1320,18 +1321,41 @@ func pathFilter(fn func(string) string) FilterFunc {
 }
 
 // pyJSON serializes a value the way Python's json.dumps does — the format
-// Ansible's to_json/to_nice_json produce. indent==0 yields the compact form
-// with ", " and ": " separators; indent>0 pretty-prints. sortKeys mirrors
-// json.dumps' sort_keys: to_json passes false (dict insertion order kept),
-// to_nice_json passes true. Plain Go maps have no inherent order and are
-// always sorted; *OMap/Mapping honor sortKeys.
+// Ansible's to_json/to_nice_json produce (json.dumps' default
+// ensure_ascii=True). indent==0 yields the compact form with ", " and ": "
+// separators; indent>0 pretty-prints. sortKeys mirrors json.dumps'
+// sort_keys: to_json passes false (dict insertion order kept), to_nice_json
+// passes true. Plain Go maps have no inherent order and are always sorted;
+// *OMap/Mapping honor sortKeys.
 func pyJSON(v any, indent int, sortKeys bool) string {
-	var b strings.Builder
-	writePyJSON(&b, v, indent, 0, sortKeys)
-	return b.String()
+	return PyJSON(v, indent, sortKeys, true)
 }
 
-func writePyJSON(b *strings.Builder, v any, indent, depth int, sortKeys bool) {
+// PyJSON is Python's json.dumps(v, indent=indent or None,
+// sort_keys=sortKeys, ensure_ascii=ensureASCII) over engine values. The
+// output callback uses it with ensureASCII=false, as Ansible's does.
+func PyJSON(v any, indent int, sortKeys, ensureASCII bool) string {
+	e := pyJSONEncoder{indent: indent, sortKeys: sortKeys, ensureASCII: ensureASCII}
+	e.write(v, 0)
+	return e.b.String()
+}
+
+// Plain converts engine-internal values into plain JSON-shaped Go values
+// without a lossy encoding/json round trip.
+func Plain(v any) any { return jsonSanitize(v) }
+
+// PyStr renders a value like Python's str() (what "%s" and loop labels show).
+func PyStr(v any) string { return toStr(v) }
+
+type pyJSONEncoder struct {
+	b           strings.Builder
+	indent      int
+	sortKeys    bool
+	ensureASCII bool
+}
+
+func (e *pyJSONEncoder) write(v any, depth int) {
+	b := &e.b
 	switch t := v.(type) {
 	case nil:
 		b.WriteString("null")
@@ -1342,17 +1366,17 @@ func writePyJSON(b *strings.Builder, v any, indent, depth int, sortKeys bool) {
 			b.WriteString("false")
 		}
 	case string:
-		b.WriteString(jsonQuote(t))
+		b.WriteString(pyJSONQuote(t, e.ensureASCII))
 	case yaml.UnsafeString:
-		b.WriteString(jsonQuote(string(t)))
+		b.WriteString(pyJSONQuote(string(t), e.ensureASCII))
 	case int64:
 		b.WriteString(strconv.FormatInt(t, 10))
 	case int:
 		b.WriteString(strconv.Itoa(t))
 	case float64:
-		b.WriteString(pyFloatStr(t))
+		b.WriteString(pyJSONFloat(t))
 	case *rangeValue:
-		writePyJSON(b, t.materialize(), indent, depth, sortKeys)
+		e.write(t.materialize(), depth)
 	case []any:
 		if len(t) == 0 {
 			b.WriteString("[]")
@@ -1360,69 +1384,120 @@ func writePyJSON(b *strings.Builder, v any, indent, depth int, sortKeys bool) {
 		}
 		b.WriteByte('[')
 		for i, item := range t {
-			pyJSONSep(b, i, indent, depth+1)
-			writePyJSON(b, item, indent, depth+1, sortKeys)
+			e.sep(i, depth+1)
+			e.write(item, depth+1)
 		}
-		pyJSONClose(b, ']', indent, depth)
+		e.close(']', depth)
 	case map[string]any:
-		writePyJSONObject(b, sortedKeys(t), func(k string) any { return t[k] }, len(t), indent, depth, sortKeys)
+		e.object(sortedKeys(t), func(k string) any { return t[k] }, len(t), depth)
 	case Mapping:
 		keys := t.Keys()
-		if sortKeys {
+		if e.sortKeys {
 			keys = append([]string(nil), keys...)
 			sort.Strings(keys)
 		}
-		writePyJSONObject(b, keys, func(k string) any { v, _ := t.GetItem(k); return v }, t.Len(), indent, depth, sortKeys)
+		e.object(keys, func(k string) any { v, _ := t.GetItem(k); return v }, t.Len(), depth)
 	default:
-		b.WriteString(jsonQuote(toStr(v)))
+		b.WriteString(pyJSONQuote(toStr(v), e.ensureASCII))
 	}
 }
 
-// writePyJSONObject renders a JSON object given keys in the desired order and
-// a value accessor. Plain-map keys arrive pre-sorted; Mapping keys arrive in
-// the order chosen by the caller (insertion or sorted).
-func writePyJSONObject(b *strings.Builder, keys []string, get func(string) any, n, indent, depth int, sortKeys bool) {
+// object renders a JSON object given keys in the desired order and a value
+// accessor. Plain-map keys arrive pre-sorted; Mapping keys arrive in the
+// order chosen by the caller (insertion or sorted).
+func (e *pyJSONEncoder) object(keys []string, get func(string) any, n, depth int) {
 	if n == 0 {
-		b.WriteString("{}")
+		e.b.WriteString("{}")
 		return
 	}
-	b.WriteByte('{')
+	e.b.WriteByte('{')
 	for i, k := range keys {
-		pyJSONSep(b, i, indent, depth+1)
-		b.WriteString(jsonQuote(k))
-		b.WriteString(": ")
-		writePyJSON(b, get(k), indent, depth+1, sortKeys)
+		e.sep(i, depth+1)
+		e.b.WriteString(pyJSONQuote(k, e.ensureASCII))
+		e.b.WriteString(": ")
+		e.write(get(k), depth+1)
 	}
-	pyJSONClose(b, '}', indent, depth)
+	e.close('}', depth)
 }
 
-func pyJSONSep(b *strings.Builder, i, indent, depth int) {
+func (e *pyJSONEncoder) sep(i, depth int) {
 	if i > 0 {
-		if indent > 0 {
-			b.WriteByte(',')
+		if e.indent > 0 {
+			e.b.WriteByte(',')
 		} else {
-			b.WriteString(", ")
+			e.b.WriteString(", ")
 		}
 	}
-	if indent > 0 {
-		b.WriteByte('\n')
-		b.WriteString(strings.Repeat(" ", indent*depth))
+	if e.indent > 0 {
+		e.b.WriteByte('\n')
+		e.b.WriteString(strings.Repeat(" ", e.indent*depth))
 	}
 }
 
-func pyJSONClose(b *strings.Builder, closer byte, indent, depth int) {
-	if indent > 0 {
-		b.WriteByte('\n')
-		b.WriteString(strings.Repeat(" ", indent*depth))
+func (e *pyJSONEncoder) close(closer byte, depth int) {
+	if e.indent > 0 {
+		e.b.WriteByte('\n')
+		e.b.WriteString(strings.Repeat(" ", e.indent*depth))
 	}
-	b.WriteByte(closer)
+	e.b.WriteByte(closer)
 }
 
-// jsonQuote quotes a string like encoding/json (escapes match Python's
-// default ensure_ascii=False for the common printable case).
-func jsonQuote(s string) string {
-	out, _ := json.Marshal(s)
-	return string(out)
+// pyJSONFloat is Python's float repr as json.dumps emits it (inf/nan become
+// Infinity/NaN, which json.dumps allows by default).
+func pyJSONFloat(f float64) string {
+	switch {
+	case math.IsInf(f, 1):
+		return "Infinity"
+	case math.IsInf(f, -1):
+		return "-Infinity"
+	case math.IsNaN(f):
+		return "NaN"
+	}
+	return pyFloatStr(f)
+}
+
+// pyJSONQuote quotes a string exactly as Python's json encoder does: only
+// '"', '\\', and control characters are escaped (\b \f \n \r \t by name,
+// others as \u00XX) — unlike encoding/json, never '<', '>', '&', U+2028 or
+// U+2029. With ensureASCII every non-ASCII rune is \uXXXX-escaped, using
+// UTF-16 surrogate pairs above the BMP.
+func pyJSONQuote(s string, ensureASCII bool) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			switch {
+			case r < 0x20 || (ensureASCII && r == 0x7f):
+				fmt.Fprintf(&b, `\u%04x`, r)
+			case ensureASCII && r > 0x7f:
+				if r > 0xffff {
+					hi, lo := utf16.EncodeRune(r)
+					fmt.Fprintf(&b, `\u%04x\u%04x`, hi, lo)
+				} else {
+					fmt.Fprintf(&b, `\u%04x`, r)
+				}
+			default:
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // jsonSanitize converts engine-internal values into plain JSON-encodable

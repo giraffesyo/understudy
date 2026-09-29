@@ -1,34 +1,44 @@
-// Package callback renders execution events in the style of
-// ansible-playbook's default callback: PLAY/TASK banners padded to 79
-// columns, colored per-host result lines, and the PLAY RECAP table.
+// Package callback renders execution events byte-for-byte like
+// ansible-core's default stdout callback (reference: ansible-core 2.21):
+// PLAY/TASK banners, per-host result lines with Python-json result dumps,
+// "[ERROR]: Task failed" origin blocks, and the PLAY RECAP table.
 package callback
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/executor"
 	"github.com/giraffesyo/understudy/internal/playbook"
+	"github.com/giraffesyo/understudy/internal/template"
 )
-
-const bannerWidth = 79
 
 type color string
 
+// Ansible's default color names mapped to the escape codes its stringc uses.
 const (
-	cGreen  color = "\x1b[0;32m"
-	cYellow color = "\x1b[0;33m"
-	cRed    color = "\x1b[0;31m"
-	cCyan   color = "\x1b[0;36m"
-	cBlue   color = "\x1b[0;34m"
-	cReset  color = "\x1b[0m"
+	cGreen      color = "0;32" // COLOR_OK
+	cYellow     color = "0;33" // COLOR_CHANGED
+	cRed        color = "0;31" // COLOR_ERROR
+	cBrightRed  color = "1;31" // COLOR_UNREACHABLE
+	cCyan       color = "0;36" // COLOR_SKIP
+	cBrightPurp color = "1;35" // COLOR_WARN (recap "ignored")
+)
+
+// Keys debug keeps when it has a msg (Ansible's _DEBUG_ALLOWED_KEYS), and
+// the keys it hides for var= output (_hide_in_debug).
+var (
+	debugAllowedKeys = map[string]bool{"msg": true, "exception": true, "warnings": true, "deprecations": true}
+	debugHiddenKeys  = []string{"changed", "failed", "skipped", "invocation", "skip_reason"}
 )
 
 // Default is the standard output callback.
@@ -36,44 +46,65 @@ type Default struct {
 	Out       io.Writer
 	Verbosity int
 	NoColor   bool
+	Columns   int // banner width (Display.columns); 0 = 79
 	mu        sync.Mutex
-	started   bool
+	errors    map[string]bool // Display de-duplicates repeated errors
+	srcCache  map[string][]string
 }
 
-// New builds the default callback, auto-detecting color support.
+// New builds the default callback, auto-detecting color and terminal width.
 func New(verbosity int) *Default {
-	noColor := os.Getenv("NO_COLOR") != "" || os.Getenv("ANSIBLE_NOCOLOR") != "" ||
-		!term.IsTerminal(int(os.Stdout.Fd()))
-	return &Default{Out: os.Stdout, Verbosity: verbosity, NoColor: noColor}
+	fd := int(os.Stdout.Fd())
+	isTTY := term.IsTerminal(fd)
+	noColor := os.Getenv("NO_COLOR") != "" || os.Getenv("ANSIBLE_NOCOLOR") != "" || !isTTY
+	if v := os.Getenv("ANSIBLE_FORCE_COLOR"); v != "" && v != "0" && !strings.EqualFold(v, "false") {
+		noColor = false
+	}
+	// Display.columns = max(79, tty width - 1).
+	cols := 79
+	if isTTY {
+		if w, _, err := term.GetSize(fd); err == nil && w-1 > cols {
+			cols = w - 1
+		}
+	}
+	return &Default{Out: os.Stdout, Verbosity: verbosity, NoColor: noColor, Columns: cols}
 }
 
 func (d *Default) paint(c color, s string) string {
 	if d.NoColor {
 		return s
 	}
-	return string(c) + s + string(cReset)
+	return "\x1b[" + string(c) + "m" + s + "\x1b[0m"
 }
 
-func (d *Default) banner(text string) string {
-	pad := bannerWidth - len(text) - 1
-	if pad < 0 {
-		pad = 0
+func (d *Default) display(c color, s string) {
+	if c != "" {
+		s = d.paint(c, s)
 	}
-	return text + " " + strings.Repeat("*", pad)
+	fmt.Fprintln(d.Out, s)
+}
+
+// banner prints "\n<msg> ****" padded to the display width (min 3 stars).
+func (d *Default) banner(msg string) {
+	cols := d.Columns
+	if cols == 0 {
+		cols = 79
+	}
+	stars := cols - utf8.RuneCountInString(msg)
+	if stars <= 3 {
+		stars = 3
+	}
+	fmt.Fprintf(d.Out, "\n%s %s\n", msg, strings.Repeat("*", stars))
 }
 
 func (d *Default) PlayStart(play *playbook.Play) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	name := play.Name
+	name := strings.TrimSpace(play.Name)
 	if name == "" {
 		name = play.HostPattern
 	}
-	if d.started {
-		fmt.Fprintln(d.Out)
-	}
-	d.started = true
-	fmt.Fprintln(d.Out, d.banner(fmt.Sprintf("PLAY [%s]", name)))
+	d.banner(fmt.Sprintf("PLAY [%s]", name))
 }
 
 func (d *Default) TaskStart(task *playbook.Task, displayName string, handler bool) {
@@ -87,115 +118,239 @@ func (d *Default) TaskStart(task *playbook.Task, displayName string, handler boo
 	if handler {
 		kind = "RUNNING HANDLER"
 	}
-	fmt.Fprintf(d.Out, "\n%s\n", d.banner(fmt.Sprintf("%s [%s]", kind, name)))
+	d.banner(fmt.Sprintf("%s [%s]", kind, strings.TrimSpace(name)))
 }
 
 func (d *Default) HostResult(host string, task *playbook.Task, res *agentproto.Result, ignored bool, item any) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	itemSuffix := ""
-	if item != nil {
-		itemSuffix = fmt.Sprintf(" => (item=%s)", compactValue(item))
+	isItem := item != nil || (res.Extra != nil && res.Extra["ansible_loop_var"] != nil)
+	itemLabel := ""
+	if isItem {
+		itemLabel = template.PyStr(item)
 	}
 
 	switch {
 	case res.Failed:
-		detail := resultJSON(res)
-		line := fmt.Sprintf("fatal: [%s]: FAILED!%s => %s", host, itemSuffix, detail)
-		fmt.Fprintln(d.Out, d.paint(cRed, line))
+		d.taskError(task, res)
+		if isItem {
+			d.display(cRed, fmt.Sprintf("failed: [%s] (item=%s) => %s", host, itemLabel, d.dump(task, res)))
+			return
+		}
+		d.display(cRed, fmt.Sprintf("fatal: [%s]: FAILED! => %s", host, d.dump(task, res)))
 		if ignored {
-			fmt.Fprintln(d.Out, d.paint(cCyan, "...ignoring"))
+			d.display(cCyan, "...ignoring")
 		}
 	case res.Skipped:
-		line := fmt.Sprintf("skipping: [%s]%s", host, itemSuffix)
-		if d.Verbosity > 0 && res.Msg != "" {
-			line += fmt.Sprintf(" => {\"msg\": %q}", res.Msg)
+		line := fmt.Sprintf("skipping: [%s]", host)
+		if isItem {
+			line += fmt.Sprintf(" => (item=%s) ", itemLabel)
 		}
-		fmt.Fprintln(d.Out, d.paint(cCyan, line))
-	case res.Changed:
-		line := fmt.Sprintf("changed: [%s]%s", host, itemSuffix)
 		if d.Verbosity > 0 {
-			line += " => " + resultJSON(res)
+			line += " => " + d.dump(task, res)
 		}
-		fmt.Fprintln(d.Out, d.paint(cYellow, line))
+		d.display(cCyan, line)
 	default:
-		line := fmt.Sprintf("ok: [%s]%s", host, itemSuffix)
-		if d.Verbosity > 0 {
-			line += " => " + resultJSON(res)
-		} else if task.Module == "debug" {
-			// debug prints its message even at verbosity 0.
-			line += " => " + resultJSON(res)
+		status, c := "ok", cGreen
+		if res.Changed {
+			status, c = "changed", cYellow
 		}
-		fmt.Fprintln(d.Out, d.paint(cGreen, line))
+		line := fmt.Sprintf("%s: [%s]", status, host)
+		if isItem {
+			line += fmt.Sprintf(" => (item=%s)", itemLabel)
+		}
+		if d.Verbosity > 0 || res.VerboseAlways {
+			line += " => " + d.dump(task, res)
+		}
+		d.display(c, line)
+	}
+}
+
+// LoopResult reports a loop's aggregate: ok/changed/failed aggregates print
+// nothing beyond the per-item lines (and "...ignoring"); a fully skipped
+// loop prints a final skipping line.
+func (d *Default) LoopResult(host string, task *playbook.Task, res *agentproto.Result, ignored bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	switch {
+	case res.Failed:
+		if ignored {
+			d.display(cCyan, "...ignoring")
+		}
+	case res.Skipped:
+		line := fmt.Sprintf("skipping: [%s]", host)
+		if d.Verbosity > 0 {
+			line += " => " + d.dump(task, res)
+		}
+		d.display(cCyan, line)
 	}
 }
 
 func (d *Default) HostUnreachable(host string, task *playbook.Task, msg string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	line := fmt.Sprintf("fatal: [%s]: UNREACHABLE! => {\"changed\": false, \"msg\": %q, \"unreachable\": true}", host, msg)
-	fmt.Fprintln(d.Out, d.paint(cRed, line))
+	res := map[string]any{"changed": false, "msg": msg, "unreachable": true}
+	d.display(cBrightRed, fmt.Sprintf("fatal: [%s]: UNREACHABLE! => %s", host, template.PyJSON(res, d.indent(false), true, false)))
 }
 
 func (d *Default) Recap(stats map[string]*executor.HostStats, order []string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	fmt.Fprintf(d.Out, "\n%s\n", d.banner("PLAY RECAP"))
-	for _, host := range order {
+	d.banner("PLAY RECAP")
+	hosts := append([]string(nil), order...)
+	sort.Strings(hosts)
+	for _, host := range hosts {
 		st := stats[host]
 		if st == nil {
 			continue
 		}
-		hostLabel := host
-		switch {
-		case st.Failed > 0 || st.Unreachable > 0:
-			hostLabel = d.paint(cRed, host)
-		case st.Changed > 0:
-			hostLabel = d.paint(cYellow, host)
-		default:
-			hostLabel = d.paint(cGreen, host)
-		}
-		fmt.Fprintf(d.Out,
-			"%-26s : %s    %s    %s    %s    %s    %s    %s\n",
-			hostLabel,
-			d.stat("ok", st.OK, cGreen, st.OK > 0),
-			d.stat("changed", st.Changed, cYellow, st.Changed > 0),
-			d.stat("unreachable", st.Unreachable, cRed, st.Unreachable > 0),
-			d.stat("failed", st.Failed, cRed, st.Failed > 0),
-			d.stat("skipped", st.Skipped, cCyan, st.Skipped > 0),
-			d.stat("rescued", st.Rescued, cGreen, st.Rescued > 0),
-			d.stat("ignored", st.Ignored, cRed, st.Ignored > 0),
+		fmt.Fprintf(d.Out, "%s : %s %s %s %s %s %s %s\n",
+			d.hostColor(host, st),
+			d.colorize("ok", st.OK, cGreen),
+			d.colorize("changed", st.Changed, cYellow),
+			d.colorize("unreachable", st.Unreachable, cBrightRed),
+			d.colorize("failed", st.Failed, cRed),
+			d.colorize("skipped", st.Skipped, cCyan),
+			d.colorize("rescued", st.Rescued, cGreen),
+			d.colorize("ignored", st.Ignored, cBrightPurp),
 		)
 	}
+	fmt.Fprintln(d.Out)
 }
 
-func (d *Default) stat(label string, n int, c color, hot bool) string {
-	s := fmt.Sprintf("%s=%d", label, n)
-	if hot {
+// hostColor is Ansible's hostcolor(): "%-26s" plain, "%-37s" colored (the
+// escape codes count toward the width, exactly as in Python).
+func (d *Default) hostColor(host string, st *executor.HostStats) string {
+	if d.NoColor {
+		return fmt.Sprintf("%-26s", host)
+	}
+	c := cGreen
+	switch {
+	case st.Failed > 0 || st.Unreachable > 0:
+		c = cRed
+	case st.Changed > 0:
+		c = cYellow
+	}
+	return fmt.Sprintf("%-37s", d.paint(c, host))
+}
+
+// colorize is Ansible's colorize(): "lead=%-4s", colored only when nonzero.
+func (d *Default) colorize(lead string, n int, c color) string {
+	s := fmt.Sprintf("%s=%-4s", lead, strconv.Itoa(n))
+	if n != 0 {
 		return d.paint(c, s)
 	}
 	return s
 }
 
-// resultJSON renders a result the way ansible-playbook shows it after =>.
-func resultJSON(res *agentproto.Result) string {
-	data, err := json.Marshal(res)
-	if err != nil {
-		return fmt.Sprintf("{\"msg\": %q}", res.Msg)
+func (d *Default) indent(verboseAlways bool) int {
+	if verboseAlways || d.Verbosity > 2 {
+		return 4
 	}
-	return string(data)
+	return 0
 }
 
-func compactValue(v any) string {
-	switch t := v.(type) {
-	case string:
-		return t
-	default:
-		data, err := json.Marshal(v)
-		if err != nil {
-			return fmt.Sprintf("%v", v)
+// dump is CallbackBase._dump_results after _clean_results: internal keys,
+// invocation/diff (below -vvv) and exception are dropped, debug output is
+// trimmed to its message, and keys are sorted in Python-json form.
+func (d *Default) dump(task *playbook.Task, res *agentproto.Result) string {
+	m := res.ToVars()
+	delete(m, "failed")
+	delete(m, "skipped")
+	if res.RC == nil {
+		for _, k := range []string{"stdout_lines", "stderr_lines"} {
+			delete(m, k)
 		}
-		return string(data)
 	}
+	for k := range m {
+		if strings.HasPrefix(k, "_ansible_") {
+			delete(m, k)
+		}
+	}
+	if d.Verbosity < 3 {
+		delete(m, "invocation")
+		delete(m, "diff")
+	}
+	delete(m, "exception")
+	delete(m, "warnings")
+	delete(m, "deprecations")
+	if _, loop := m["results"]; loop && task.Loop != nil {
+		delete(m, "results")
+	}
+	if isDebug(task.Module) {
+		if _, hasMsg := m["msg"]; hasMsg {
+			for k := range m {
+				if !debugAllowedKeys[k] {
+					delete(m, k)
+				}
+			}
+		} else if name, ok := task.Args["var"].(string); ok && m[name] != nil {
+			// var= output is just the variable (loop keys included).
+			m = map[string]any{name: m[name]}
+		} else {
+			for _, k := range debugHiddenKeys {
+				delete(m, k)
+			}
+		}
+	}
+	return template.PyJSON(m, d.indent(res.VerboseAlways), true, false)
+}
+
+func isDebug(module string) bool {
+	return module == "debug" || module == "ansible.builtin.debug" || module == "ansible.legacy.debug"
+}
+
+// taskError prints ansible-core's "[ERROR]: Task failed" block with the
+// task's source excerpt. Identical blocks print once, as Display dedupes.
+func (d *Default) taskError(task *playbook.Task, res *agentproto.Result) {
+	var b strings.Builder
+	switch res.Origin {
+	case "verbatim":
+		fmt.Fprintf(&b, "[ERROR]: %s\n", res.Msg)
+	case "action":
+		fmt.Fprintf(&b, "[ERROR]: Task failed: Action failed: %s\n", res.Msg)
+	default:
+		fmt.Fprintf(&b, "[ERROR]: Task failed: Module failed: %s\n", res.Msg)
+	}
+	if task.Src.File != "" && task.Src.Line > 0 {
+		fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n", task.Src.File, task.Src.Line, task.Src.Col)
+		b.WriteString(d.excerpt(task.Src.File, task.Src.Line, task.Src.Col))
+	}
+	block := b.String()
+	if d.errors == nil {
+		d.errors = map[string]bool{}
+	}
+	if d.errors[block] {
+		return
+	}
+	d.errors[block] = true
+	fmt.Fprint(d.Out, d.paint(cRed, strings.TrimRight(block, "\n")))
+	fmt.Fprint(d.Out, "\n\n")
+}
+
+// excerpt renders up to two lines of context plus the target line, with
+// right-aligned line numbers and a caret under the column.
+func (d *Default) excerpt(file string, line, col int) string {
+	if d.srcCache == nil {
+		d.srcCache = map[string][]string{}
+	}
+	lines, ok := d.srcCache[file]
+	if !ok {
+		data, err := os.ReadFile(file)
+		if err == nil {
+			lines = strings.Split(string(data), "\n")
+		}
+		d.srcCache[file] = lines
+	}
+	if line > len(lines) {
+		return ""
+	}
+	width := len(strconv.Itoa(line))
+	var b strings.Builder
+	for n := max(1, line-2); n <= line; n++ {
+		fmt.Fprintf(&b, "%s\n", strings.TrimRight(fmt.Sprintf("%*d %s", width, n, lines[n-1]), " \t\r"))
+	}
+	fmt.Fprintf(&b, "%s^ column %d\n", strings.Repeat(" ", width+1+max(col-1, 0)), col)
+	return b.String()
 }

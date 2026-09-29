@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -22,11 +23,12 @@ func LoadYAML(inv *Inventory, data []byte, filename string) error {
 	if err != nil {
 		return err
 	}
-	root, ok := yaml.PlainMap(v)
+	rootKeys, root, ok := orderedMap(v)
 	if !ok {
 		return fmt.Errorf("%s: YAML inventory must be a mapping of group names", filename)
 	}
-	for name, body := range root {
+	for _, name := range rootKeys {
+		body := root[name]
 		if err := loadYAMLGroup(inv, name, body, filename); err != nil {
 			return err
 		}
@@ -39,21 +41,23 @@ func loadYAMLGroup(inv *Inventory, name string, body any, filename string) error
 	if body == nil {
 		return nil
 	}
-	m, ok := yaml.PlainMap(body)
+	keys, m, ok := orderedMap(body)
 	if !ok {
 		return fmt.Errorf("%s: group %q must map to a mapping (hosts/children/vars)", filename, name)
 	}
-	for key, val := range m {
+	for _, key := range keys {
+		val := m[key]
 		switch key {
 		case "hosts":
-			hosts, ok := yaml.PlainMap(val)
+			hostNames, hosts, ok := orderedMap(val)
 			if !ok {
 				if val == nil {
 					continue
 				}
 				return fmt.Errorf("%s: %s.hosts must be a mapping", filename, name)
 			}
-			for hostName, hostVars := range hosts {
+			for _, hostName := range hostNames {
+				hostVars := hosts[hostName]
 				names, err := ExpandRange(hostName)
 				if err != nil {
 					return fmt.Errorf("%s: %v", filename, err)
@@ -74,14 +78,15 @@ func loadYAMLGroup(inv *Inventory, name string, body any, filename string) error
 				}
 			}
 		case "children":
-			children, ok := yaml.PlainMap(val)
+			childNames, children, ok := orderedMap(val)
 			if !ok {
 				if val == nil {
 					continue
 				}
 				return fmt.Errorf("%s: %s.children must be a mapping", filename, name)
 			}
-			for childName, childBody := range children {
+			for _, childName := range childNames {
+				childBody := children[childName]
 				if err := loadYAMLGroup(inv, childName, childBody, filename); err != nil {
 					return err
 				}
@@ -103,4 +108,22 @@ func loadYAMLGroup(inv *Inventory, name string, body any, filename string) error
 		}
 	}
 	return nil
+}
+
+// orderedMap returns a mapping's keys in source order (YAML order decides
+// Ansible's inventory host order) alongside its plain-map form.
+func orderedMap(v any) ([]string, map[string]any, bool) {
+	m, ok := yaml.PlainMap(v)
+	if !ok {
+		return nil, nil, false
+	}
+	if om, isOM := v.(*yaml.OMap); isOM {
+		return om.Keys(), m, true
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys, m, true
 }

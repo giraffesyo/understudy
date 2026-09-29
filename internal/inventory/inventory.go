@@ -22,6 +22,10 @@ type Group struct {
 	Children map[string]*Group
 	Parents  map[string]*Group
 	depth    int
+
+	// Insertion order, which Ansible's "inventory" host order follows.
+	hostOrder  []*Host
+	childOrder []*Group
 }
 
 // Inventory is the loaded host/group graph. "all" and "ungrouped" always
@@ -29,6 +33,8 @@ type Group struct {
 type Inventory struct {
 	Hosts  map[string]*Host
 	Groups map[string]*Group
+
+	hostOrder []*Host // first-seen order
 }
 
 // New returns an empty inventory with the implicit groups.
@@ -64,15 +70,22 @@ func (inv *Inventory) ensureHost(name string) *Host {
 	}
 	h := &Host{Name: name, Vars: map[string]any{}, groups: map[string]*Group{}}
 	inv.Hosts[name] = h
+	inv.hostOrder = append(inv.hostOrder, h)
 	return h
 }
 
 func linkGroups(parent, child *Group) {
+	if _, ok := parent.Children[child.Name]; !ok {
+		parent.childOrder = append(parent.childOrder, child)
+	}
 	parent.Children[child.Name] = child
 	child.Parents[parent.Name] = parent
 }
 
 func addHostToGroup(g *Group, h *Host) {
+	if _, ok := g.Hosts[h.Name]; !ok {
+		g.hostOrder = append(g.hostOrder, h)
+	}
 	g.Hosts[h.Name] = h
 	h.groups[g.Name] = g
 }
@@ -81,7 +94,7 @@ func addHostToGroup(g *Group, h *Host) {
 // Call once after loading all sources.
 func (inv *Inventory) finalize() error {
 	// Any host only in "all" belongs to ungrouped.
-	for _, h := range inv.Hosts {
+	for _, h := range inv.hostOrder {
 		inGroup := false
 		for name := range h.groups {
 			if name != "all" && name != "ungrouped" {
@@ -163,8 +176,8 @@ func (inv *Inventory) GroupNames(h *Host) []string {
 	return out
 }
 
-// GroupsMap builds the `groups` magic variable: group name -> sorted host
-// names, with implicit all/ungrouped included.
+// GroupsMap builds the `groups` magic variable: group name -> host names
+// in inventory order, with implicit all/ungrouped included.
 func (inv *Inventory) GroupsMap() map[string]any {
 	out := make(map[string]any, len(inv.Groups))
 	for name, g := range inv.Groups {
@@ -178,29 +191,32 @@ func (inv *Inventory) GroupsMap() map[string]any {
 	return out
 }
 
-// groupHostNames collects a group's hosts including descendants, sorted.
+// groupHostNames is Ansible's Group.get_hosts(): the group's own hosts, then
+// its descendants' level by level (children in insertion order), each host
+// once.
 func (inv *Inventory) groupHostNames(g *Group) []string {
-	seen := map[string]bool{}
-	var walk func(*Group)
-	visited := map[string]bool{}
-	walk = func(gr *Group) {
-		if visited[gr.Name] {
-			return
+	var out []string
+	seenHost := map[string]bool{}
+	seenGroup := map[string]bool{g.Name: true}
+	level := []*Group{g}
+	for len(level) > 0 {
+		var next []*Group
+		for _, gr := range level {
+			for _, h := range gr.hostOrder {
+				if !seenHost[h.Name] {
+					seenHost[h.Name] = true
+					out = append(out, h.Name)
+				}
+			}
+			for _, child := range gr.childOrder {
+				if !seenGroup[child.Name] {
+					seenGroup[child.Name] = true
+					next = append(next, child)
+				}
+			}
 		}
-		visited[gr.Name] = true
-		for name := range gr.Hosts {
-			seen[name] = true
-		}
-		for _, child := range gr.Children {
-			walk(child)
-		}
+		level = next
 	}
-	walk(g)
-	out := make([]string, 0, len(seen))
-	for name := range seen {
-		out = append(out, name)
-	}
-	sort.Strings(out)
 	return out
 }
 
@@ -219,7 +235,16 @@ func (inv *Inventory) EffectiveVars(h *Host) map[string]any {
 	return out
 }
 
-// SortedHostNames returns all host names, sorted (stable play ordering).
+// HostNames returns all host names in inventory (first-seen) order.
+func (inv *Inventory) HostNames() []string {
+	out := make([]string, len(inv.hostOrder))
+	for i, h := range inv.hostOrder {
+		out[i] = h.Name
+	}
+	return out
+}
+
+// SortedHostNames returns all host names, sorted.
 func (inv *Inventory) SortedHostNames() []string {
 	out := make([]string, 0, len(inv.Hosts))
 	for name := range inv.Hosts {

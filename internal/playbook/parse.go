@@ -641,6 +641,9 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			if iv, ok := m["index_var"].(string); ok && iv != "" {
 				task.IndexVar = iv
 			}
+			if label, ok := m["label"]; ok {
+				task.LoopLabel = label
+			}
 			if pause, ok := m["pause"]; ok {
 				_ = pause // accepted; understudy does not pace loop items
 			}
