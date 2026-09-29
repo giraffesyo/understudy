@@ -2,7 +2,6 @@ package actions
 
 import (
 	"context"
-	"strings"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 )
@@ -27,8 +26,9 @@ func runRaw(ctx context.Context, actx *Context, args map[string]any, freeForm st
 	out := &agentproto.Result{
 		Changed: true,
 		RC:      agentproto.IntPtr(res.RC),
-		Stdout:  strings.TrimRight(string(res.Stdout), "\r\n"),
-		Stderr:  strings.TrimRight(string(res.Stderr), "\r\n"),
+		// raw returns output untouched (no trailing-newline strip).
+		Stdout: string(res.Stdout),
+		Stderr: string(res.Stderr),
 	}
 	if res.RC != 0 {
 		out.Failed = true
