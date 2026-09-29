@@ -90,6 +90,9 @@ func Run(req *agentproto.TaskRequest, payload io.Reader) (res *agentproto.Result
 	if res == nil {
 		res = agentproto.Fail("module %s returned no result", req.Module)
 	}
+	if pathInfoModules[req.Module] && !res.Skipped {
+		addPathInfo(res)
+	}
 	return res
 }
 

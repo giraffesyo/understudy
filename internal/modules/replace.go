@@ -102,7 +102,7 @@ func replaceModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		newContents = contents[:lo] + replaced + contents[hi:]
 		msg = fmt.Sprintf("%d replacements made", count)
 		if env.DiffMode {
-			res.Diff = []agentproto.Diff{{BeforeHeader: path, Before: contents, AfterHeader: path, After: newContents}}
+			res.Diff = []any{textDiff(path, contents, path, newContents)}
 		}
 	}
 	if changed && !env.CheckMode {

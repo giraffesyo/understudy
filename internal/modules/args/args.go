@@ -57,12 +57,21 @@ func (s Spec) Parse(raw map[string]any) (*Parsed, error) {
 		return nil, fmt.Errorf("Unsupported parameters: %s", strings.Join(unknown, ", "))
 	}
 
+	// Ansible's check_required_arguments: every missing one, sorted.
+	var missing []string
+	for name, def := range s {
+		if v, present := values[name]; def.Required && (!present || v == nil) {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return nil, fmt.Errorf("missing required arguments: %s", strings.Join(missing, ", "))
+	}
+
 	for name, def := range s {
 		val, present := values[name]
 		if !present || val == nil {
-			if def.Required {
-				return nil, fmt.Errorf("missing required argument: %s", name)
-			}
 			if def.Default != nil {
 				values[name] = def.Default
 			}

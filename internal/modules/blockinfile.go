@@ -124,10 +124,7 @@ func blockinfileModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		return res
 	}
 	if env.DiffMode {
-		res.Diff = []agentproto.Diff{{
-			BeforeHeader: path, AfterHeader: path,
-			Before: string(original), After: string(newContent),
-		}}
+		res.Diff = []any{textDiff(path, string(original), path, string(newContent))}
 	}
 	if env.CheckMode {
 		return res

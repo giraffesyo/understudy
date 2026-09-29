@@ -1,0 +1,219 @@
+---
+# Result dicts of the file module: add_path_info keys (uid, gid, owner,
+# group, mode, state, size), per-state result shapes, diffs, and failure
+# messages (Python OSError formatting included).
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/f"
+  tasks:
+    - name: create a directory
+      file: {path: "{{ d }}", state: directory, mode: "0755"}
+      register: r
+    - debug: {var: r}
+
+    - name: directory again (idempotent)
+      file: {path: "{{ d }}", state: directory}
+      register: r
+    - debug: {var: r}
+
+    - name: nested directories with a mode
+      file: {path: "{{ d }}/a/b/c", state: directory, mode: "0700"}
+      register: r
+    - debug: {var: r}
+
+    - name: directory mode change with diff
+      file: {path: "{{ d }}/a/b/c", state: directory, mode: "0750"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: touch a new file
+      file: {path: "{{ d }}/t.txt", state: touch, mode: "0640"}
+      register: r
+    - debug: {var: r}
+
+    - name: state=file on an existing file
+      file: {path: "{{ d }}/t.txt"}
+      register: r
+    - debug: {var: r}
+
+    - name: state=file changes the mode
+      file: {path: "{{ d }}/t.txt", state: file, mode: "u=rw,g=,o="}
+      register: r
+    - debug: {var: r}
+
+    - name: state=file mode change with diff
+      file: {path: "{{ d }}/t.txt", state: file, mode: "0644"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: state=file on a missing file fails
+      file: {path: "{{ d }}/missing.txt", state: file}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: state=file on a directory fails
+      file: {path: "{{ d }}/a", state: file}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: directory over an existing file fails
+      file: {path: "{{ d }}/t.txt", state: directory}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: directory under a file fails
+      file: {path: "{{ d }}/t.txt/sub", state: directory}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: bad mode fails
+      file: {path: "{{ d }}/t.txt", mode: "rwxbad"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: symlink
+      file: {path: "{{ d }}/l", src: "{{ d }}/t.txt", state: link}
+      register: r
+    - debug: {var: r}
+
+    - name: symlink again (idempotent)
+      file: {path: "{{ d }}/l", src: "{{ d }}/t.txt", state: link}
+      register: r
+    - debug: {var: r}
+
+    - name: relative symlink to a missing target fails without force
+      file: {path: "{{ d }}/l2", src: nope.txt, state: link}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: symlink over a file fails without force
+      file: {path: "{{ d }}/t.txt", src: "{{ d }}/a", state: link}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: hard link
+      file: {path: "{{ d }}/h", src: "{{ d }}/t.txt", state: hard}
+      register: r
+    - debug: {var: r}
+
+    - name: hard link again (idempotent)
+      file: {path: "{{ d }}/h", src: "{{ d }}/t.txt", state: hard}
+      register: r
+    - debug: {var: r}
+
+    - name: hard link to a missing src fails
+      file: {path: "{{ d }}/h2", src: "{{ d }}/nope", state: hard}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: src without link state fails
+      file: {path: "{{ d }}/x", src: "{{ d }}/t.txt"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: recurse without directory state fails
+      file: {path: "{{ d }}/t.txt", state: file, recurse: true}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: recursive mode
+      file: {path: "{{ d }}/a", state: directory, recurse: true, mode: "u+rwx"}
+      register: r
+    - debug: {var: r}
+
+    - name: absent on a file with diff
+      file: {path: "{{ d }}/h", state: absent}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: absent on a missing path
+      file: {path: "{{ d }}/h", state: absent}
+      register: r
+    - debug: {var: r}
+
+    - name: absent on a directory tree with diff
+      file: {path: "{{ d }}/a", state: absent}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: absent on a symlink
+      file: {path: "{{ d }}/l", state: absent}
+      register: r
+    - debug: {var: r}
+
+    - name: make a read-only directory
+      file: {path: "{{ d }}/ro", state: directory, mode: "0555"}
+      register: r
+    - debug: {var: r}
+
+    - name: touch inside a read-only directory fails
+      file: {path: "{{ d }}/ro/t", state: touch}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: directory inside a read-only directory fails
+      file: {path: "{{ d }}/ro/sub/deeper", state: directory}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: symlink inside a read-only directory fails
+      file: {path: "{{ d }}/ro/l", src: /, state: link}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: chown to another user fails
+      file: {path: "{{ d }}/t.txt", owner: "0"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: chown to an unknown user fails
+      file: {path: "{{ d }}/t.txt", owner: no_such_user_here}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: chgrp to an unknown group fails
+      file: {path: "{{ d }}/t.txt", group: no_such_group_here}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: out-of-range mode fails
+      file: {path: "{{ d }}/t.txt", mode: "77777"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: restore the read-only directory
+      file: {path: "{{ d }}/ro", state: directory, mode: "0755"}
+
+    - name: missing path argument fails
+      file: {state: directory}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: bad state fails
+      file: {path: "{{ d }}", state: bogus}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}

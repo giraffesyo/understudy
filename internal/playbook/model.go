@@ -77,6 +77,7 @@ type Task struct {
 	Async          int            // async timeout seconds (0 = synchronous)
 	Poll           int            // poll interval; -1 = unset, 0 = fire-and-forget
 	CheckMode      *bool          // per-task check_mode override (nil = inherit run)
+	Diff           *bool          // per-task diff override (nil = inherit run)
 	Register       string
 	IgnoreErrors   bool
 	FailedWhen     []string

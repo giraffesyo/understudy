@@ -125,7 +125,7 @@ func (m *Minimal) adhocError(task *playbook.Task, res *agentproto.Result) {
 	}
 	repr.Set("poll", poll)
 	block := fmt.Sprintf("[ERROR]: Task failed: %s: %s\nOrigin: <adhoc '%s' task>\n\n%s\n",
-		kind, res.Msg, task.Module, template.PyStr(repr))
+		kind, res.ErrorMessage(), task.Module, template.PyStr(repr))
 	if m.errors == nil {
 		m.errors = map[string]bool{}
 	}

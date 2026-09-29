@@ -174,8 +174,8 @@ func copyModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	return res
 }
 
-func buildDiff(dest string, newContent []byte, destExists bool) []agentproto.Diff {
-	d := agentproto.Diff{AfterHeader: dest, BeforeHeader: dest}
+func buildDiff(dest string, newContent []byte, destExists bool) any {
+	d := struct{ Before, After, BeforeHeader, AfterHeader string }{AfterHeader: dest, BeforeHeader: dest}
 	if len(newContent) > maxDiffBytes || bytes.IndexByte(newContent, 0) >= 0 {
 		d.After = "[content omitted: binary or too large]\n"
 	} else {
@@ -192,7 +192,7 @@ func buildDiff(dest string, newContent []byte, destExists bool) []agentproto.Dif
 			d.Before = string(old)
 		}
 	}
-	return []agentproto.Diff{d}
+	return []any{textDiff(d.BeforeHeader, d.Before, d.AfterHeader, d.After)}
 }
 
 // validateFailure renders a failed validate command the way Ansible does:

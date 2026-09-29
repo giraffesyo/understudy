@@ -44,6 +44,7 @@ var (
 // Default is the standard output callback.
 type Default struct {
 	Out       io.Writer
+	Err       io.Writer // warnings; nil = discarded
 	Verbosity int
 	NoColor   bool
 	Columns   int // banner width (Display.columns); 0 = 79
@@ -67,7 +68,7 @@ func New(verbosity int) *Default {
 			cols = w - 1
 		}
 	}
-	return &Default{Out: os.Stdout, Verbosity: verbosity, NoColor: noColor, Columns: cols}
+	return &Default{Out: os.Stdout, Err: os.Stderr, Verbosity: verbosity, NoColor: noColor, Columns: cols}
 }
 
 func (d *Default) paint(c color, s string) string {
@@ -128,6 +129,7 @@ func (d *Default) HostResult(host string, task *playbook.Task, res *agentproto.R
 	if res.DelegatedTo != "" && res.DelegatedTo != host {
 		host += " -> " + res.DelegatedTo
 	}
+	defer d.warnings(res)
 	isItem := item != nil || (res.Extra != nil && res.Extra["ansible_loop_var"] != nil)
 	itemLabel := ""
 	if isItem {
@@ -155,6 +157,17 @@ func (d *Default) HostResult(host string, task *playbook.Task, res *agentproto.R
 		}
 		d.display(cCyan, line)
 	default:
+		// v2_on_file_diff precedes v2_runner_on_ok.
+		if res.ShowDiff && res.Changed && diffTruthy(res.Diff) {
+			if s := d.getDiff(res.Diff); s != "" {
+				// Display.display: CRLF -> LF, one trailing newline.
+				s = strings.ReplaceAll(s, "\r\n", "\n")
+				if !strings.HasSuffix(s, "\n") {
+					s += "\n"
+				}
+				fmt.Fprint(d.Out, s)
+			}
+		}
 		status, c := "ok", cGreen
 		if res.Changed {
 			status, c = "changed", cYellow
@@ -310,6 +323,18 @@ func isDebug(module string) bool {
 	return module == "debug" || module == "ansible.builtin.debug" || module == "ansible.legacy.debug"
 }
 
+// warnings prints a result's module warnings (to stderr, as Display.warning
+// does).
+func (d *Default) warnings(res *agentproto.Result) {
+	if d.Err == nil || res.Extra == nil {
+		return
+	}
+	list, _ := res.Extra["warnings"].([]any)
+	for _, w := range list {
+		fmt.Fprintf(d.Err, "%s\n\n", d.paint(cBrightPurp, "[WARNING]: "+template.PyStr(w)))
+	}
+}
+
 // taskError prints ansible-core's "[ERROR]: Task failed" block with the
 // task's source excerpt. Identical blocks print once, as Display dedupes.
 func (d *Default) taskError(task *playbook.Task, res *agentproto.Result) {
@@ -318,9 +343,9 @@ func (d *Default) taskError(task *playbook.Task, res *agentproto.Result) {
 	case "verbatim":
 		fmt.Fprintf(&b, "[ERROR]: %s\n", res.Msg)
 	case "action":
-		fmt.Fprintf(&b, "[ERROR]: Task failed: Action failed: %s\n", res.Msg)
+		fmt.Fprintf(&b, "[ERROR]: Task failed: Action failed: %s\n", res.ErrorMessage())
 	default:
-		fmt.Fprintf(&b, "[ERROR]: Task failed: Module failed: %s\n", res.Msg)
+		fmt.Fprintf(&b, "[ERROR]: Task failed: Module failed: %s\n", res.ErrorMessage())
 	}
 	if task.Src.File != "" && task.Src.Line > 0 {
 		fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n", task.Src.File, task.Src.Line, task.Src.Col)
