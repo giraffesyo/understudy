@@ -98,6 +98,9 @@ func (r *Runner) installLookups() {
 			}
 			return out, nil
 
+		case "password":
+			return r.passwordLookup(terms, kwargs)
+
 		case "pipe":
 			return nil, fmt.Errorf("the pipe lookup is not supported yet")
 		}
