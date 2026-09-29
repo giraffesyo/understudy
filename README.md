@@ -222,7 +222,7 @@ than silently diverging. Known boundaries:
 - **Not yet implemented** (these error clearly, they are not silently
   ignored): `strategy` other than linear, `vars_prompt`, template macros /
   `include`/`extends`, `delegate_to` to hosts other than localhost, and
-  lookups beyond `env`/`file`/`fileglob`/`first_found`/`dict`.
+  lookups beyond `env`/`file`/`fileglob`/`first_found`/`dict`/`password`.
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
   strings; regular expressions use Go's RE2 (lookaround and backreferences
   in *patterns* are rejected with a clear error rather than mis-matched).
