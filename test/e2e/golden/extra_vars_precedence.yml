@@ -1,0 +1,14 @@
+---
+# -e extra vars (the harness passes workdir) beat task, block and loop vars.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    workdir: from-play
+  tasks:
+    - debug: {msg: "{{ workdir }}"}
+      vars:
+        workdir: from-task
+    - block:
+        - debug: {msg: "{{ workdir }}"}
+      vars:
+        workdir: from-block

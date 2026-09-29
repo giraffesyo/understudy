@@ -263,7 +263,12 @@ func (c *Context) Get(name string) (any, bool) {
 	if v, ok := c.cache[name]; ok {
 		return v, true
 	}
-	raw, ok := c.overlay[name]
+	// -e extra vars outrank everything, including task/block/loop vars
+	// in the overlay (Ansible's precedence rule 22 of 22).
+	raw, ok := c.store.extraVar(name)
+	if !ok {
+		raw, ok = c.overlay[name]
+	}
 	if !ok {
 		raw, ok = c.flat[name]
 	}
@@ -411,4 +416,15 @@ func shortHostname(host string) string {
 		}
 	}
 	return host
+}
+
+// extraVar returns an -e extra var, if set.
+func (s *Store) extraVar(name string) (any, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.layers[LExtraVars] == nil {
+		return nil, false
+	}
+	v, ok := s.layers[LExtraVars][""][name]
+	return v, ok
 }
