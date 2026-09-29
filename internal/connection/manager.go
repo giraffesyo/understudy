@@ -153,6 +153,18 @@ func (m *Manager) dial(ctx context.Context, host string) (Connection, bool, erro
 	return nil, false, fmt.Errorf("unknown connection type %q for host %s", kind, host)
 }
 
+// Reset closes a host's cached connection so the next use redials
+// (meta: reset_connection).
+func (m *Manager) Reset(host string) {
+	m.mu.Lock()
+	hc, ok := m.hosts[host]
+	delete(m.hosts, host)
+	m.mu.Unlock()
+	if ok && hc.conn != nil {
+		hc.conn.Close()
+	}
+}
+
 // CloseAll tears down every cached connection.
 func (m *Manager) CloseAll() {
 	m.mu.Lock()

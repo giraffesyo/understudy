@@ -114,6 +114,16 @@ func (s *Store) SetFacts(host string, facts map[string]any) {
 	s.set(LFacts, host, facts)
 }
 
+// ClearFacts drops a host's gathered facts (meta: clear_facts); set_fact
+// values are not cached facts and survive, as in Ansible.
+func (s *Store) ClearFacts(host string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.layers[LFacts] != nil {
+		delete(s.layers[LFacts], host)
+	}
+}
+
 // flatten merges all layers for one host in precedence order.
 func (s *Store) flatten(host string) map[string]any {
 	s.mu.RLock()
