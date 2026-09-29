@@ -241,7 +241,9 @@ than silently diverging. Known boundaries:
   Older ansible-core releases word some messages differently (for example
   2.14's `non-zero return code`); task outcomes are the same.
 - **Not yet implemented** (these error clearly, they are not silently
-  ignored): the `debug` strategy and the `dig` lookup.
+  ignored): the `debug` strategy. The `dig` lookup covers A, AAAA, CNAME,
+  MX, NS, TXT, PTR and SRV (not yet byte-compared: Ansible's needs
+  dnspython).
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
   strings; regular expressions use Go's RE2 (lookaround and backreferences
   in *patterns* are rejected with a clear error rather than mis-matched).
