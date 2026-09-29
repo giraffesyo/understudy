@@ -533,6 +533,7 @@ func adhocCmd(args []string) int {
 		Name:    module,
 		Module:  module,
 		LoopVar: "item",
+		Poll:    -1,
 		Src:     playbook.Pos{File: "<adhoc>", Line: 1},
 	}
 	if p.moduleArgs != "" {
@@ -549,6 +550,9 @@ func adhocCmd(args []string) int {
 		Name:        "understudy Ad-Hoc",
 		HostPattern: p.positional[0],
 		GatherFacts: &gather,
+		// Unset, as the playbook parser leaves it (0 would mean "abort on
+		// any failure").
+		MaxFailPercentage: -1,
 		Tasks:       []*playbook.Task{task},
 		Src:         playbook.Pos{File: "<adhoc>", Line: 1},
 	}
@@ -568,7 +572,8 @@ func adhocCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
 		return 1
 	}
-	cb := callback.New(p.verbosity)
+	cb := callback.NewMinimal(p.verbosity)
+	cb.ArgOrder = argKeyOrder(p.moduleArgs)
 	runner := executor.NewRunner(inv, cb, opts)
 	runner.Limit = p.limit
 	code, err := runner.Run(context.Background(), []*playbook.Play{play})
@@ -577,4 +582,15 @@ func adhocCmd(args []string) int {
 		return 1
 	}
 	return code
+}
+
+// argKeyOrder lists the keys of a k=v argument string in the order given.
+func argKeyOrder(raw string) []string {
+	var keys []string
+	for _, tok := range strings.Fields(raw) {
+		if k, _, ok := strings.Cut(tok, "="); ok && k != "" && !strings.ContainsAny(k, "'\"") {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
