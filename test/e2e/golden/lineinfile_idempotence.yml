@@ -1,0 +1,18 @@
+---
+# lineinfile with a regexp that stops matching once the line is replaced:
+# the exact line already present keeps the second run idempotent.
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - copy:
+        dest: "{{ workdir }}/sshd_config"
+        content: |
+          Port 22
+          #ClientAliveInterval 0
+        force: false
+    - lineinfile:
+        path: "{{ workdir }}/sshd_config"
+        regexp: '^#ClientAliveInterval'
+        line: 'ClientAliveInterval 180'
+      register: r
+    - debug: {var: r.changed}

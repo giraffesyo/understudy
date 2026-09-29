@@ -116,7 +116,9 @@ func rpmManager(cmd string) *pkgManager {
 	return &pkgManager{
 		name: cmd,
 		installed: func(env *RunEnv, pkg string) bool {
-			_, err := runOut(env, "rpm", "-q", pkg)
+			// --whatprovides resolves provides aliases and file paths
+			// (libselinux-python3 -> python3-libselinux), as dnf does.
+			_, err := runOut(env, "rpm", "-q", "--whatprovides", pkg)
 			return err == nil
 		},
 		install: func(env *RunEnv, pkgs []string, latest bool, opts []string) (string, error) {
@@ -228,7 +230,9 @@ func mkPkg(mgrName string) ModuleFunc {
 			if err != nil {
 				return agentproto.Fail("package install failed: %v: %s", err, tail(out))
 			}
-			res.Changed = len(missing) > 0 || pkgOutputShowsChange(mgr.name, out)
+			// The transaction decides: names that only resolve through dnf
+			// (groups, modules) can look missing and still be "Nothing to do".
+			res.Changed = pkgOutputShowsChange(mgr.name, out)
 			res.Stdout = tail(out)
 		case "absent":
 			var present []string
