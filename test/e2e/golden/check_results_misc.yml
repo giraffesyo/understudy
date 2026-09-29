@@ -1,0 +1,26 @@
+---
+# tempfile, stat and find under --check (harness: check_ prefix):
+# tempfile does not support check mode; stat and find run normally.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/cm"
+  tasks:
+    - name: real setup
+      copy: {content: "x\n", dest: "{{ workdir }}/cm.txt"}
+      check_mode: false
+
+    - name: tempfile is skipped in check mode
+      tempfile: {path: "{{ workdir }}"}
+      register: r
+    - debug: {var: r}
+
+    - name: stat still runs
+      stat: {path: "{{ workdir }}/cm.txt", get_mime: false, get_attributes: false}
+      register: r
+    - debug: {msg: "{{ r.stat.exists }} {{ r.stat.size }} {{ r.stat.checksum }}"}
+
+    - name: find still runs
+      find: {paths: "{{ workdir }}", patterns: "cm.*"}
+      register: r
+    - debug: {msg: "{{ r.matched }} {{ r.files | map(attribute='path') | list }}"}

@@ -309,7 +309,7 @@ func formatRangeUnified(start, stop int) string {
 	return strconv.Itoa(beginning) + "," + strconv.Itoa(length)
 }
 
-// unifiedDiff is difflib.unified_diff(a, b, fromfile, tofile, '', '', n).
+// unifiedDiff is difflib.unified_diff(a, b, fromfile, tofile, ”, ”, n).
 func unifiedDiff(a, b []string, fromfile, tofile string, n int) []string {
 	var out []string
 	for gi, group := range newSequenceMatcher(a, b).groupedOpcodes(n) {

@@ -785,4 +785,3 @@ func pyStrRepr(s string) string {
 	}
 	return "'" + strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), "'", `\'`) + "'"
 }
-
