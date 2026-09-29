@@ -26,6 +26,8 @@ type SSHConfig struct {
 	KeyPassphrase   func() (string, error)
 	HostKeyChecking bool
 	Timeout         time.Duration // dial timeout, default 10s
+	ProxyJump       []string      // jump hosts, first to last
+	ProxyCommand    string        // OpenSSH ProxyCommand (%h %p %r expanded)
 }
 
 // SSH is one host's connection: a single ssh.Client reused for the whole
@@ -137,7 +139,7 @@ func DialSSH(cfg SSHConfig) (*SSH, error) {
 		Timeout:         cfg.Timeout,
 	}
 	addr := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port))
-	client, err := ssh.Dial("tcp", addr, clientCfg)
+	client, err := dialVia(cfg, addr, clientCfg)
 	if err != nil {
 		if cfg.HostKeyChecking && strings.Contains(err.Error(), "knownhosts") {
 			return nil, fmt.Errorf(

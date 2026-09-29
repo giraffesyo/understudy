@@ -193,7 +193,8 @@ All modules are idempotent (query-before-mutate) and honor `--check` and,
 where meaningful, `--diff`.
 
 **Connections** — SSH (ssh-agent → key files → password auth chain,
-`known_hosts` verification, connection reuse) and `local`. `become` via
+`known_hosts` verification, connection reuse, bastions via `ProxyJump` /
+`ProxyCommand` from `ansible_ssh_common_args`) and `local`. `become` via
 `sudo`.
 
 ## Architecture

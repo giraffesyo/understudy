@@ -320,9 +320,6 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 	if p.becomeMethod != "" && p.becomeMethod != "sudo" {
 		return executor.Options{}, fmt.Errorf("become method %q is not supported (only sudo)", p.becomeMethod)
 	}
-	for _, a := range p.sshArgs {
-		fmt.Fprintf(os.Stderr, "[WARNING]: ignoring SSH client arguments %q: understudy uses a native SSH client\n", a)
-	}
 	timeout := cfg.Timeout
 	if p.timeout > 0 {
 		timeout = time.Duration(p.timeout) * time.Second
@@ -349,6 +346,10 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		HostKeyChecking: cfg.HostKeyChecking,
 		Timeout:         timeout,
 		RemoteTmp:       cfg.RemoteTmp,
+		SSHArgs:         p.sshArgs,
+		Warn: func(msg string) {
+			fmt.Fprintf(os.Stderr, "[WARNING]: %s\n", msg)
+		},
 		KeyPassphrase: func() (string, error) {
 			return promptSecret("SSH key passphrase")
 		},
