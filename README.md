@@ -231,8 +231,17 @@ than silently diverging. Known boundaries:
 
 - **Targets**: the agent supports `linux/amd64` and `linux/arm64`. Other
   platforms fall back to the `raw` module.
+- **Python plugins**: there is no Python anywhere, so plugins that exist
+  only as Python code (custom modules, filters, lookups, callbacks) cannot
+  be loaded. The common ones are implemented natively — including the
+  `timer` and `profile_tasks` callbacks and the `minimal` stdout callback —
+  and anything else is reported (`Skipping callback plugin ..., unable to
+  load`, `couldn't resolve module/action ...`), never silently skipped.
+- **Output reference**: output is byte-compared against ansible-core 2.21.
+  Older ansible-core releases word some messages differently (for example
+  2.14's `non-zero return code`); task outcomes are the same.
 - **Not yet implemented** (these error clearly, they are not silently
-  ignored): the `debug` strategy and network lookups (`url`, `dig`, ...).
+  ignored): the `debug` strategy and the `dig` lookup.
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
   strings; regular expressions use Go's RE2 (lookaround and backreferences
   in *patterns* are rejected with a clear error rather than mis-matched).
