@@ -962,3 +962,37 @@ func TestMaxFailPercentageTolerated(t *testing.T) {
 		t.Errorf("survivors should reach the second task (want 3):\n%s", out)
 	}
 }
+
+func TestAsyncJobsAndStatus(t *testing.T) {
+	code, out, _ := run(t, `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - shell: "sleep 1; echo from-job"
+      async: 30
+      poll: 0
+      register: job
+    - assert: {that: ["job.started", "not job.finished", "job.ansible_job_id is defined"]}
+    - async_status: {jid: "{{ job.ansible_job_id }}"}
+      register: st
+      until: st.finished
+      retries: 30
+      delay: 1
+    - assert: {that: ["st.stdout == 'from-job'", "st.rc == 0"]}
+    - command: echo polled
+      async: 20
+      poll: 1
+      register: p
+    - assert: {that: ["p.finished", "p.stdout == 'polled'"]}
+    - command: sleep 10
+      async: 2
+      poll: 1
+      register: to
+      ignore_errors: true
+    - assert: {that: ["to.failed", "to.async_result is defined"]}
+    - async_status: {jid: "{{ job.ansible_job_id }}", mode: cleanup}
+`, executor.Options{})
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s", code, out)
+	}
+}

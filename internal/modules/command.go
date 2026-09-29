@@ -107,10 +107,6 @@ func mkCommand(shell bool) ModuleFunc {
 			return res
 		}
 
-		if env.Background {
-			return launchDetached(env, shell, cmdline, argv, chdir)
-		}
-
 		var cmd *exec.Cmd
 		if shell {
 			sh := "/bin/sh"
@@ -176,55 +172,6 @@ func mkCommand(shell bool) ModuleFunc {
 			res.Msg = "The command exited with a non-zero return code."
 		}
 		return res
-	}
-}
-
-// launchDetached implements fire-and-forget async (poll: 0): the process
-// starts in its own session, survives the agent's exit, and the task
-// returns immediately with started=1.
-func launchDetached(env *RunEnv, shell bool, cmdline string, argv []string, chdir string) *agentproto.Result {
-	var cmd *exec.Cmd
-	if shell {
-		cmd = exec.Command("/bin/sh", "-c", cmdline)
-	} else {
-		if len(argv) == 0 {
-			var err error
-			argv, err = shlexSplit(cmdline)
-			if err != nil || len(argv) == 0 {
-				return agentproto.Fail("failed to parse command: %v", err)
-			}
-		}
-		path, err := lookPath(argv[0])
-		if err != nil {
-			return agentproto.Fail("Cannot find command %q: %v", argv[0], err)
-		}
-		cmd = exec.Command(path, argv[1:]...)
-	}
-	if chdir != "" {
-		cmd.Dir = chdir
-	}
-	if len(env.Env) > 0 {
-		cmd.Env = os.Environ()
-		for k, v := range env.Env {
-			cmd.Env = append(cmd.Env, k+"="+v)
-		}
-	}
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	detachProcess(cmd)
-	if err := cmd.Start(); err != nil {
-		return agentproto.Fail("failed to start background command: %v", err)
-	}
-	pid := cmd.Process.Pid
-	go cmd.Wait() // reap if we're still alive; harmless otherwise
-	return &agentproto.Result{
-		Changed: true,
-		Extra: map[string]any{
-			"started":        1,
-			"finished":       0,
-			"ansible_job_id": fmt.Sprintf("%d.%d", time.Now().Unix(), pid),
-		},
 	}
 }
 
