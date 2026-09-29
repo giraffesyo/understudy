@@ -3,11 +3,13 @@ package executor
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/csv"
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -53,6 +55,7 @@ var lookupPlugins = map[string]lookupPlugin{
 	"inventory_hostnames": lookupInventoryHostnames,
 	"unvault":             lookupUnvault,
 	"url":                 lookupURL,
+	"dig":                 lookupDig,
 }
 
 // installLookups wires the control-side lookup plugins into the template
@@ -899,6 +902,116 @@ func lookupURL(_ *Runner, _ *template.EvalCtx, terms []any, kw map[string]any) (
 			}
 		} else {
 			out = append(out, string(body))
+		}
+	}
+	return out, nil
+}
+
+// lookupDig is community.general.dig on Go's resolver: "name", "name/TYPE"
+// or "name qtype=TYPE", optional "@server" terms. Records come back in
+// dig's presentation form; no records is the string "NXDOMAIN".
+func lookupDig(_ *Runner, _ *template.EvalCtx, terms []any, kw map[string]any) ([]any, error) {
+	var names []string
+	qtype := "A"
+	server := ""
+	for _, t := range termStrings(terms) {
+		for _, f := range strings.Fields(t) {
+			switch {
+			case strings.HasPrefix(f, "@"):
+				server = strings.TrimPrefix(f, "@")
+			case strings.Contains(f, "="):
+				k, v, _ := strings.Cut(f, "=")
+				if strings.EqualFold(k, "qtype") {
+					qtype = strings.ToUpper(v)
+				}
+			default:
+				if n, t, ok := strings.Cut(f, "/"); ok {
+					f, qtype = n, strings.ToUpper(t)
+				}
+				names = append(names, f)
+			}
+		}
+	}
+	if v, ok := kw["qtype"]; ok {
+		qtype = strings.ToUpper(template.PyStr(v))
+	}
+	resolver := net.DefaultResolver
+	if server != "" {
+		addr := server
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			addr = net.JoinHostPort(addr, "53")
+		}
+		resolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		}}
+	}
+	ctx := context.Background()
+	fqdn := func(s string) string {
+		if strings.HasSuffix(s, ".") {
+			return s
+		}
+		return s + "."
+	}
+	var out []any
+	for _, name := range names {
+		var recs []string
+		var err error
+		switch qtype {
+		case "A", "AAAA":
+			var ips []net.IP
+			network := "ip4"
+			if qtype == "AAAA" {
+				network = "ip6"
+			}
+			ips, err = resolver.LookupIP(ctx, network, name)
+			for _, ip := range ips {
+				recs = append(recs, ip.String())
+			}
+		case "CNAME":
+			var c string
+			if c, err = resolver.LookupCNAME(ctx, name); err == nil && c != fqdn(name) {
+				recs = append(recs, c)
+			}
+		case "MX":
+			var mx []*net.MX
+			mx, err = resolver.LookupMX(ctx, name)
+			for _, m := range mx {
+				recs = append(recs, fmt.Sprintf("%d %s", m.Pref, m.Host))
+			}
+		case "NS":
+			var ns []*net.NS
+			ns, err = resolver.LookupNS(ctx, name)
+			for _, n := range ns {
+				recs = append(recs, n.Host)
+			}
+		case "TXT":
+			var txt []string
+			txt, err = resolver.LookupTXT(ctx, name)
+			recs = append(recs, txt...)
+		case "PTR":
+			recs, err = resolver.LookupAddr(ctx, name)
+		case "SRV":
+			var srv []*net.SRV
+			_, srv, err = resolver.LookupSRV(ctx, "", "", name)
+			for _, s := range srv {
+				recs = append(recs, fmt.Sprintf("%d %d %d %s", s.Priority, s.Weight, s.Port, s.Target))
+			}
+		default:
+			return nil, fmt.Errorf("dig: qtype %s is not supported (A, AAAA, CNAME, MX, NS, TXT, PTR, SRV)", qtype)
+		}
+		if dnsErr, ok := err.(*net.DNSError); ok && (dnsErr.IsNotFound || dnsErr.Err == "no such host") {
+			err = nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("dig lookup for %s/%s failed: %v", name, qtype, err)
+		}
+		if len(recs) == 0 {
+			out = append(out, "NXDOMAIN")
+			continue
+		}
+		for _, r := range recs {
+			out = append(out, r)
 		}
 	}
 	return out, nil
