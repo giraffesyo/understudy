@@ -1,0 +1,13 @@
+---
+# None renders as '' in {{ }} output (finalize) but 'None' inside expressions.
+- hosts: localhost
+  gather_facts: false
+  vars: {n: null}
+  tasks:
+    - debug: {msg: "a{{ n }}b"}
+    - debug: {msg: "{{ n }}"}
+    - debug: {msg: "{{ [n, 1] }}"}
+    - debug: {msg: "{{ n | string }}|{{ n ~ 'x' }}|{{ 'x' ~ n }}"}
+    - debug: {msg: "{% if n is none %}NONE{% endif %} {{ n is none }}"}
+    - debug: {msg: "{{ {'k': n} }} {{ n | default('d') }} {{ n | default('d', true) }}"}
+    - debug: {msg: "{{ none_undefined | default(None) }}x"}

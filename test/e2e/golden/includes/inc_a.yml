@@ -1,0 +1,1 @@
+- debug: {msg: "in a {{ x | default('-') }} {{ item | default('noitem') }}"}

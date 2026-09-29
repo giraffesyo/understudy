@@ -182,6 +182,9 @@ func (e *Engine) RenderString(src string, vars VarGetter, pos Position) (string,
 	if s, ok := v.(string); ok {
 		return s, nil
 	}
+	if v == nil {
+		return "", nil // finalize: a lone {{ none }} renders empty
+	}
 	return toStr(v), nil
 }
 

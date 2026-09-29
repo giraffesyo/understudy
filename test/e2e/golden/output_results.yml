@@ -1,0 +1,20 @@
+---
+# Output fidelity: Python-json escaping, loop item labels, failed loop
+# items, ignore_errors on loops.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    s: "a<b>&c é \u2028 \b\f\x01 z"
+  tasks:
+    - debug: {msg: "{{ s | to_json }}"}
+    - debug: {msg: "{{ s }}"}
+    - debug: {var: s}
+    - set_fact: {x: 1}
+    - command: /bin/echo hi
+    - fail: {msg: "boom {{ s }}"}
+      ignore_errors: true
+    - debug: {msg: "{{ item }}"}
+      loop: [1, {"k": "v"}]
+    - command: "/bin/sh -c 'exit {{ item }}'"
+      loop: [0, 1]
+      ignore_errors: true

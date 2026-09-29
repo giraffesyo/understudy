@@ -38,7 +38,7 @@ const (
 // the keys it hides for var= output (_hide_in_debug).
 var (
 	debugAllowedKeys = map[string]bool{"msg": true, "exception": true, "warnings": true, "deprecations": true}
-	debugHiddenKeys  = []string{"changed", "failed", "skipped", "invocation", "skip_reason"}
+	debugHiddenKeys  = []string{"changed", "failed", "skipped", "invocation", "skip_reason", "ansible_loop_var", "ansible_index_var"}
 )
 
 // Default is the standard output callback.
@@ -187,6 +187,17 @@ func (d *Default) LoopResult(host string, task *playbook.Task, res *agentproto.R
 	}
 }
 
+// Included is v2_playbook_on_include: "included: <file> for h1, h2".
+func (d *Default) Included(task *playbook.Task, target string, hosts []string, item any, hasItem bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	line := fmt.Sprintf("included: %s for %s", target, strings.Join(hosts, ", "))
+	if hasItem {
+		line += fmt.Sprintf(" => (item=%s)", template.PyStr(item))
+	}
+	d.display(cCyan, line)
+}
+
 func (d *Default) HostUnreachable(host string, task *playbook.Task, msg string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -279,15 +290,15 @@ func (d *Default) dump(task *playbook.Task, res *agentproto.Result) string {
 		delete(m, "results")
 	}
 	if isDebug(task.Module) {
-		if _, hasMsg := m["msg"]; hasMsg {
+		if msg, hasMsg := m["msg"]; hasMsg {
 			for k := range m {
 				if !debugAllowedKeys[k] {
 					delete(m, k)
 				}
 			}
-		} else if name, ok := task.Args["var"].(string); ok && m[name] != nil {
-			// var= output is just the variable (loop keys included).
-			m = map[string]any{name: m[name]}
+			if msg == nil {
+				delete(m, "msg") // msg: null renders as {}
+			}
 		} else {
 			for _, k := range debugHiddenKeys {
 				delete(m, k)

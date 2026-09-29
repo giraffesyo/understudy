@@ -272,7 +272,14 @@ type fmtBuilder interface {
 
 func (o *renderOutput) writeText(s string) { o.b.WriteString(s) }
 
-func (o *renderOutput) writeValue(v any) { o.b.WriteString(toStr(v)) }
+// writeValue emits a {{ }} result. Like Ansible's finalize hook, None
+// renders as the empty string (inside expressions it is still "None").
+func (o *renderOutput) writeValue(v any) {
+	if v == nil {
+		return
+	}
+	o.b.WriteString(toStr(v))
+}
 
 // loopInfo is the `loop` variable inside {% for %}.
 type loopInfo struct {

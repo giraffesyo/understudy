@@ -1,0 +1,26 @@
+---
+# Output fidelity: debug var in a loop, delegation label, empty loops, and
+# a failing loop that ends the play.
+- hosts: localhost
+  gather_facts: false
+  vars: {x: 5}
+  tasks:
+    - debug: {var: x}
+      loop: [1]
+    - ping:
+    - command: /bin/echo x
+      when: false
+    - command: /bin/echo x
+      changed_when: false
+    - debug: {msg: hi}
+      delegate_to: localhost
+    - file: {path: /tmp, state: directory}
+      loop: [1]
+      when: item == 2
+    - debug: {msg: "{{ item }}"}
+      loop: []
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - fail: {msg: x}
+      loop: [a, b]

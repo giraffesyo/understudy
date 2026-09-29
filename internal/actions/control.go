@@ -47,7 +47,7 @@ func runDebug(_ context.Context, actx *Context, args map[string]any, _ string) *
 	msg := "Hello world!"
 	if m, ok := args["msg"]; ok {
 		if m == nil {
-			return &agentproto.Result{VerboseAlways: true}
+			return &agentproto.Result{VerboseAlways: true, Extra: map[string]any{"msg": nil}}
 		}
 		if s, isStr := m.(string); isStr {
 			msg = s

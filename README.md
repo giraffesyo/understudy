@@ -149,10 +149,12 @@ understudy vault view group_vars/all/vault.yml --vault-password-file .vault-pass
 ## What's supported
 
 **Language & structure** — plays, roles (with `meta` dependencies, defaults,
-and vars), `import_tasks` (static) and `include_tasks` (dynamic, per-host
-paths), handlers with `notify`/`listen`/`meta: flush_handlers`,
-`block`/`rescue`/`always`, tags, `serial` rolling batches, and
-`max_fail_percentage`.
+and vars), `import_tasks`/`import_role` (static) and
+`include_tasks`/`include_role` (dynamic: per-host targets, loops, `when`),
+handlers with `notify`/`listen`, `block`/`rescue`/`always`, tags, `serial`
+rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
+`end_play`, `end_host`, `end_batch`, `clear_host_errors`, `clear_facts`,
+`reset_connection`, `refresh_inventory`, `noop`).
 
 **Task keywords** — `when`, `loop` / `with_*` (via lookups), `register`,
 `until`/`retries`/`delay`, `changed_when`, `failed_when`, `ignore_errors`,
@@ -208,9 +210,12 @@ connection, so it functions before the agent exists and on targets the agent
 doesn't support.
 
 Fidelity is anchored by differential testing: the YAML parser and template
-engine are checked against real PyYAML and Jinja2, and end-to-end module
-behavior is verified against real Linux hosts (Ubuntu, Alpine, and a
-systemd Rocky Linux container) with idempotence re-runs.
+engine are checked against real PyYAML and Jinja2; a golden corpus runs
+through both `ansible-playbook` and understudy and must produce identical
+per-task decisions, recaps, and byte-for-byte stdout (reference:
+ansible-core 2.21); and end-to-end module behavior is verified against real
+Linux hosts (Ubuntu, Alpine, and a systemd Rocky Linux container) with
+idempotence re-runs.
 
 ## Compatibility notes & limitations
 

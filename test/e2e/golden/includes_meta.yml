@@ -1,0 +1,37 @@
+---
+# Dynamic includes (include_tasks / include_role, with loops, per-host
+# targets, when-gating) and every supported meta action. Uses the sibling
+# includes_meta.inventory (two hosts).
+- hosts: g
+  gather_facts: false
+  tasks:
+    - include_tasks: includes/inc_a.yml
+    - name: named include
+      include_tasks:
+        file: "includes/inc_{{ 'a' if inventory_hostname == 'h1' else 'b' }}.yml"
+    - include_tasks: includes/inc_a.yml
+      loop: [1, 2]
+    - include_tasks:
+        file: includes/inc_a.yml
+      vars: {x: X}
+      loop: [q]
+      loop_control: {loop_var: item}
+    - include_tasks: includes/inc_a.yml
+      when: inventory_hostname == 'h2'
+    - include_role: {name: incrole}
+      loop: [r, s]
+    - include_role: {name: incrole}
+      vars: {rv: over}
+    - meta: noop
+    - meta: clear_host_errors
+    - meta: end_host
+      when: inventory_hostname == 'h2'
+    - debug: {msg: after end_host}
+    - meta: end_play
+    - debug: {msg: never}
+- hosts: g
+  gather_facts: false
+  tasks:
+    - debug: {msg: second play}
+    - meta: end_batch
+    - debug: {msg: never2}
