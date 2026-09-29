@@ -1,0 +1,97 @@
+---
+# Result dicts of replace: counts, no-op msg "", after/before sections,
+# attribute-only changes, diffs and failures. backup_file names embed a
+# pid and timestamp, so that key is checked for shape instead.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/rp"
+    f: "{{ workdir }}/rp/cfg"
+    nobackup: "{{ r | dict2items | rejectattr('key', 'equalto', 'backup_file') | items2dict }}"
+  tasks:
+    - file: {path: "{{ d }}", state: directory}
+    - copy: {content: "alpha 1\nbeta 2\n# start\nalpha 3\n# end\nalpha 4\n", dest: "{{ f }}"}
+
+    - name: replace all matches
+      replace: {path: "{{ f }}", regexp: '^alpha (\d)$', replace: 'ALPHA \1'}
+      register: r
+    - debug: {var: r}
+
+    - name: replace again (no-op)
+      replace: {path: "{{ f }}", regexp: '^alpha (\d)$', replace: 'ALPHA \1'}
+      register: r
+    - debug: {var: r}
+
+    - name: replace within after/before with diff and backup
+      replace:
+        path: "{{ f }}"
+        after: "# start"
+        before: "# end"
+        regexp: "ALPHA"
+        replace: "inner"
+        backup: true
+      diff: true
+      register: r
+    - debug: {var: nobackup}
+    - debug: {msg: "{{ r.backup_file is match('.*/cfg\\.[0-9]+\\.[0-9-]+@[0-9:]+~$') }}"}
+
+    - name: section pattern without a match
+      replace: {path: "{{ f }}", after: "# nowhere", regexp: "x", replace: "y"}
+      register: r
+    - debug: {var: r}
+
+    - name: named group replacement
+      replace: {path: "{{ f }}", regexp: '^(?P<k>beta) (?P<v>\d)$', replace: '\g<v> \g<k>'}
+      register: r
+    - debug: {var: r}
+
+    - name: mode change only
+      replace: {path: "{{ f }}", regexp: "nomatch", replace: "x", mode: "0600"}
+      register: r
+    - debug: {var: r}
+
+    - name: content and mode change
+      replace: {path: "{{ f }}", regexp: "inner", replace: "INNER", mode: "0644"}
+      register: r
+    - debug: {var: r}
+
+    - name: missing file fails
+      replace: {path: "{{ d }}/nope", regexp: "x"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: directory path fails
+      replace: {path: "{{ d }}", regexp: "x"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: bad regexp fails
+      replace: {path: "{{ f }}", regexp: "[x", replace: "y"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: bad group reference fails
+      replace: {path: "{{ f }}", regexp: "INNER", replace: '\9'}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: missing regexp fails
+      replace: {path: "{{ f }}", replace: "y"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: validate failure
+      replace: {path: "{{ f }}", regexp: "INNER", replace: "z", validate: "grep -q nomatch %s"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: final content
+      command: "cat {{ f }}"
+      register: out
+    - debug: {var: out.stdout_lines}

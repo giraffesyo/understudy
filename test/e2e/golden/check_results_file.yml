@@ -1,0 +1,78 @@
+---
+# file module result dicts under --check (harness: check_ prefix), with
+# setup tasks forced to run for real.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/cf"
+  tasks:
+    - name: real setup directory
+      file: {path: "{{ d }}", state: directory, mode: "0755"}
+      check_mode: false
+
+    - name: real setup file
+      copy: {content: "x\n", dest: "{{ d }}/x.txt", mode: "0644"}
+      check_mode: false
+
+    - name: predict a new directory
+      file: {path: "{{ d }}/new/sub", state: directory, mode: "0700"}
+      register: r
+    - debug: {var: r}
+
+    - name: predict a mode change
+      file: {path: "{{ d }}/x.txt", mode: "0600"}
+      register: r
+    - debug: {var: r}
+
+    - name: predict no change
+      file: {path: "{{ d }}/x.txt", mode: "0644"}
+      register: r
+    - debug: {var: r}
+
+    - name: predict a touch of a new file
+      file: {path: "{{ d }}/t.txt", state: touch, mode: "0600"}
+      register: r
+    - debug: {var: r}
+
+    - name: predict a touch of an existing file
+      file: {path: "{{ d }}/x.txt", state: touch}
+      register: r
+    - debug: {var: r}
+
+    - name: predict a symlink
+      file: {path: "{{ d }}/l", src: x.txt, state: link}
+      register: r
+    - debug: {var: r}
+
+    - name: predict a hard link
+      file: {path: "{{ d }}/h", src: "{{ d }}/x.txt", state: hard}
+      register: r
+    - debug: {var: r}
+
+    - name: predict removal
+      file: {path: "{{ d }}/x.txt", state: absent}
+      register: r
+    - debug: {var: r}
+
+    - name: predict removal of a missing path
+      file: {path: "{{ d }}/nope", state: absent}
+      register: r
+    - debug: {var: r}
+
+    - name: state=file on a missing path still fails
+      file: {path: "{{ d }}/nope", state: file}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: predict with diff
+      file: {path: "{{ d }}/x.txt", mode: "0640"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: predict an unknown owner
+      file: {path: "{{ d }}/x.txt", owner: no_such_user_here}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}

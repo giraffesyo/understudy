@@ -35,7 +35,7 @@ func collectLocal(e *factEnv, _ map[string]any) map[string]any {
 		base := strings.ReplaceAll(n, ".fact", "")
 		st, err := os.Stat(e.p(fn))
 		if err != nil {
-			msg := fmt.Sprintf("Could not stat fact (%s): %s", fn, pyOSError(err))
+			msg := fmt.Sprintf("Could not stat fact (%s): %s", fn, factErrText(err))
 			local[base] = msg
 			e.warn(msg)
 			continue
@@ -84,7 +84,8 @@ func collectLocal(e *factEnv, _ map[string]any) map[string]any {
 	return out
 }
 
-func pyOSError(err error) string {
+// factErrText is the bare OS error text facts.d failures embed.
+func factErrText(err error) string {
 	if pe, ok := err.(*os.PathError); ok {
 		return pe.Err.Error()
 	}

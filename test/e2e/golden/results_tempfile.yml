@@ -1,0 +1,37 @@
+---
+# Result dicts of tempfile. The created name has a random 8-character
+# part, so "path" is printed with it masked; every other key is shown.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/tf"
+    masked: "{{ r | combine({'path': r.path | regex_replace('[a-z0-9_]{8}(\\.[a-z]+)?$', 'XXXXXXXX\\1')}) }}"
+  tasks:
+    - file: {path: "{{ d }}", state: directory}
+
+    - name: temp file in a directory
+      tempfile: {path: "{{ d }}"}
+      register: r
+    - debug: {var: masked}
+
+    - name: temp directory with prefix and suffix
+      tempfile: {path: "{{ d }}", state: directory, prefix: "work_", suffix: ".d"}
+      register: r
+    - debug: {var: masked}
+
+    - name: temp file in the default location
+      tempfile: {suffix: ".tmp"}
+      register: r
+    - debug: {msg: "{{ r.path is match('.*/ansible\\.[a-z0-9_]{8}\\.tmp$') }}"}
+    - debug: {msg: "{{ r | dict2items | map(attribute='key') | sort }}"}
+    - file: {path: "{{ r.path }}", state: absent}
+
+    # Not covered here: a failure to create (e.g. a missing directory)
+    # prints "[Errno 2] No such file or directory: '<dir>/ansible.<random>'"
+    # in the error and fatal lines, which can never match between runs.
+
+    - name: bad state fails
+      tempfile: {state: link}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}

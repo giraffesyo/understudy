@@ -42,6 +42,12 @@ func ResolveMode(v any, current os.FileMode) (os.FileMode, error) {
 	return permBits(n)
 }
 
+// SymbolicToOctal is AnsibleModule._symbolic_mode_to_octal: sym applied to
+// the current st_mode permission bits (cur) of a file or directory.
+func SymbolicToOctal(sym string, cur uint32, isDir bool) (uint32, error) {
+	return applySymbolic(sym, cur, isDir, processUmask())
+}
+
 // applySymbolic follows Ansible's semantics: comma-separated clauses of
 // [ugoa]*[-+=][rwxXstugo]*, possibly chained ("u+r-w"); an omitted user
 // list means 'a' filtered through the umask.
@@ -50,6 +56,9 @@ func applySymbolic(sym string, mode uint32, isDir bool, umask uint32) (uint32, e
 	for _, clause := range strings.Split(sym, ",") {
 		i := strings.IndexAny(clause, "+-=")
 		if i < 0 {
+			if strings.Trim(clause, "ugoa") == "" {
+				continue // users only, no operation: a no-op, as in Python
+			}
 			return 0, fmt.Errorf("bad symbolic permission for mode: %s", clause)
 		}
 		users := clause[:i]
@@ -127,6 +136,9 @@ func applyOperation(user, op byte, apply, mode uint32) uint32 {
 		return mode &^ apply
 	}
 }
+
+// UnixBits is stat.S_IMODE of a FileMode.
+func UnixBits(mode os.FileMode) uint32 { return unixBits(mode) }
 
 // unixBits converts a FileMode to numeric st_mode permission bits.
 func unixBits(mode os.FileMode) uint32 {

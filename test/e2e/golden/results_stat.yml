@@ -1,0 +1,71 @@
+---
+# Result dicts of stat. Timestamps, inode and device numbers differ
+# between runs, so they are dropped from the printed stat (and their
+# presence checked instead); every other key is printed.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/st"
+    volatile: [atime, mtime, ctime, birthtime, inode, dev]
+    shown: "{{ r.stat | dict2items | rejectattr('key', 'in', volatile) | items2dict }}"
+    present: "{{ volatile | select('in', r.stat) | list }}"
+    top: "{{ r | dict2items | rejectattr('key', 'equalto', 'stat') | items2dict }}"
+  tasks:
+    - file: {path: "{{ d }}/dir", state: directory, mode: "0750"}
+    - copy: {content: "hello world\n", dest: "{{ d }}/f.txt", mode: "0640"}
+    - file: {path: "{{ d }}/link", src: f.txt, state: link}
+    - file: {path: "{{ d }}/dangling", src: nowhere, state: link, force: true}
+
+    - name: stat a regular file
+      stat: {path: "{{ d }}/f.txt"}
+      register: r
+    - debug: {var: top}
+    - debug: {var: shown}
+    - debug: {var: present}
+
+    - name: stat with another checksum and no mime or attributes
+      stat: {path: "{{ d }}/f.txt", checksum_algorithm: sha256, get_mime: false, get_attributes: false}
+      register: r
+    - debug: {var: shown}
+
+    - name: stat without checksum
+      stat: {path: "{{ d }}/f.txt", get_checksum: false, get_mime: false}
+      register: r
+    - debug: {msg: "{{ 'checksum' in r.stat }}"}
+
+    - name: stat a directory
+      stat: {path: "{{ d }}/dir", get_mime: false}
+      register: r
+    - debug: {var: shown}
+
+    - name: stat a symlink
+      stat: {path: "{{ d }}/link", get_mime: false}
+      register: r
+    - debug: {var: shown}
+
+    - name: stat a symlink, following it
+      stat: {path: "{{ d }}/link", follow: true, get_mime: false}
+      register: r
+    - debug: {var: shown}
+
+    - name: stat a dangling symlink
+      stat: {path: "{{ d }}/dangling", get_mime: false}
+      register: r
+    - debug: {var: shown}
+
+    - name: stat a missing path
+      stat: {path: "{{ d }}/missing"}
+      register: r
+    - debug: {var: r}
+
+    - name: stat through a file fails
+      stat: {path: "{{ d }}/f.txt/x"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: stat with a bad checksum algorithm fails
+      stat: {path: "{{ d }}/f.txt", checksum_algorithm: crc32}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}

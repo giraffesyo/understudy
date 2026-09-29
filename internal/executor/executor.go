@@ -1069,6 +1069,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		attempts = 1
 	}
 	var res *agentproto.Result
+	retriesExhausted := false
 	for attempt := 1; attempt <= attempts; attempt++ {
 		res = r.dispatch(ctx, task, actx, args, freeForm)
 		if task.Until == "" {
@@ -1089,6 +1090,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		if attempt < attempts {
 			time.Sleep(time.Duration(task.Delay) * time.Second)
 		} else {
+			retriesExhausted = !res.Failed
 			res.Failed = true
 			if res.Extra == nil {
 				res.Extra = map[string]any{}
@@ -1129,7 +1131,17 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			}
 		}
 	}
+	if res.Failed && !retriesExhausted {
+		// ansible-core attaches an ErrorSummary to every failed task
+		// result; templated (register, ansible_failed_result) it renders as
+		// this placeholder unless tracebacks are enabled. The callback
+		// strips it from the fatal line.
+		if _, has := res.Extra["exception"]; !has {
+			setExtra(res, "exception", "(traceback unavailable)")
+		}
+	}
 	res.DelegatedTo = delegated
+	res.ShowDiff = r.effectiveDiff(task)
 	return res
 }
 
@@ -1180,10 +1192,11 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		Conn:       conn,
 		Become:     become,
 		CheckMode:  r.effectiveCheckMode(task),
-		Diff:       r.Opts.Diff,
+		Diff:       r.effectiveDiff(task),
 		Background: task.Async > 0 && task.Poll == 0,
 		BaseDir:    r.Opts.BaseDir,
 		SrcDir:     task.SrcDir,
+		TaskDir:    taskDir(task),
 		Verbosity:  r.Opts.Verbosity,
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
 			return r.runModule(ctx, host, target, kw, inProcess, become, task, req, payload)
@@ -1243,6 +1256,22 @@ func (r *Runner) effectiveCheckMode(task *playbook.Task) bool {
 	return r.Opts.CheckMode
 }
 
+// taskDir is the directory of the file that defined the task.
+func taskDir(task *playbook.Task) string {
+	if task.Src.File == "" {
+		return ""
+	}
+	return filepath.Dir(task.Src.File)
+}
+
+// effectiveDiff resolves --diff against a task's diff: keyword.
+func (r *Runner) effectiveDiff(task *playbook.Task) bool {
+	if task.Diff != nil {
+		return *task.Diff
+	}
+	return r.Opts.Diff
+}
+
 func (r *Runner) effectiveBecome(play *playbook.Play, task *playbook.Task) *connection.BecomeSpec {
 	on := r.Opts.Become
 	user := r.Opts.BecomeUser
@@ -1294,7 +1323,7 @@ func (r *Runner) runModule(ctx context.Context, host, target string, kw connecti
 			req.Args = m
 		}
 		res := modules.Run(req, payload)
-		res.Origin = "module"
+		res.Origin = moduleOrigin(res)
 		return res, nil
 	}
 	agentClient, err := r.Conns.AgentWith(ctx, target, kw)
@@ -1303,9 +1332,22 @@ func (r *Runner) runModule(ctx context.Context, host, target string, kw connecti
 	}
 	res, err := agentClient.Run(ctx, req, payload, become)
 	if res != nil {
-		res.Origin = "module"
+		res.Origin = moduleOrigin(res)
 	}
 	return res, err
+}
+
+// moduleOrigin classifies a module result for the callback: a module that
+// crashed (an unhandled exception in Ansible) carries ansible-core's full
+// "Task failed: Module failed: ..." message, shown verbatim.
+func moduleOrigin(res *agentproto.Result) string {
+	if res.Origin != "" {
+		return res.Origin
+	}
+	if res.Failed && strings.HasPrefix(res.Msg, "Task failed: Module failed: ") {
+		return "verbatim"
+	}
+	return "module"
 }
 
 // dispatch routes to a control-side action or the module runtime.

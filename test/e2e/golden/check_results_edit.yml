@@ -1,0 +1,77 @@
+---
+# lineinfile, blockinfile and replace result dicts under --check
+# (harness: check_ prefix), with and without diffs.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/ce"
+    f: "{{ workdir }}/ce/cfg"
+  tasks:
+    - name: real setup
+      file: {path: "{{ d }}", state: directory}
+      check_mode: false
+    - name: real setup file
+      copy: {content: "a=1\nb=2\n", dest: "{{ f }}"}
+      check_mode: false
+
+    - name: lineinfile predicts an added line
+      lineinfile: {path: "{{ f }}", line: "c=3"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: lineinfile predicts a created file
+      lineinfile: {path: "{{ d }}/new", line: "x", create: true}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: lineinfile predicts a created file without diff
+      lineinfile: {path: "{{ d }}/new", line: "x", create: true}
+      register: r
+    - debug: {var: r}
+
+    - name: lineinfile predicts a mode change
+      lineinfile: {path: "{{ f }}", line: "a=1", mode: "0600"}
+      register: r
+    - debug: {var: r}
+
+    - name: lineinfile predicts a removal
+      lineinfile: {path: "{{ f }}", regexp: "^b=", state: absent}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: blockinfile predicts an insert
+      blockinfile: {path: "{{ f }}", block: "z=26"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: blockinfile predicts a created file
+      blockinfile: {path: "{{ d }}/newblock", block: "z=26", create: true}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: blockinfile predicts nothing to remove
+      blockinfile: {path: "{{ f }}", state: absent}
+      register: r
+    - debug: {var: r}
+
+    - name: replace predicts replacements
+      replace: {path: "{{ f }}", regexp: "=", replace: ": "}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: replace predicts nothing
+      replace: {path: "{{ f }}", regexp: "nomatch", replace: "x"}
+      register: r
+    - debug: {var: r}
+
+    - name: file is untouched
+      command: "cat {{ f }}"
+      check_mode: false
+      register: out
+    - debug: {var: out.stdout_lines}
