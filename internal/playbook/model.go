@@ -25,7 +25,11 @@ type Play struct {
 
 	// Serial batches the play across hosts (rolling execution). Entries are
 	// host counts or "N%" strings; nil runs all hosts in one batch.
-	Serial []any
+	RemoteUser     string // remote_user keyword
+	Connection     string // connection keyword
+	AnyErrorsFatal bool
+	ForceHandlers  bool
+	Serial         []any
 	// MaxFailPercentage aborts the play when more than this percent of a
 	// batch fails. -1 means unset (any failure removes only that host).
 	MaxFailPercentage float64
@@ -60,37 +64,42 @@ type BlockRef struct {
 
 // Task is one task (or handler).
 type Task struct {
-	Name         string
-	Module       string
-	Args         map[string]any // raw (untemplated) module args
-	FreeForm     string         // raw params for command/shell/raw
-	When         []string       // list of expressions, ANDed
-	Loop         any            // raw list or template string; nil if absent
-	LoopWith     string         // lookup plugin name for with_<X> loops ("" = plain loop)
-	LoopVar      string         // default "item"
-	IndexVar     string         // loop_control.index_var (0-based); "" = none
-	LoopLabel    any            // loop_control.label (raw template); nil = show the item
-	Async        int            // async timeout seconds (0 = synchronous)
-	Poll         int            // poll interval; -1 = unset, 0 = fire-and-forget
-	CheckMode    *bool          // per-task check_mode override (nil = inherit run)
-	Register     string
-	IgnoreErrors bool
-	FailedWhen   []string
-	ChangedWhen  []string
-	Until        string
-	Retries      int
-	Delay        int
-	Become       BecomeFields
-	Vars         map[string]any
-	Environment  map[string]any
-	Notify       []string
-	Tags         []string
-	NoLog        bool
-	Delegate     string
-	Blocks       []BlockRef // enclosing blocks, outermost first
-	SrcDir       string     // role root for src resolution ("" = playbook dir)
-	RoleName     string     // owning role (for "role : task" banners); "" = play task
-	Src          Pos
+	Name           string
+	Module         string
+	Args           map[string]any // raw (untemplated) module args
+	FreeForm       string         // raw params for command/shell/raw
+	When           []string       // list of expressions, ANDed
+	Loop           any            // raw list or template string; nil if absent
+	LoopWith       string         // lookup plugin name for with_<X> loops ("" = plain loop)
+	LoopVar        string         // default "item"
+	IndexVar       string         // loop_control.index_var (0-based); "" = none
+	LoopLabel      any            // loop_control.label (raw template); nil = show the item
+	Async          int            // async timeout seconds (0 = synchronous)
+	Poll           int            // poll interval; -1 = unset, 0 = fire-and-forget
+	CheckMode      *bool          // per-task check_mode override (nil = inherit run)
+	Register       string
+	IgnoreErrors   bool
+	FailedWhen     []string
+	ChangedWhen    []string
+	Until          string
+	Retries        int
+	Delay          int
+	Become         BecomeFields
+	Vars           map[string]any
+	Environment    map[string]any
+	Notify         []string
+	Tags           []string
+	NoLog          bool
+	Delegate       string
+	DelegateFacts  bool       // delegate_facts: facts land on the delegate
+	RunOnce        bool       // run_once: first host runs, results fan out
+	AnyErrorsFatal *bool      // any_errors_fatal (nil = inherit from play)
+	RemoteUser     string     // remote_user keyword
+	Connection     string     // connection keyword
+	Blocks         []BlockRef // enclosing blocks, outermost first
+	SrcDir         string     // role root for src resolution ("" = playbook dir)
+	RoleName       string     // owning role (for "role : task" banners); "" = play task
+	Src            Pos
 }
 
 // RoleRef is one entry in a play's roles: list.

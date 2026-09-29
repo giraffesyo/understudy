@@ -61,6 +61,7 @@ type Result struct {
 	// Control-plane display hints; never cross the agent wire.
 	Origin        string `json:"-"` // "action" (control-side) or "module"
 	VerboseAlways bool   `json:"-"` // shown with its JSON even at -v0 (debug, assert)
+	DelegatedTo   string `json:"-"` // delegate_to target, when not the host itself
 }
 
 // Fail builds a failed result with a formatted message.

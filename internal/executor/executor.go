@@ -76,16 +76,19 @@ type Runner struct {
 	Opts     Options
 	Limit    string // --limit pattern, intersected with each play's hosts
 
-	stats       map[string]*HostStats
-	order       []string
-	failed      map[string]bool
-	notified    map[string]map[string]bool // handler name -> hosts to run on
-	blockFailed map[string]map[int]bool    // host -> block ID -> failure caught by rescue
-	failedIn    map[string]map[int]bool    // host -> blocks it was inside when it failed hard
-	ended       map[string]bool            // meta: end_host (per play)
-	playEnded   bool                       // meta: end_play
-	batchEnded  bool                       // meta: end_batch
-	mu          sync.Mutex
+	stats        map[string]*HostStats
+	order        []string
+	failed       map[string]bool
+	notified     map[string]map[string]bool // handler name -> hosts to run on
+	blockFailed  map[string]map[int]bool    // host -> block ID -> failure caught by rescue
+	failedIn     map[string]map[int]bool    // host -> blocks it was inside when it failed hard
+	ended        map[string]bool            // meta: end_host (per play)
+	runOnceHosts []string                   // hosts a running run_once task fans out to
+	curPlay      *playbook.Play
+	aborted      bool // any_errors_fatal: stop the playbook
+	playEnded    bool // meta: end_play
+	batchEnded   bool // meta: end_batch
+	mu           sync.Mutex
 }
 
 // NewRunner builds a runner over a loaded inventory.
@@ -166,6 +169,9 @@ func (r *Runner) Run(ctx context.Context, plays []*playbook.Play) (int, error) {
 		if err := r.runPlay(ctx, play); err != nil {
 			return 1, err
 		}
+		if r.aborted {
+			break
+		}
 	}
 	r.Callback.Recap(r.stats, r.order)
 	for _, st := range r.stats {
@@ -182,6 +188,7 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 	}
 	r.Callback.PlayStart(play)
 	r.mu.Lock()
+	r.curPlay = play
 	r.ended = map[string]bool{}
 	r.playEnded = false
 	r.mu.Unlock()
@@ -413,7 +420,21 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 			}
 			continue
 		}
+		before := r.failedSet(active)
 		r.runTaskAcrossHosts(ctx, play, task, active, playHosts, false)
+
+		// any_errors_fatal: a new hard failure ends the whole playbook once
+		// this task has finished on every host.
+		fatal := play.AnyErrorsFatal
+		if task.AnyErrorsFatal != nil {
+			fatal = *task.AnyErrorsFatal
+		}
+		if fatal && len(r.failedSet(active)) > len(before) {
+			r.mu.Lock()
+			r.aborted, r.playEnded = true, true
+			r.mu.Unlock()
+			return nil
+		}
 
 		// max_fail_percentage is evaluated after each task: too many failed
 		// hosts in the batch aborts the play immediately.
@@ -528,6 +549,19 @@ func (r *Runner) taskDisplayName(task *playbook.Task, active []string) string {
 // parallelism (one errgroup per task = the linear-strategy barrier).
 func (r *Runner) runTaskAcrossHosts(ctx context.Context, play *playbook.Play, task *playbook.Task, active, playHosts []string, handler bool) {
 	r.Callback.TaskStart(task, r.taskDisplayName(task, active), handler)
+	if task.RunOnce && len(active) > 0 {
+		// run_once: the first host runs; register/facts/notify fan out to
+		// every host of the batch.
+		r.mu.Lock()
+		r.runOnceHosts = append([]string(nil), active...)
+		r.mu.Unlock()
+		defer func() {
+			r.mu.Lock()
+			r.runOnceHosts = nil
+			r.mu.Unlock()
+		}()
+		active = active[:1]
+	}
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(r.Opts.Forks)
 	for _, host := range active {
@@ -708,6 +742,19 @@ func (r *Runner) flushHandlers(ctx context.Context, play *playbook.Play, playHos
 	return nil
 }
 
+// failedSet lists which of hosts have failed hard so far.
+func (r *Runner) failedSet(hosts []string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, h := range hosts {
+		if r.failed[h] {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
 // activeOf filters a play's host list down to hosts that have not failed.
 func (r *Runner) activeOf(playHosts []string) []string {
 	r.mu.Lock()
@@ -746,6 +793,24 @@ func (r *Runner) newHostContext(host string, pos template.Position, playHosts []
 	}
 	c.SetMagic("playbook_dir", r.Opts.BaseDir)
 	c.SetMagic("ansible_check_mode", r.Opts.CheckMode)
+	// ansible_connection reflects the connection in effect when the host
+	// does not set it: play keyword, then -c, then the default.
+	if _, ok := r.Store.RawHostVar(host, "ansible_connection"); !ok {
+		conn := ""
+		if r.curPlay != nil {
+			conn = r.curPlay.Connection
+		}
+		if conn == "" && r.Conns != nil {
+			conn = r.Conns.Opts.Connection
+		}
+		if conn == "" || conn == "smart" {
+			conn = "ssh"
+			if (host == "localhost" || host == "127.0.0.1") && r.Inv != nil && r.Inv.Hosts[host] == nil {
+				conn = "local"
+			}
+		}
+		c.SetMagic("ansible_connection", conn)
+	}
 	// hostvars: a lazy mapping from any inventory host to that host's
 	// resolved variable view. Building another host's context is deferred
 	// until hostvars['other'] is actually accessed.
@@ -936,13 +1001,19 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		freeForm = fmt.Sprintf("%v", v)
 	}
 
-	actx, err := r.actionContext(ctx, host, task, play, vctx)
+	actx, target, err := r.actionContext(ctx, host, task, play, vctx)
+	delegated := ""
+	if target != host {
+		delegated = target
+	}
 	if err != nil {
 		if ue, ok := err.(*unreachableError); ok {
-			return &agentproto.Result{Failed: true, Msg: ue.Error(),
+			return &agentproto.Result{Failed: true, Msg: ue.Error(), DelegatedTo: delegated,
 				Extra: map[string]any{"unreachable": true}}
 		}
-		return agentproto.Fail("%v", err)
+		res := agentproto.Fail("%v", err)
+		res.DelegatedTo = delegated
+		return res
 	}
 
 	// until/retries loop.
@@ -1007,6 +1078,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			}
 		}
 	}
+	res.DelegatedTo = delegated
 	return res
 }
 
@@ -1021,24 +1093,35 @@ func registerOverlay(task *playbook.Task, res *agentproto.Result) map[string]any
 	return map[string]any{name: m}
 }
 
-func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.Task, play *playbook.Play, vctx *vars.Context) (*actions.Context, error) {
+// actionContext builds the execution context for one occurrence of a task
+// on host. With delegate_to, the task keeps host's variables but runs over
+// the delegate's connection (its own connection vars); the returned target
+// names where it ran.
+func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.Task, play *playbook.Play, vctx *vars.Context) (*actions.Context, string, error) {
 	become := r.effectiveBecome(play, task)
+	kw := connection.Keywords{
+		Connection: firstNonEmpty(task.Connection, play.Connection),
+		RemoteUser: firstNonEmpty(task.RemoteUser, play.RemoteUser),
+	}
+	target := host
+	if task.Delegate != "" {
+		v, err := vctx.TemplateString(task.Delegate)
+		if err != nil {
+			return nil, host, fmt.Errorf("error templating delegate_to: %v", err)
+		}
+		target = fmt.Sprintf("%v", v)
+	}
 	var conn connection.Connection
 	var inProcess bool
 	var err error
-	switch task.Delegate {
-	case "":
-		conn, inProcess, err = r.Conns.Get(ctx, host)
-	case "localhost", "127.0.0.1":
-		// delegate_to: localhost — run on the control node while keeping
-		// this host's variable view (inventory_hostname stays the host).
+	if target != host && (target == "localhost" || target == "127.0.0.1") && r.Inv.Hosts[target] == nil {
+		// Implicit localhost: the control node, over the local connection.
 		conn, inProcess = connection.NewLocal(), true
-	default:
-		return nil, fmt.Errorf("%s:%d: delegate_to %q is not supported yet (only localhost)",
-			task.Src.File, task.Src.Line, task.Delegate)
+	} else {
+		conn, inProcess, err = r.Conns.GetWith(ctx, target, kw)
 	}
 	if err != nil {
-		return nil, &unreachableError{host: host, err: err}
+		return nil, target, &unreachableError{host: host, err: err}
 	}
 	return &actions.Context{
 		Host:       host,
@@ -1052,12 +1135,43 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		SrcDir:     task.SrcDir,
 		Verbosity:  r.Opts.Verbosity,
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
-			return r.runModule(ctx, host, inProcess, become, task, req, payload)
+			return r.runModule(ctx, host, target, kw, inProcess, become, task, req, payload)
 		},
 		SetFact: func(name string, value any) {
-			r.Store.SetHostFact(host, name, value)
+			for _, h := range r.factHosts(host, target, task) {
+				r.Store.SetHostFact(h, name, value)
+			}
 		},
-	}, nil
+	}, target, nil
+}
+
+// factHosts is where a task's facts land: the delegate with
+// delegate_facts, every host of the batch for run_once, else the host.
+func (r *Runner) factHosts(host, target string, task *playbook.Task) []string {
+	if task.DelegateFacts && target != host {
+		return []string{target}
+	}
+	return r.fanOut(host, task)
+}
+
+// fanOut is the set of hosts a task's register/notify apply to: all hosts
+// the task was run_once for, else just the host.
+func (r *Runner) fanOut(host string, task *playbook.Task) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if task.RunOnce && len(r.runOnceHosts) > 0 {
+		return append([]string(nil), r.runOnceHosts...)
+	}
+	return []string{host}
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // unreachableError marks transport failures (distinct from task failures).
@@ -1104,7 +1218,7 @@ func (r *Runner) effectiveBecome(play *playbook.Play, task *playbook.Task) *conn
 
 // runModule executes a module request: in-process for local connections,
 // via the remote agent otherwise (bootstrapped lazily on first use).
-func (r *Runner) runModule(ctx context.Context, host string, inProcess bool, become *connection.BecomeSpec, task *playbook.Task, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
+func (r *Runner) runModule(ctx context.Context, host, target string, kw connection.Keywords, inProcess bool, become *connection.BecomeSpec, task *playbook.Task, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
 	if len(task.Environment) > 0 {
 		env := make(map[string]string, len(task.Environment))
 		vctx := r.Store.NewContext(host, template.Position{File: task.Src.File, Line: task.Src.Line})
@@ -1132,7 +1246,7 @@ func (r *Runner) runModule(ctx context.Context, host string, inProcess bool, bec
 		res.Origin = "module"
 		return res, nil
 	}
-	agentClient, err := r.Conns.Agent(ctx, host)
+	agentClient, err := r.Conns.AgentWith(ctx, target, kw)
 	if err != nil {
 		return nil, err
 	}
@@ -1177,21 +1291,31 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 		r.Callback.LoopResult(host, task, res, ignored)
 	}
 	if task.Register != "" {
-		r.Store.SetHostFact(host, task.Register, res.ToVars())
+		for _, h := range r.fanOut(host, task) {
+			r.Store.SetHostFact(h, task.Register, res.ToVars())
+		}
 	}
 	// Gathered facts land in the facts layer, both prefixed at top level
 	// (inject_facts_as_vars) and under the ansible_facts dict. set_fact
 	// writes its own layer via the SetFact hook.
 	if len(res.AnsibleFacts) > 0 && task.Module != "set_fact" {
-		r.Store.SetFacts(host, res.AnsibleFacts)
+		target := host
+		if res.DelegatedTo != "" {
+			target = res.DelegatedTo
+		}
 		stripped := make(map[string]any, len(res.AnsibleFacts))
 		for k, v := range res.AnsibleFacts {
 			stripped[strings.TrimPrefix(k, "ansible_")] = v
 		}
-		r.Store.SetFacts(host, map[string]any{"ansible_facts": stripped})
+		for _, h := range r.factHosts(host, target, task) {
+			r.Store.SetFacts(h, res.AnsibleFacts)
+			r.Store.SetFacts(h, map[string]any{"ansible_facts": stripped})
+		}
 	}
 	if res.Changed && !res.Failed && len(task.Notify) > 0 {
-		r.notifyHandlers(host, task.Notify)
+		for _, h := range r.fanOut(host, task) {
+			r.notifyHandlers(h, task.Notify)
+		}
 	}
 	if res.Failed && !ignored && r.catchInRescue(host, task) {
 		// Rescued: the fatal line printed, but the host stays in the play

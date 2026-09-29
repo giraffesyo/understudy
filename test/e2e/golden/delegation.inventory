@@ -1,0 +1,5 @@
+[web]
+w1 ansible_connection=local role_name=webby
+w2 ansible_connection=local role_name=webby
+[db]
+d1 ansible_connection=local role_name=dbby

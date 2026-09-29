@@ -125,6 +125,9 @@ func (d *Default) HostResult(host string, task *playbook.Task, res *agentproto.R
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if res.DelegatedTo != "" && res.DelegatedTo != host {
+		host += " -> " + res.DelegatedTo
+	}
 	isItem := item != nil || (res.Extra != nil && res.Extra["ansible_loop_var"] != nil)
 	itemLabel := ""
 	if isItem {
