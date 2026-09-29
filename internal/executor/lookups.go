@@ -3,9 +3,12 @@ package executor
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/csv"
 	"fmt"
+	"io"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/giraffesyo/understudy/internal/template"
 )
@@ -48,6 +52,7 @@ var lookupPlugins = map[string]lookupPlugin{
 	"csvfile":             lookupCsvfile,
 	"inventory_hostnames": lookupInventoryHostnames,
 	"unvault":             lookupUnvault,
+	"url":                 lookupURL,
 }
 
 // installLookups wires the control-side lookup plugins into the template
@@ -834,4 +839,67 @@ func copyMap(m map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+// lookupURL is ansible.builtin.url: fetch each URL on the control node.
+// split_lines (default true) returns the content line by line.
+func lookupURL(_ *Runner, _ *template.EvalCtx, terms []any, kw map[string]any) ([]any, error) {
+	opt := func(k string, def bool) bool {
+		if v, ok := kw[k]; ok {
+			return truthyArg(v)
+		}
+		return def
+	}
+	timeout := 10 * time.Second
+	if v, ok := kw["timeout"]; ok {
+		if f, err := strconv.ParseFloat(template.PyStr(v), 64); err == nil {
+			timeout = time.Duration(f * float64(time.Second))
+		}
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if !opt("validate_certs", true) {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+	if !opt("use_proxy", true) {
+		transport.Proxy = nil
+	}
+	client := &http.Client{Timeout: timeout, Transport: transport}
+	if !opt("follow_redirects", true) {
+		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	}
+	var out []any
+	for _, u := range termStrings(terms) {
+		req, err := http.NewRequest(http.MethodGet, u, nil)
+		if err != nil {
+			return nil, fmt.Errorf("Failed lookup url for %s : %v", u, err)
+		}
+		if user, ok := kw["username"]; ok {
+			req.SetBasicAuth(template.PyStr(user), template.PyStr(kw["password"]))
+		}
+		if h, ok := template.Plain(kw["headers"]).(map[string]any); ok {
+			for k, v := range h {
+				req.Header.Set(k, template.PyStr(v))
+			}
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("Failed lookup url for %s : %v", u, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("Failed lookup url for %s : %v", u, err)
+		}
+		if resp.StatusCode >= 400 {
+			return nil, fmt.Errorf("Received HTTP error for %s : HTTP Error %d: %s", u, resp.StatusCode, http.StatusText(resp.StatusCode))
+		}
+		if opt("split_lines", true) {
+			for _, line := range strings.Split(strings.TrimRight(string(body), "\n"), "\n") {
+				out = append(out, line)
+			}
+		} else {
+			out = append(out, string(body))
+		}
+	}
+	return out, nil
 }
