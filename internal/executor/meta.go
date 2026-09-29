@@ -53,7 +53,7 @@ func (r *Runner) runMeta(ctx context.Context, play *playbook.Play, task *playboo
 	if perHostMetas[action] {
 		var targets []string
 		for _, host := range active {
-			r.Callback.TaskStart(task, name, false)
+			r.taskStart(task, name, false)
 			ok, err := applies(host)
 			if err != nil {
 				return fmt.Errorf("%s:%d: meta %s: %v", task.Src.File, task.Src.Line, action, err)
@@ -86,7 +86,7 @@ func (r *Runner) runMeta(ctx context.Context, play *playbook.Play, task *playboo
 	}
 
 	// Run-once metas: one banner, conditional evaluated on the first host.
-	r.Callback.TaskStart(task, name, false)
+	r.taskStart(task, name, false)
 	ok, err := applies(active[0])
 	if err != nil {
 		return fmt.Errorf("%s:%d: meta %s: %v", task.Src.File, task.Src.Line, action, err)
