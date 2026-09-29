@@ -1,0 +1,28 @@
+{% import 'macros.j2' as m %}
+{% from 'macros.j2' import kv as keyval %}
+A: {{ m.kv('a', 1) }} {{ keyval('b', 2, sep=':') }}
+B: {% call m.wrap('p') %}inside {{ shared }}{% endcall %}
+C: {{ m.many(1, 2, x=3, y=4) }}
+{% set outer = 'before' %}
+{% for i in [1, 2] %}{% set outer = 'inloop' ~ i %}{% endfor %}
+D: {{ outer }}
+{% set ns = namespace(total=0) %}
+{% for i in [1, 2, 3] %}{% set ns.total = ns.total + i %}{% endfor %}
+E: {{ ns.total }}
+F: {% for i in ['x','y','z'] %}{{ loop.revindex }}{{ loop.revindex0 }}{{ loop.previtem | default('-') }}{{ loop.nextitem | default('-') }}{{ loop.cycle('o','e') }} {% endfor %}
+G: {% for i in [1,1,2] %}{% if loop.changed(i) %}c{{ i }}{% endif %}{% endfor %}
+{% set block_var %}
+  captured {{ shared | upper }}
+{% endset %}
+H: [{{ block_var }}]
+{% set filtered | upper %}lower text{% endset %}
+I: {{ filtered }}
+J: {% filter upper %}shout {{ shared }}{% endfilter %}
+K: {% with a = 1, b = shared %}{{ a }}-{{ b }}{% endwith %}
+M: {% include 'sub/part.j2' %}
+N: {% for item in ['i1'] %}{% include 'sub/part.j2' %}{% endfor %}
+O: {% include 'missing.j2' ignore missing %}end
+P: {% for n in tree recursive %}{{ n.name }}{% if n.kids %}({{ loop(n.kids) }}){% endif %}{% endfor %}
+Q: {% for n in tree recursive %}{{ loop.depth }}{% if n.kids %}{{ loop(n.kids) }}{% endif %}{% endfor %}
+R: {% raw %}{{ not rendered }}{% endraw %}
+S: {% include ['nope.j2', 'sub/part.j2'] %}

@@ -609,6 +609,13 @@ func (ec *EvalCtx) evalCall(t *callExpr) (any, error) {
 		return nil, err
 	}
 	switch f := fn.(type) {
+	case *macroValue:
+		return f.call(ec, args, kwargs)
+	case *loopValue:
+		if len(args) != 1 {
+			return nil, ec.errf(t.off, "loop() takes exactly one argument")
+		}
+		return f.recurse(args[0])
 	case boundMethod:
 		out, err := f(ec, args, kwargs)
 		if err != nil {

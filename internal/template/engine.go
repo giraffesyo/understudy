@@ -94,9 +94,15 @@ type EvalCtx struct {
 	engine *Engine
 	vars   VarGetter
 	locals map[string]any // {% set %} and loop variables
+	parent *EvalCtx       // enclosing scope (loop bodies, macros, with)
 	pos    Position
 	src    string
 	depth  int
+
+	searchPath []string                // template dirs for include/import/extends
+	blocks     map[string][][]tmplNode // block overrides, child-most first
+	blockName  string                  // block being rendered (for super())
+	blockLevel int
 }
 
 func (ec *EvalCtx) Engine() *Engine    { return ec.engine }
@@ -106,10 +112,16 @@ func (ec *EvalCtx) errf(off int, format string, args ...any) error {
 	return &TemplateError{Pos: ec.pos, Msg: sprintf(format, args...), Src: ec.src, Off: off}
 }
 
-// lookupName resolves a bare name: locals, then vars, then globals.
+// lookupName resolves a bare name: locals (innermost scope outward), then
+// vars, then globals.
 func (ec *EvalCtx) lookupName(name string) (any, bool) {
-	if v, ok := ec.locals[name]; ok {
-		return v, true
+	for s := ec; s != nil; s = s.parent {
+		if v, ok := s.locals[name]; ok {
+			return v, true
+		}
+	}
+	if name == "super" && ec.blockName != "" {
+		return ec.superFunc(), true
 	}
 	if ec.vars != nil {
 		if v, ok := ec.vars.Get(name); ok {
@@ -166,8 +178,26 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 
 	var b strings.Builder
 	out := &renderOutput{b: &b, pos: pos, src: src}
-	if err := ec.execNodes(nodes, out); err != nil {
+	if err := ec.execTemplate(nodes, out); err != nil {
 		return nil, err
+	}
+	return b.String(), nil
+}
+
+// RenderFile renders a template file's content: always text, with
+// include/import/extends resolved against searchPath (Ansible's template
+// search path: the template's own directory, then role and playbook
+// template directories).
+func (e *Engine) RenderFile(src string, vars VarGetter, pos Position, searchPath []string) (string, error) {
+	nodes, err := e.parseTemplate(src, pos)
+	if err != nil {
+		return "", err
+	}
+	ec := &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: pos, src: src, searchPath: searchPath}
+	var b strings.Builder
+	out := &renderOutput{b: &b, pos: pos, src: src}
+	if err := ec.execTemplate(nodes, out); err != nil {
+		return "", err
 	}
 	return b.String(), nil
 }

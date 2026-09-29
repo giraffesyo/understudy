@@ -1,0 +1,9 @@
+{% macro kv(k, v, sep='=') -%}
+{{ k }}{{ sep }}{{ v }}
+{%- endmacro %}
+{% macro wrap(tag) -%}
+<{{ tag }}>{{ caller() }}</{{ tag }}>
+{%- endmacro %}
+{% macro many() -%}
+{{ varargs | join(',') }}|{{ kwargs | dictsort | map('join', ':') | join(',') }}
+{%- endmacro %}

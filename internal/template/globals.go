@@ -35,6 +35,21 @@ func registerGlobals(e *Engine) {
 		return &rangeValue{start: start, stop: stop, step: step}, nil
 	})
 
+	e.Globals["namespace"] = globalFunc(func(ec *EvalCtx, args []any, kwargs map[string]any) (any, error) {
+		ns := &namespaceValue{attrs: map[string]any{}}
+		for _, a := range args {
+			if m, ok := anyToMap(a); ok {
+				for k, v := range m {
+					ns.attrs[k] = v
+				}
+			}
+		}
+		for k, v := range kwargs {
+			ns.attrs[k] = v
+		}
+		return ns, nil
+	})
+
 	e.Globals["dict"] = globalFunc(func(ec *EvalCtx, args []any, kwargs map[string]any) (any, error) {
 		if len(args) > 0 {
 			return nil, fmt.Errorf("dict() only accepts keyword arguments")

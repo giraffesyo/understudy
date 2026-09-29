@@ -881,7 +881,7 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 		if len(task.Vars) > 0 {
 			itemCtx = itemCtx.WithOverlay(task.Vars)
 		}
-		overlay := map[string]any{task.LoopVar: item}
+		overlay := map[string]any{task.LoopVar: vars.Final{V: item}}
 		if task.IndexVar != "" {
 			overlay[task.IndexVar] = int64(i)
 		}

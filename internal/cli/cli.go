@@ -553,8 +553,8 @@ func adhocCmd(args []string) int {
 		// Unset, as the playbook parser leaves it (0 would mean "abort on
 		// any failure").
 		MaxFailPercentage: -1,
-		Tasks:       []*playbook.Task{task},
-		Src:         playbook.Pos{File: "<adhoc>", Line: 1},
+		Tasks:             []*playbook.Task{task},
+		Src:               playbook.Pos{File: "<adhoc>", Line: 1},
 	}
 
 	secrets, err := setupVault(p)

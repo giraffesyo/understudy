@@ -9,6 +9,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/template"
+	"github.com/giraffesyo/understudy/internal/vars"
 )
 
 // includeUnit is one IncludedFile in Ansible's sense: a resolved task file
@@ -79,7 +80,7 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 		for i, item := range items {
 			ictx := base
 			if isLoop {
-				overlay := map[string]any{task.LoopVar: item}
+				overlay := map[string]any{task.LoopVar: vars.Final{V: item}}
 				if task.IndexVar != "" {
 					overlay[task.IndexVar] = int64(i)
 				}
@@ -148,7 +149,7 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 			if scope == nil {
 				scope = map[string]any{}
 			}
-			scope[task.LoopVar] = u.item
+			scope[task.LoopVar] = vars.Final{V: u.item}
 			if task.IndexVar != "" {
 				scope[task.IndexVar] = int64(u.index)
 			}

@@ -89,7 +89,14 @@ func runTemplate(ctx context.Context, actx *Context, args map[string]any, _ stri
 		"ansible_managed": "Ansible managed",
 	})
 	pos := template.Position{File: resolved, Line: 1, Col: 1}
-	rendered, err := tvars.RenderFile(string(raw), pos)
+	// Ansible's template search path: the template's own directory, then
+	// the role's and the playbook's templates directories.
+	searchPath := []string{filepath.Dir(resolved)}
+	if actx.SrcDir != "" {
+		searchPath = append(searchPath, filepath.Join(actx.SrcDir, "templates"), actx.SrcDir)
+	}
+	searchPath = append(searchPath, filepath.Join(actx.BaseDir, "templates"), actx.BaseDir)
+	rendered, err := tvars.RenderFile(string(raw), pos, searchPath...)
 	if err != nil {
 		return agentproto.Fail("template: error rendering %s: %v", src, err)
 	}
