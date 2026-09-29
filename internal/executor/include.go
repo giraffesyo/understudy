@@ -216,6 +216,8 @@ func (r *Runner) loadIncludedRole(play *playbook.Play, task *playbook.Task, name
 	if len(ri.Vars) > 0 {
 		r.Store.AddRoleVars(ri.Vars)
 	}
+	r.mu.Lock() // include_role may run concurrently (parallel blocks)
 	play.Handlers = append(play.Handlers, ri.Handlers...)
+	r.mu.Unlock()
 	return ri.Tasks, nil
 }

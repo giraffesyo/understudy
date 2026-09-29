@@ -128,6 +128,28 @@ other module. `Task.Block`/`Rescue`/`Always` express error handling. Rendered
 output is valid `ansible-playbook` input — the render and execution paths go
 through the same loader, so they can't disagree.
 
+## Opt-in speedups
+
+These extensions keep playbooks valid for `ansible-playbook`, which simply
+ignores them and runs everything as usual.
+
+**Parallel blocks.** A block whose `vars` set `understudy_parallel: true`
+runs its direct tasks at the same time (a nested block is one unit and runs
+in order). Execution continues once all of them finish. Use it only for
+independent work, because siblings keep running when one fails; the block's
+`rescue`/`always` still see the failure afterwards.
+
+```yaml
+- name: build and install independently
+  vars: {understudy_parallel: true}
+  block:
+    - include_role: {name: slurm}
+    - include_role: {name: gpu}
+```
+
+For portable parallelism that also works under ansible-playbook, `async` +
+`async_status` are fully supported.
+
 ## Ansible Vault
 
 understudy reads and writes Ansible Vault 1.1 payloads (AES-256-CTR with

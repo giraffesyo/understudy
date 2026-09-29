@@ -86,23 +86,24 @@ type Runner struct {
 	Opts     Options
 	Limit    string // --limit pattern, intersected with each play's hosts
 
-	stats        map[string]*HostStats
-	order        []string
-	failed       map[string]bool
-	notified     map[string]map[string]bool // handler name -> hosts to run on
-	blockFailed  map[string]map[int]bool    // host -> block ID -> failure caught by rescue
-	failedIn     map[string]map[int]bool    // host -> blocks it was inside when it failed hard
-	ended        map[string]bool            // meta: end_host (per play)
-	runOnceHosts []string                   // hosts a running run_once task fans out to
-	curPlay      *playbook.Play
-	warned       map[string]bool
-	freeSem      *turnstile // free strategy: forks shared fairly across hosts
-	startedAt    bool
-	stepContinue bool
-	aborted      bool // any_errors_fatal: stop the playbook
-	playEnded    bool // meta: end_play
-	batchEnded   bool // meta: end_batch
-	mu           sync.Mutex
+	stats          map[string]*HostStats
+	order          []string
+	failed         map[string]bool
+	notified       map[string]map[string]bool // handler name -> hosts to run on
+	blockFailed    map[string]map[int]bool    // host -> block ID -> failure caught by rescue
+	failedIn       map[string]map[int]bool    // host -> blocks it was inside when it failed hard
+	ended          map[string]bool            // meta: end_host (per play)
+	runOnceHosts   []string                   // hosts a running run_once task fans out to
+	curPlay        *playbook.Play
+	warned         map[string]bool
+	freeSem        *turnstile   // free strategy: forks shared fairly across hosts
+	parallelActive map[int]bool // parallel blocks currently running
+	startedAt      bool
+	stepContinue   bool
+	aborted        bool // any_errors_fatal: stop the playbook
+	playEnded      bool // meta: end_play
+	batchEnded     bool // meta: end_batch
+	mu             sync.Mutex
 }
 
 // NewRunner builds a runner over a loaded inventory.
@@ -420,9 +421,21 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 	if depth > maxIncludeDepth {
 		return fmt.Errorf("include_tasks nesting exceeds %d levels (include loop?)", maxIncludeDepth)
 	}
-	for _, task := range tasks {
+	for i := 0; i < len(tasks); i++ {
+		task := tasks[i]
 		if r.playEnded || r.batchEnded {
 			return nil
+		}
+		if ref, level, ok := r.parallelBlock(task); ok {
+			end := i
+			for end < len(tasks) && hasBlockRef(tasks[end], ref.ID, level) {
+				end++
+			}
+			if err := r.runParallel(ctx, play, tasks[i:end], level, ref.ID, playHosts, restrict, depth); err != nil {
+				return err
+			}
+			i = end - 1
+			continue
 		}
 		if !r.tagsMatch(task, play) {
 			continue
@@ -769,7 +782,10 @@ func (r *Runner) notifyHandlers(host string, names []string) {
 // flushHandlers runs notified handlers in definition order across the hosts
 // that notified them, clearing the notification set.
 func (r *Runner) flushHandlers(ctx context.Context, play *playbook.Play, playHosts []string) error {
-	for _, handler := range play.Handlers {
+	r.mu.Lock()
+	handlers := append([]*playbook.Task(nil), play.Handlers...)
+	r.mu.Unlock()
+	for _, handler := range handlers {
 		key := handler.Name
 		r.mu.Lock()
 		hosts := r.notified[key]
@@ -1743,4 +1759,65 @@ func (r *Runner) pollAsync(ctx context.Context, host string, task *playbook.Task
 	// Not an exception: no [ERROR] block, no exception key.
 	return &agentproto.Result{Failed: true, Msg: "async task produced unparsable results",
 		Origin: "plain", Extra: map[string]any{"async_result": status}}
+}
+
+// parallelBlock finds the outermost not-yet-running parallel block
+// (understudy_parallel) enclosing task, with its nesting level.
+func (r *Runner) parallelBlock(task *playbook.Task) (playbook.BlockRef, int, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for level, ref := range task.Blocks {
+		if ref.Parallel && !r.parallelActive[ref.ID] {
+			return ref, level, true
+		}
+	}
+	return playbook.BlockRef{}, 0, false
+}
+
+func hasBlockRef(t *playbook.Task, id, level int) bool {
+	return len(t.Blocks) > level && t.Blocks[level].ID == id && t.Blocks[level].Section == playbook.SectionBlock
+}
+
+// runParallel runs a parallel block's direct children concurrently: each
+// task, or each nested block as a whole, is one unit that runs across the
+// hosts as usual. All units finish before execution continues. Units must
+// be independent: a failing unit does not stop its siblings (the block's
+// rescue/always still see the failure afterwards).
+func (r *Runner) runParallel(ctx context.Context, play *playbook.Play, tasks []*playbook.Task, level, id int, playHosts, restrict []string, depth int) error {
+	var units [][]*playbook.Task
+	for i := 0; i < len(tasks); {
+		j := i + 1
+		if len(tasks[i].Blocks) > level+1 {
+			child := tasks[i].Blocks[level+1].ID
+			for j < len(tasks) && len(tasks[j].Blocks) > level+1 && tasks[j].Blocks[level+1].ID == child {
+				j++
+			}
+		}
+		units = append(units, tasks[i:j])
+		i = j
+	}
+	r.mu.Lock()
+	if r.parallelActive == nil {
+		r.parallelActive = map[int]bool{}
+	}
+	r.parallelActive[id] = true
+	inner := r.Callback
+	if _, already := inner.(*freeCallback); !already {
+		// Results of concurrent tasks interleave: print each with its banner.
+		r.Callback = &freeCallback{Callback: inner, names: map[*playbook.Task]freeBanner{}}
+	}
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.parallelActive, id)
+		r.Callback = inner
+		r.mu.Unlock()
+	}()
+	g, gctx := errgroup.WithContext(ctx)
+	for _, unit := range units {
+		g.Go(func() error {
+			return r.runTaskList(gctx, play, unit, playHosts, restrict, depth)
+		})
+	}
+	return g.Wait()
 }
