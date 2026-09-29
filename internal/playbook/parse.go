@@ -38,6 +38,7 @@ var playKeywords = map[string]bool{
 	"remote_user": true, "connection": true, "serial": true, "strategy": true,
 	"max_fail_percentage": true, "any_errors_fatal": true, "roles": true,
 	"force_handlers": true, "vars_prompt": true,
+	"gather_subset": true, "gather_timeout": true, "fact_path": true,
 }
 
 // Deferred play keys that must fail loudly rather than be ignored.
@@ -259,6 +260,18 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 				return nil, err
 			}
 			play.ForceHandlers = b
+		case "gather_subset", "gather_timeout", "fact_path":
+			// Passed through to the implicit setup task's arguments.
+			v, err := val.Decode()
+			if err != nil {
+				return nil, err
+			}
+			if v != nil {
+				if play.GatherArgs == nil {
+					play.GatherArgs = map[string]any{}
+				}
+				play.GatherArgs[key] = yaml.AsMap(v)
+			}
 		}
 	}
 	return play, nil

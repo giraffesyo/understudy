@@ -14,6 +14,9 @@ type Play struct {
 	Vars        map[string]any
 	VarsFiles   []string
 	GatherFacts *bool // nil = default (true)
+	// GatherArgs holds the play's gather_subset / gather_timeout /
+	// fact_path keywords, passed as arguments to the implicit setup task.
+	GatherArgs  map[string]any
 	Become      BecomeFields
 	Roles       []*RoleRef
 	PreTasks    []*Task

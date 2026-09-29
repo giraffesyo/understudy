@@ -3,8 +3,10 @@
 package agentproto
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 const (
@@ -109,9 +111,14 @@ func (r *Result) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON collects typed fields and stashes the rest in Extra.
 func (r *Result) UnmarshalJSON(data []byte) error {
 	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(&m); err != nil {
 		return err
 	}
+	// Keep integers integers (as the in-process path does): JSON has one
+	// number type, but templates distinguish 8 from 8.0.
+	normalizeNumbers(m)
 	take := func(key string) (any, bool) {
 		v, ok := m[key]
 		if ok {
@@ -137,8 +144,11 @@ func (r *Result) UnmarshalJSON(data []byte) error {
 		}
 	}
 	if v, ok := take("rc"); ok {
-		if f, isNum := v.(float64); isNum {
-			r.RC = IntPtr(int(f))
+		switch n := v.(type) {
+		case int64:
+			r.RC = IntPtr(int(n))
+		case float64:
+			r.RC = IntPtr(int(n))
 		}
 	}
 	if v, ok := take("stdout"); ok {
@@ -159,6 +169,28 @@ func (r *Result) UnmarshalJSON(data []byte) error {
 		r.Extra = m
 	}
 	return nil
+}
+
+// normalizeNumbers replaces json.Number values in place: int64 when the
+// literal is an integer, float64 otherwise.
+func normalizeNumbers(v any) any {
+	switch t := v.(type) {
+	case json.Number:
+		if n, err := strconv.ParseInt(string(t), 10, 64); err == nil {
+			return n
+		}
+		f, _ := t.Float64()
+		return f
+	case map[string]any:
+		for k, x := range t {
+			t[k] = normalizeNumbers(x)
+		}
+	case []any:
+		for i, x := range t {
+			t[i] = normalizeNumbers(x)
+		}
+	}
+	return v
 }
 
 // ToVars converts a result to the map shape a registered variable exposes,
