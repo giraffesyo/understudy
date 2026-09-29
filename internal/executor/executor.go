@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -63,7 +64,11 @@ type Options struct {
 	Tags       []string
 	SkipTags   []string
 	ConnOpts   connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
-	Vault      *vault.Secrets            // vault passwords for !vault values and encrypted files
+
+	ForceHandlers bool           // --force-handlers: notified handlers run on failed hosts too
+	StartAtTask   string         // --start-at-task: skip tasks until one matches
+	Step          bool           // --step: confirm each task interactively
+	Vault         *vault.Secrets // vault passwords for !vault values and encrypted files
 }
 
 // Runner executes playbooks.
@@ -87,9 +92,11 @@ type Runner struct {
 	curPlay      *playbook.Play
 	warned       map[string]bool
 	freeSem      *turnstile // free strategy: forks shared fairly across hosts
-	aborted      bool       // any_errors_fatal: stop the playbook
-	playEnded    bool       // meta: end_play
-	batchEnded   bool       // meta: end_batch
+	startedAt    bool
+	stepContinue bool
+	aborted      bool // any_errors_fatal: stop the playbook
+	playEnded    bool // meta: end_play
+	batchEnded   bool // meta: end_batch
 	mu           sync.Mutex
 }
 
@@ -192,6 +199,11 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 		return err
 	}
 	r.Callback.PlayStart(play)
+	if play.Dir != "" {
+		// Several playbooks in one run: paths resolve from each play's
+		// own playbook directory.
+		r.Opts.BaseDir = play.Dir
+	}
 	r.mu.Lock()
 	r.curPlay = play
 	r.ended = map[string]bool{}
@@ -254,7 +266,16 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 			r.Callback.PlayStart(play) // Ansible reprints the banner per batch
 		}
 		r.batchEnded = false
+		failedBefore := len(r.failedSet(batch))
 		err := r.runPlayBatch(ctx, play, batch)
+		// When every host of a batch fails, ansible-playbook stops the
+		// whole run: no further batches, plays or playbooks.
+		if err == nil && len(batch) > 0 && len(r.failedSet(batch))-failedBefore == len(batch) {
+			r.mu.Lock()
+			r.aborted = true
+			r.mu.Unlock()
+			return nil
+		}
 		if err == errBatchAborted || r.batchBreached(batch, play.MaxFailPercentage) {
 			fmt.Printf("NO MORE HOSTS LEFT: batch failure exceeded max_fail_percentage (%.0f%%); aborting play\n",
 				play.MaxFailPercentage)
@@ -400,6 +421,12 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 		}
 		if !r.tagsMatch(task, play) {
 			continue
+		}
+		if (r.Opts.StartAtTask != "" && !r.startedAt) || r.Opts.Step {
+			if task.Module != "include_tasks" && task.Module != "include_role" && task.Module != "import_role" &&
+				!r.startGate(task, r.taskDisplayName(task, playHosts)) {
+				continue
+			}
 		}
 		if task.Module == "meta" {
 			if err := r.runMeta(ctx, play, task, playHosts, restrict); err != nil {
@@ -746,9 +773,15 @@ func (r *Runner) flushHandlers(ctx context.Context, play *playbook.Play, playHos
 		if len(hosts) == 0 {
 			continue
 		}
+		candidates := r.activeOf(playHosts)
+		if play.ForceHandlers || r.Opts.ForceHandlers {
+			// force_handlers: hosts that failed after being notified still
+			// run their handlers (but not ended/unreachable ones).
+			candidates = r.notEnded(playHosts, nil)
+		}
 		var active []string
-		for _, h := range r.activeOf(playHosts) {
-			if hosts[h] {
+		for _, h := range candidates {
+			if hosts[h] && !r.isUnreachable(h) {
 				active = append(active, h)
 			}
 		}
@@ -1576,4 +1609,40 @@ func whenSkip(vctx *vars.Context, when []string) (*agentproto.Result, error) {
 		}
 	}
 	return nil, nil
+}
+
+// isUnreachable reports whether a host has an unreachable result.
+func (r *Runner) isUnreachable(host string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.stats[host]
+	return st != nil && st.Unreachable > 0
+}
+
+// startGate implements --start-at-task (tasks are skipped until one whose
+// name matches, exactly or as a glob) and --step (confirm each task).
+// It reports whether the task should run.
+func (r *Runner) startGate(task *playbook.Task, name string) bool {
+	if r.Opts.StartAtTask != "" && !r.startedAt {
+		if name != r.Opts.StartAtTask {
+			if ok, _ := path.Match(r.Opts.StartAtTask, name); !ok {
+				return false
+			}
+		}
+		r.startedAt = true
+	}
+	if r.Opts.Step && !r.stepContinue {
+		fmt.Fprintf(os.Stdout, "Perform task: TASK: %s (N)o/(y)es/(c)ontinue: ", name)
+		var answer string
+		fmt.Fscanln(os.Stdin, &answer)
+		switch strings.ToLower(strings.TrimSpace(answer)) {
+		case "y", "yes":
+		case "c", "continue":
+			r.stepContinue = true
+		default:
+			return false
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+	return true
 }

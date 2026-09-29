@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 
@@ -104,110 +107,170 @@ type parsedArgs struct {
 	module     string // adhoc -m
 	moduleArgs string // adhoc -a
 	positional []string
+
+	becomeMethod   string
+	becomePassFile string
+	connPassFile   string
+	timeout        int
+	forceHandlers  bool
+	startAtTask    string
+	step           bool
+	listTags       bool
+	sshArgs        []string // --ssh-common-args & co: not applicable to the native client
 }
 
+// cliFlag is one ansible-playbook/ansible option: its spellings, whether it
+// takes a value, and how it applies.
+type cliFlag struct {
+	names []string
+	value bool
+	apply func(p *parsedArgs, v string) error
+}
+
+func boolFlag(set func(*parsedArgs)) func(*parsedArgs, string) error {
+	return func(p *parsedArgs, _ string) error { set(p); return nil }
+}
+
+var cliFlags = []cliFlag{
+	{[]string{"-i", "--inventory", "--inventory-file"}, true, func(p *parsedArgs, v string) error { p.inventory = append(p.inventory, v); return nil }},
+	{[]string{"-l", "--limit"}, true, func(p *parsedArgs, v string) error { p.limit = v; return nil }},
+	{[]string{"-e", "--extra-vars"}, true, func(p *parsedArgs, v string) error { return parseExtraVars(v, p.extraVars) }},
+	{[]string{"-f", "--forks"}, true, func(p *parsedArgs, v string) (err error) { p.forks, err = strconv.Atoi(v); return }},
+	{[]string{"-t", "--tags"}, true, func(p *parsedArgs, v string) error { p.tags = joinCSV(p.tags, v); return nil }},
+	{[]string{"--skip-tags"}, true, func(p *parsedArgs, v string) error { p.skipTags = joinCSV(p.skipTags, v); return nil }},
+	{[]string{"-C", "--check"}, false, boolFlag(func(p *parsedArgs) { p.check = true })},
+	{[]string{"-D", "--diff"}, false, boolFlag(func(p *parsedArgs) { p.diff = true })},
+	{[]string{"-b", "--become"}, false, boolFlag(func(p *parsedArgs) { p.become = true })},
+	{[]string{"--become-user"}, true, func(p *parsedArgs, v string) error { p.becomeUser = v; return nil }},
+	{[]string{"--become-method"}, true, func(p *parsedArgs, v string) error { p.becomeMethod = v; return nil }},
+	{[]string{"-K", "--ask-become-pass"}, false, boolFlag(func(p *parsedArgs) { p.askBecome = true })},
+	{[]string{"--become-password-file", "--become-pass-file"}, true, func(p *parsedArgs, v string) error { p.becomePassFile = v; return nil }},
+	{[]string{"-k", "--ask-pass"}, false, boolFlag(func(p *parsedArgs) { p.askPass = true })},
+	{[]string{"--connection-password-file", "--conn-pass-file"}, true, func(p *parsedArgs, v string) error { p.connPassFile = v; return nil }},
+	{[]string{"-J", "--ask-vault-pass", "--ask-vault-password"}, false, boolFlag(func(p *parsedArgs) { p.askVault = true })},
+	{[]string{"--vault-password-file", "--vault-pass-file"}, true, func(p *parsedArgs, v string) error { p.vaultFiles = append(p.vaultFiles, v); return nil }},
+	{[]string{"--vault-id"}, true, func(p *parsedArgs, v string) error {
+		// vault-id form is "label@source"; we use the source path.
+		if at := strings.LastIndexByte(v, '@'); at >= 0 {
+			v = v[at+1:]
+		}
+		if v == "prompt" {
+			p.askVault = true
+		} else {
+			p.vaultFiles = append(p.vaultFiles, v)
+		}
+		return nil
+	}},
+	{[]string{"-u", "--user"}, true, func(p *parsedArgs, v string) error { p.remoteUser = v; return nil }},
+	{[]string{"--private-key", "--key-file"}, true, func(p *parsedArgs, v string) error { p.privateKey = v; return nil }},
+	{[]string{"-c", "--connection"}, true, func(p *parsedArgs, v string) error { p.connection = v; return nil }},
+	{[]string{"-T", "--timeout"}, true, func(p *parsedArgs, v string) (err error) { p.timeout, err = strconv.Atoi(v); return }},
+	{[]string{"--ssh-common-args", "--ssh-extra-args", "--sftp-extra-args", "--scp-extra-args"}, true, func(p *parsedArgs, v string) error {
+		p.sshArgs = append(p.sshArgs, v)
+		return nil
+	}},
+	{[]string{"--syntax-check"}, false, boolFlag(func(p *parsedArgs) { p.syntax = true })},
+	{[]string{"--list-hosts"}, false, boolFlag(func(p *parsedArgs) { p.listHosts = true })},
+	{[]string{"--list-tasks"}, false, boolFlag(func(p *parsedArgs) { p.listTasks = true })},
+	{[]string{"--list-tags"}, false, boolFlag(func(p *parsedArgs) { p.listTags = true })},
+	{[]string{"--force-handlers"}, false, boolFlag(func(p *parsedArgs) { p.forceHandlers = true })},
+	{[]string{"--start-at-task"}, true, func(p *parsedArgs, v string) error { p.startAtTask = v; return nil }},
+	{[]string{"--step"}, false, boolFlag(func(p *parsedArgs) { p.step = true })},
+	// No fact cache and no Python module path: accepted, nothing to do.
+	{[]string{"--flush-cache"}, false, boolFlag(func(*parsedArgs) {})},
+	{[]string{"-M", "--module-path"}, true, func(*parsedArgs, string) error { return nil }},
+	{[]string{"-m", "--module-name"}, true, func(p *parsedArgs, v string) error { p.module = v; return nil }},
+	{[]string{"-a", "--args"}, true, func(p *parsedArgs, v string) error { p.moduleArgs = v; return nil }},
+	{[]string{"--version"}, false, boolFlag(func(*parsedArgs) { fmt.Printf("understudy %s\n", version); os.Exit(0) })},
+	{[]string{"-h", "--help"}, false, boolFlag(func(*parsedArgs) { usage(); os.Exit(0) })},
+}
+
+func joinCSV(prev, v string) string {
+	if prev == "" {
+		return v
+	}
+	return prev + "," + v
+}
+
+// parseArgs parses argparse-style options: "--long value", "--long=value",
+// "-x value", "-xvalue", combined short switches ("-bK", "-vvv"), and "--"
+// ending option parsing.
 func parseArgs(args []string) (*parsedArgs, error) {
 	p := &parsedArgs{extraVars: map[string]any{}} // forks 0 = unset (cfg default applies)
-	i := 0
-	next := func(flag string) (string, error) {
-		i++
-		if i >= len(args) {
-			return "", fmt.Errorf("flag %s requires a value", flag)
+	byName := map[string]*cliFlag{}
+	for i := range cliFlags {
+		for _, n := range cliFlags[i].names {
+			byName[n] = &cliFlags[i]
 		}
-		return args[i], nil
 	}
-	for ; i < len(args); i++ {
+	for i := 0; i < len(args); i++ {
 		a := args[i]
-		var err error
+		value := func(flag string, attached string, hasAttached bool) (string, error) {
+			if hasAttached {
+				return attached, nil
+			}
+			i++
+			if i >= len(args) {
+				return "", fmt.Errorf("argument %s: expected one argument", flag)
+			}
+			return args[i], nil
+		}
 		switch {
-		case a == "-i" || a == "--inventory":
-			var v string
-			if v, err = next(a); err == nil {
-				p.inventory = append(p.inventory, v)
+		case a == "--":
+			p.positional = append(p.positional, args[i+1:]...)
+			return p, nil
+		case strings.HasPrefix(a, "--"):
+			name, attached, hasAttached := strings.Cut(a, "=")
+			f := byName[name]
+			if f == nil {
+				return nil, fmt.Errorf("unrecognized arguments: %s", a)
 			}
-		case strings.HasPrefix(a, "--inventory="):
-			p.inventory = append(p.inventory, a[len("--inventory="):])
-		case a == "-l" || a == "--limit":
-			p.limit, err = next(a)
-		case a == "-e" || a == "--extra-vars":
-			var v string
-			if v, err = next(a); err == nil {
-				err = parseExtraVars(v, p.extraVars)
-			}
-		case strings.HasPrefix(a, "--extra-vars="):
-			err = parseExtraVars(a[len("--extra-vars="):], p.extraVars)
-		case a == "-f" || a == "--forks":
-			var v string
-			if v, err = next(a); err == nil {
-				p.forks, err = strconv.Atoi(v)
-			}
-		case a == "-t" || a == "--tags":
-			p.tags, err = next(a)
-		case a == "--skip-tags":
-			p.skipTags, err = next(a)
-		case a == "--check":
-			p.check = true
-		case a == "--diff":
-			p.diff = true
-		case a == "-b" || a == "--become":
-			p.become = true
-		case a == "--become-user":
-			p.becomeUser, err = next(a)
-		case a == "-K" || a == "--ask-become-pass":
-			p.askBecome = true
-		case a == "-k" || a == "--ask-pass":
-			p.askPass = true
-		case a == "--ask-vault-pass" || a == "--ask-vault-password":
-			p.askVault = true
-		case a == "--vault-password-file" || a == "--vault-pass-file":
-			var v string
-			if v, err = next(a); err == nil {
-				p.vaultFiles = append(p.vaultFiles, v)
-			}
-		case a == "--vault-id":
-			var v string
-			if v, err = next(a); err == nil {
-				// vault-id form is "label@source"; we use the source path.
-				if at := strings.LastIndexByte(v, '@'); at >= 0 {
-					v = v[at+1:]
+			if !f.value {
+				if hasAttached {
+					return nil, fmt.Errorf("argument %s: ignored explicit argument %q", name, attached)
 				}
-				if v != "prompt" {
-					p.vaultFiles = append(p.vaultFiles, v)
-				} else {
-					p.askVault = true
+				if err := f.apply(p, ""); err != nil {
+					return nil, err
 				}
+				continue
 			}
-		case a == "-u" || a == "--user":
-			p.remoteUser, err = next(a)
-		case a == "--private-key" || a == "--key-file":
-			p.privateKey, err = next(a)
-		case a == "-c" || a == "--connection":
-			p.connection, err = next(a)
-		case a == "--syntax-check":
-			p.syntax = true
-		case a == "--list-hosts":
-			p.listHosts = true
-		case a == "--list-tasks":
-			p.listTasks = true
-		case a == "-m" || a == "--module-name":
-			p.module, err = next(a)
-		case a == "-a" || a == "--args":
-			p.moduleArgs, err = next(a)
-		case a == "--version":
-			fmt.Printf("understudy %s\n", version)
-			os.Exit(0)
-		case a == "-h" || a == "--help":
-			usage()
-			os.Exit(0)
-		case strings.HasPrefix(a, "-v") && strings.TrimLeft(a, "-v") == "":
-			p.verbosity += strings.Count(a, "v")
-		case strings.HasPrefix(a, "-"):
-			return nil, fmt.Errorf("unknown flag %q", a)
+			v, err := value(name, attached, hasAttached)
+			if err != nil {
+				return nil, err
+			}
+			if err := f.apply(p, v); err != nil {
+				return nil, err
+			}
+		case strings.HasPrefix(a, "-") && len(a) > 1:
+			// Short options, possibly combined: -bK, -vvv, -e@file, -ihosts.
+			for j := 1; j < len(a); j++ {
+				c := a[j]
+				if c == 'v' {
+					p.verbosity++
+					continue
+				}
+				f := byName["-"+string(c)]
+				if f == nil {
+					return nil, fmt.Errorf("unrecognized arguments: %s", a)
+				}
+				if !f.value {
+					if err := f.apply(p, ""); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				rest := a[j+1:]
+				v, err := value("-"+string(c), rest, rest != "")
+				if err != nil {
+					return nil, err
+				}
+				if err := f.apply(p, v); err != nil {
+					return nil, err
+				}
+				break
+			}
 		default:
 			p.positional = append(p.positional, a)
-		}
-		if err != nil {
-			return nil, err
 		}
 	}
 	return p, nil
@@ -254,28 +317,55 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 	if privateKey == "" {
 		privateKey = cfg.PrivateKeyFile
 	}
+	if p.becomeMethod != "" && p.becomeMethod != "sudo" {
+		return executor.Options{}, fmt.Errorf("become method %q is not supported (only sudo)", p.becomeMethod)
+	}
+	for _, a := range p.sshArgs {
+		fmt.Fprintf(os.Stderr, "[WARNING]: ignoring SSH client arguments %q: understudy uses a native SSH client\n", a)
+	}
+	timeout := cfg.Timeout
+	if p.timeout > 0 {
+		timeout = time.Duration(p.timeout) * time.Second
+	}
 	opts := executor.Options{
-		Forks:      forks,
-		CheckMode:  p.check,
-		Diff:       p.diff,
-		Verbosity:  p.verbosity,
-		ExtraVars:  p.extraVars,
-		Become:     p.become,
-		BecomeUser: p.becomeUser,
-		Connection: p.connection,
-		BaseDir:    baseDir,
-		Tags:       splitCSV(p.tags),
-		SkipTags:   splitCSV(p.skipTags),
+		ForceHandlers: p.forceHandlers,
+		StartAtTask:   p.startAtTask,
+		Step:          p.step,
+		Forks:         forks,
+		CheckMode:     p.check,
+		Diff:          p.diff,
+		Verbosity:     p.verbosity,
+		ExtraVars:     p.extraVars,
+		Become:        p.become,
+		BecomeUser:    p.becomeUser,
+		Connection:    p.connection,
+		BaseDir:       baseDir,
+		Tags:          splitCSV(p.tags),
+		SkipTags:      splitCSV(p.skipTags),
 	}
 	opts.ConnOpts = connection.ManagerOptions{
 		RemoteUser:      remoteUser,
 		PrivateKey:      privateKey,
 		HostKeyChecking: cfg.HostKeyChecking,
-		Timeout:         cfg.Timeout,
+		Timeout:         timeout,
 		RemoteTmp:       cfg.RemoteTmp,
 		KeyPassphrase: func() (string, error) {
 			return promptSecret("SSH key passphrase")
 		},
+	}
+	if p.connPassFile != "" {
+		pw, err := readPasswordFile(p.connPassFile)
+		if err != nil {
+			return opts, err
+		}
+		opts.ConnOpts.Password = pw
+	}
+	if p.becomePassFile != "" {
+		pw, err := readPasswordFile(p.becomePassFile)
+		if err != nil {
+			return opts, err
+		}
+		opts.BecomePass = pw
 	}
 	if p.askPass {
 		pw, err := promptSecret("SSH password")
@@ -422,104 +512,209 @@ func playbookCmd(args []string) int {
 		return 1
 	}
 
-	exit := 0
+	// All playbooks load first and then run as one run with a single
+	// recap, like ansible-playbook a.yml b.yml.
+	type book struct {
+		path  string
+		plays []*playbook.Play
+	}
+	var books []book
 	for _, path := range p.positional {
-		plays, err := playbook.LoadFile(path)
+		// Load by absolute path: error origins show it, as in Ansible.
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			absPath = path
+		}
+		plays, err := playbook.LoadFile(absPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
 			return 4
 		}
-		if err := playbook.ResolveRoles(plays, filepath.Dir(path), nil); err != nil {
+		if err := playbook.ResolveRoles(plays, filepath.Dir(absPath), nil); err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
 			return 4
 		}
-		if p.syntax {
-			fmt.Printf("playbook: %s\n", path)
-			continue
+		dir, _ := filepath.Abs(filepath.Dir(path))
+		for _, pl := range plays {
+			pl.Dir = dir
 		}
-		if p.listTasks {
-			listTasks(path, plays)
-			continue
+		books = append(books, book{path, plays})
+	}
+
+	if p.syntax {
+		for _, b := range books {
+			fmt.Printf("\nplaybook: %s\n", b.path)
 		}
-		secrets, err := setupVault(p)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
-			return 1
+		return 0
+	}
+	if p.listTasks || p.listTags {
+		tags, skip := splitCSV(p.tags), splitCSV(p.skipTags)
+		for _, b := range books {
+			listTasks(b.path, b.plays, p.listTasks, p.listTags, tags, skip)
 		}
-		inv, err := loadInventory(p, filepath.Dir(path))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
-			return 1
-		}
-		if p.listHosts {
-			for i, play := range plays {
-				name := play.Name
-				if name == "" {
-					name = play.HostPattern
-				}
+		return 0
+	}
+
+	secrets, err := setupVault(p)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		return 1
+	}
+	inv, err := loadInventory(p, filepath.Dir(p.positional[0]))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		return 1
+	}
+	if p.listHosts {
+		for _, b := range books {
+			fmt.Printf("\nplaybook: %s\n", b.path)
+			for i, play := range b.plays {
 				matched, err := inv.Match(play.HostPattern)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
 					return 1
 				}
-				fmt.Printf("\n  play #%d (%s): host count=%d\n", i+1, name, len(matched))
+				if p.limit != "" {
+					if limited, err := inv.Match(p.limit); err == nil {
+						keep := map[string]bool{}
+						for _, h := range limited {
+							keep[h.Name] = true
+						}
+						var out []*inventory.Host
+						for _, h := range matched {
+							if keep[h.Name] {
+								out = append(out, h)
+							}
+						}
+						matched = out
+					}
+				}
+				fmt.Printf("\n  %s\n", playHeader(i, play))
+				fmt.Printf("    pattern: ['%s']\n    hosts (%d):\n", play.HostPattern, len(matched))
 				for _, h := range matched {
-					fmt.Printf("    %s\n", h.Name)
+					fmt.Printf("      %s\n", h.Name)
 				}
 			}
-			continue
 		}
-
-		opts, err := buildOptions(p, filepath.Dir(path), secrets)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
-			return 1
-		}
-		cb := callback.New(p.verbosity)
-		runner := executor.NewRunner(inv, cb, opts)
-		runner.Limit = p.limit
-		code, err := runner.Run(context.Background(), plays)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
-			return 1
-		}
-		if code != 0 {
-			exit = code
-		}
+		return 0
 	}
-	return exit
+
+	opts, err := buildOptions(p, filepath.Dir(p.positional[0]), secrets)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		return 1
+	}
+	var all []*playbook.Play
+	for _, b := range books {
+		all = append(all, b.plays...)
+	}
+	cb := callback.New(p.verbosity)
+	runner := executor.NewRunner(inv, cb, opts)
+	runner.Limit = p.limit
+	code, err := runner.Run(context.Background(), all)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		return 1
+	}
+	return code
 }
 
-func listTasks(path string, plays []*playbook.Play) {
+// playHeader is the list modes' "play #N (pattern): name\tTAGS: [...]".
+func playHeader(i int, play *playbook.Play) string {
+	return fmt.Sprintf("play #%d (%s): %s\tTAGS: [%s]", i+1, play.HostPattern, play.Name, strings.Join(play.Tags, ", "))
+}
+
+// listTasks prints --list-tasks / --list-tags output. Tasks are filtered by
+// --tags/--skip-tags like a run ("never" tasks hidden unless requested);
+// tags shown are each task's effective (inherited) tags.
+func listTasks(path string, plays []*playbook.Play, showTasks, showTags bool, want, skip []string) {
 	fmt.Printf("\nplaybook: %s\n", path)
 	for i, play := range plays {
-		name := play.Name
-		if name == "" {
-			name = play.HostPattern
+		fmt.Printf("\n  %s\n", playHeader(i, play))
+		if showTasks {
+			fmt.Println("    tasks:")
 		}
-		fmt.Printf("\n  play #%d (%s):\n", i+1, name)
-		for _, t := range play.PreTasks {
-			printTaskLine(t)
+		union := map[string]bool{}
+		for _, section := range [][]*playbook.Task{play.PreTasks, play.Tasks, play.PostTasks} {
+			for _, t := range expandImports(play, section) {
+				tags := effectiveTags(play, t)
+				for _, tg := range tags {
+					union[tg] = true
+				}
+				if !showTasks || !tagSelected(tags, want, skip) {
+					continue
+				}
+				name := t.Name
+				if name == "" {
+					name = t.Module
+				}
+				if t.RoleName != "" {
+					name = t.RoleName + " : " + name
+				}
+				fmt.Printf("      %s\tTAGS: [%s]\n", name, strings.Join(tags, ", "))
+			}
 		}
-		for _, t := range play.Tasks {
-			printTaskLine(t)
-		}
-		for _, t := range play.PostTasks {
-			printTaskLine(t)
+		if showTags {
+			all := make([]string, 0, len(union))
+			for tg := range union {
+				all = append(all, tg)
+			}
+			sort.Strings(all)
+			fmt.Printf("      TASK TAGS: [%s]\n", strings.Join(all, ", "))
 		}
 	}
 }
 
-func printTaskLine(t *playbook.Task) {
-	name := t.Name
-	if name == "" {
-		name = t.Module
+func effectiveTags(play *playbook.Play, t *playbook.Task) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, tg := range append(append([]string{}, play.Tags...), t.Tags...) {
+		if !seen[tg] {
+			seen[tg] = true
+			out = append(out, tg)
+		}
 	}
-	if len(t.Tags) > 0 {
-		fmt.Printf("      %s\tTAGS: [%s]\n", name, strings.Join(t.Tags, ", "))
-	} else {
-		fmt.Printf("      %s\n", name)
+	sort.Strings(out)
+	return out
+}
+
+// tagSelected applies --tags/--skip-tags with always/never semantics.
+func tagSelected(tags, want, skip []string) bool {
+	has := func(x string) bool {
+		for _, t := range tags {
+			if t == x {
+				return true
+			}
+		}
+		return false
 	}
+	for _, s := range skip {
+		if has(s) || (s == "all" && len(tags) > 0) {
+			return false
+		}
+	}
+	wanted := func() bool {
+		for _, w := range want {
+			switch {
+			case w == "all" && !has("never"):
+				return true
+			case w == "tagged" && len(tags) > 0:
+				return true
+			case w == "untagged" && len(tags) == 0:
+				return true
+			case has(w):
+				return true
+			}
+		}
+		return false
+	}
+	if has("never") {
+		return len(want) > 0 && wanted()
+	}
+	if len(want) == 0 || has("always") {
+		return true
+	}
+	return wanted()
 }
 
 // adhocCmd synthesizes a one-task play: `understudy adhoc all -m ping`.
@@ -601,4 +796,51 @@ func argKeyOrder(raw string) []string {
 		}
 	}
 	return keys
+}
+
+// readPasswordFile reads a password file's first line; an executable file
+// is run and its output used, as Ansible does for password files.
+func readPasswordFile(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	var data []byte
+	if info.Mode()&0o111 != 0 {
+		data, err = exec.Command(path).Output()
+	} else {
+		data, err = os.ReadFile(path)
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading password file %s: %v", path, err)
+	}
+	line, _, _ := strings.Cut(string(data), "\n")
+	return strings.TrimRight(line, "\r"), nil
+}
+
+// expandImports inlines import_role tasks (static, so listed like the
+// role's own tasks), inheriting the import's tags.
+func expandImports(play *playbook.Play, tasks []*playbook.Task) []*playbook.Task {
+	var out []*playbook.Task
+	for _, t := range tasks {
+		name, _ := t.Args["name"].(string)
+		if t.Module != "import_role" || name == "" {
+			out = append(out, t)
+			continue
+		}
+		from, _ := t.Args["tasks_from"].(string)
+		ri, err := playbook.LoadRoleForInclude(name, play.Dir, nil, from)
+		if err != nil {
+			out = append(out, t)
+			continue
+		}
+		for _, rt := range ri.Tasks {
+			rt.Tags = append(append([]string{}, t.Tags...), rt.Tags...)
+			if rt.RoleName == "" {
+				rt.RoleName = name
+			}
+		}
+		out = append(out, expandImports(play, ri.Tasks)...)
+	}
+	return out
 }

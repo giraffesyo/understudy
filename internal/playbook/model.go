@@ -33,6 +33,7 @@ type Play struct {
 	AnyErrorsFatal bool
 	ForceHandlers  bool
 	VarsPrompt     []VarPrompt
+	Dir            string // absolute directory of the playbook file (playbook_dir)
 	Strategy       string // linear (default), free, host_pinned
 	Serial         []any
 	// MaxFailPercentage aborts the play when more than this percent of a
