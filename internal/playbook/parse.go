@@ -665,12 +665,20 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			}
 		case "when":
 			task.When = decodeExprList(val)
-		case "loop", "with_items", "with_list":
+		case "loop", "with_list":
 			v, err := val.Decode()
 			if err != nil {
 				return nil, err
 			}
 			task.Loop = v
+		case "with_items":
+			// with_items flattens one level (the items lookup).
+			v, err := val.Decode()
+			if err != nil {
+				return nil, err
+			}
+			task.Loop = v
+			task.LoopWith = "items"
 		case "with_dict":
 			v, err := val.Decode()
 			if err != nil {

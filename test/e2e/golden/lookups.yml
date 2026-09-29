@@ -1,0 +1,50 @@
+---
+# Lookup plugins and with_<lookup> loops: items (one-level flatten), list,
+# nested, together, subelements, sequence, indexed_items, flattened,
+# lines, pipe, template, vars, varnames, ini, csvfile, first_found,
+# inventory_hostnames, env; and lookup()'s join/unwrap vs query().
+- hosts: localhost
+  gather_facts: false
+  vars:
+    who: WORLD
+    users:
+      - {name: u1, groups: [g1, g2]}
+      - {name: u2, groups: [g3]}
+      - {name: u3}
+    myvar_a: 1
+    myvar_b: 2
+  tasks:
+    - debug: {msg: "{{ item }}"}
+      with_items: [[1, 2], 3, [[4]]]
+    - debug: {msg: "{{ item }}"}
+      loop: [[1, 2], 3]
+    - debug: {msg: "{{ item }}"}
+      with_list: [[1, 2], 3]
+    - debug: {msg: "{{ item.0 }}-{{ item.1 }}"}
+      with_nested: [[a, b], [1, 2]]
+    - debug: {msg: "{{ item }}"}
+      with_together: [[a, b, c], [1, 2]]
+    - debug: {msg: "{{ item.0.name }}:{{ item.1 }}"}
+      with_subelements: [ "{{ users }}", groups, {skip_missing: true} ]
+    - debug: {msg: "{{ item }}"}
+      with_sequence: start=1 end=5 stride=2 format=host%02d
+    - debug: {msg: "{{ item }}"}
+      with_sequence: count=3
+    - debug: {msg: "{{ item.0 }}={{ item.1 }}"}
+      with_indexed_items: [x, y]
+    - debug: {msg: "{{ item }}"}
+      with_flattened: [[1, [2, [3]]], 4]
+    - debug: {msg: "{{ item }}"}
+      with_lines: cat {{ playbook_dir }}/lookup_data/lines.txt
+    - debug: {msg: "{{ lookup('pipe', 'echo piped; echo two') }}"}
+    - debug: {msg: "{{ lookup('template', 'greet.j2') }}"}
+    - debug: {msg: "{{ lookup('vars', 'who') }} {{ lookup('vars', 'nope', default='dflt') }}"}
+    - debug: {msg: "{{ lookup('varnames', '^myvar_') }}"}
+    - debug: {msg: "{{ lookup('ini', 'name section=general file=lookup_data/conf.ini') }} {{ lookup('ini', 'port', section='general', file='lookup_data/conf.ini') }}"}
+    - debug: {msg: "{{ lookup('ini', 'user.name type=properties file=lookup_data/app.properties') }}"}
+    - debug: {msg: "{{ lookup('csvfile', 'bob file=lookup_data/people.csv delimiter=, col=2') }}"}
+    - debug: {msg: "{{ lookup('lines', 'cat ' ~ playbook_dir ~ '/lookup_data/lines.txt') }}"}
+    - debug: {msg: "{{ query('items', [1, [2]]) }} {{ query('list', [1, [2]]) }}"}
+    - debug: {msg: "{{ lookup('first_found', {'files': ['nope.txt', 'lines.txt'], 'paths': [playbook_dir ~ '/lookup_data']}) | basename }}"}
+    - debug: {msg: "{{ query('inventory_hostnames', 'all') }}"}
+    - debug: {msg: "{{ lookup('env', 'NOPE_NOT_SET', default='envdefault') }}"}

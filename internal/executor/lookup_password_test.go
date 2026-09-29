@@ -39,11 +39,12 @@ func TestPasswordGeneratedOnceAndReused(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			v, err := r.passwordLookup([]any{term}, nil)
+			v, err := lookupPassword(r, nil, []any{term}, nil)
 			if err != nil {
 				t.Error(err)
+				return
 			}
-			got[i] = v
+			got[i] = v[0]
 		}(i)
 	}
 	wg.Wait()
@@ -64,7 +65,7 @@ func TestPasswordGeneratedOnceAndReused(t *testing.T) {
 
 	// An existing file (including Ansible's " salt=" suffix) is read back.
 	os.WriteFile(path, []byte("hunter2 salt=abcd\n"), 0o600)
-	if v, _ := r.passwordLookup([]any{term}, nil); v != "hunter2" {
-		t.Fatalf("read back %q", v)
+	if v, _ := lookupPassword(r, nil, []any{term}, nil); len(v) != 1 || v[0] != "hunter2" {
+		t.Fatalf("read back %v", v)
 	}
 }

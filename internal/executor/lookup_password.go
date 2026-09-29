@@ -37,24 +37,10 @@ type passwordParams struct {
 	chars  []string
 }
 
-// passwordLookup implements ansible.builtin.password: the first use
-// generates a random password into the file on the control node, later uses
-// read it back. /dev/null means "generate, never store".
-func (r *Runner) passwordLookup(terms []any, kwargs map[string]any) (any, error) {
-	out := make([]any, 0, len(terms))
-	for _, t := range terms {
-		p, err := parsePasswordTerm(fmt.Sprintf("%v", t), kwargs)
-		if err != nil {
-			return nil, err
-		}
-		pw, err := r.readOrCreatePassword(p)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, pw)
-	}
-	return singleOrList(out), nil
-}
+// The password lookup (lookupPassword in lookups.go) implements
+// ansible.builtin.password: the first use generates a random password into
+// the file on the control node, later uses read it back. /dev/null means
+// "generate, never store".
 
 // parsePasswordTerm splits "path key=value ..." (options may also arrive
 // as lookup kwargs) and applies Ansible's defaults.
