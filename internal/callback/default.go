@@ -272,11 +272,6 @@ func (d *Default) dump(task *playbook.Task, res *agentproto.Result) string {
 	m := res.ToVars()
 	delete(m, "failed")
 	delete(m, "skipped")
-	if res.RC == nil {
-		for _, k := range []string{"stdout_lines", "stderr_lines"} {
-			delete(m, k)
-		}
-	}
 	for k := range m {
 		if strings.HasPrefix(k, "_ansible_") {
 			delete(m, k)

@@ -322,6 +322,15 @@ func TestCopyTemplateFileStat(t *testing.T) {
   vars:
     target_name: world
   tasks:
+    - name: template does not create parent directories (Ansible parity)
+      template:
+        src: greeting.j2
+        dest: `+dest+`/greeting.txt
+      register: noparent
+      ignore_errors: true
+    - assert:
+        that: "noparent.failed and 'does not exist' in noparent.msg"
+    - file: {path: `+dest+`, state: directory}
     - name: render template
       template:
         src: greeting.j2

@@ -170,7 +170,9 @@ func (r *Result) ToVars() map[string]any {
 	}
 	m["changed"] = r.Changed
 	m["failed"] = r.Failed
-	m["skipped"] = r.Skipped
+	if r.Skipped {
+		m["skipped"] = true // absent unless true, as in Ansible
+	}
 	if r.Msg != "" {
 		m["msg"] = r.Msg
 	}

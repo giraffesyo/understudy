@@ -3,8 +3,10 @@ package modules
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
@@ -21,19 +23,50 @@ func init() {
 var pkgSpec = args.Spec{
 	"name":               {Type: "list", Aliases: []string{"pkg", "package"}},
 	"state":              {Default: "present", Choices: []string{"present", "installed", "absent", "removed", "latest"}},
-	"update_cache":       {Type: "bool", Default: false, Aliases: []string{"update-cache"}},
+	"update_cache":       {Type: "bool", Default: false, Aliases: []string{"update-cache", "expire-cache"}},
 	"cache_valid_time":   {Type: "int"},
 	"install_recommends": {Type: "bool"},
 	"autoremove":         {Type: "bool", Default: false},
+
+	// dnf/yum options (Ansible's dnf and yum modules).
+	"enablerepo":        {Type: "list"},
+	"disablerepo":       {Type: "list"},
+	"use_backend":       {Choices: []string{"auto", "yum", "yum4", "dnf", "dnf4", "dnf5"}},
+	"disable_gpg_check": {Type: "bool", Default: false},
+	"exclude":           {Type: "list"},
+	"skip_broken":       {Type: "bool", Default: false},
+	"allowerasing":      {Type: "bool", Default: false},
+	"nobest":            {Type: "bool"},
+	"conf_file":         {},
+	"releasever":        {},
+	"installroot":       {},
+	"install_weak_deps": {Type: "bool", Default: true},
+	"disable_excludes":  {},
+	"security":          {Type: "bool", Default: false},
+	"bugfix":            {Type: "bool", Default: false},
+	"download_only":     {Type: "bool", Default: false},
+	"lock_timeout":      {Type: "int"},
+	"validate_certs":    {Type: "bool", Default: true},
+	"sslverify":         {Type: "bool", Default: true},
 }
 
+// rpmOnly/aptOnly options are rejected on the other family rather than
+// silently ignored.
+var (
+	rpmOnlyOpts = []string{"enablerepo", "disablerepo", "use_backend", "disable_gpg_check", "exclude",
+		"skip_broken", "allowerasing", "nobest", "conf_file", "releasever", "installroot",
+		"disable_excludes", "security", "bugfix", "download_only"}
+	aptOnlyOpts = []string{"cache_valid_time", "install_recommends"}
+)
+
 // pkgManager abstracts one package manager's query and mutate commands.
+// opts are manager-specific CLI flags derived from the module options.
 type pkgManager struct {
 	name      string
 	installed func(env *RunEnv, pkg string) bool
-	install   func(env *RunEnv, pkgs []string, latest bool) (string, error)
-	remove    func(env *RunEnv, pkgs []string) (string, error)
-	refresh   func(env *RunEnv) (string, error)
+	install   func(env *RunEnv, pkgs []string, latest bool, opts []string) (string, error)
+	remove    func(env *RunEnv, pkgs []string, opts []string) (string, error)
+	refresh   func(env *RunEnv, opts []string) (string, error)
 }
 
 var pkgManagers = map[string]*pkgManager{
@@ -43,15 +76,15 @@ var pkgManagers = map[string]*pkgManager{
 			out, err := runOut(env, "dpkg-query", "-W", "-f=${Status}", pkg)
 			return err == nil && strings.Contains(out, "install ok installed")
 		},
-		install: func(env *RunEnv, pkgs []string, latest bool) (string, error) {
-			argv := append([]string{"install", "-y"}, pkgs...)
+		install: func(env *RunEnv, pkgs []string, latest bool, opts []string) (string, error) {
+			argv := append(append([]string{"install", "-y"}, opts...), pkgs...)
 			return runAptGet(env, argv...)
 		},
-		remove: func(env *RunEnv, pkgs []string) (string, error) {
-			argv := append([]string{"remove", "-y"}, pkgs...)
+		remove: func(env *RunEnv, pkgs []string, opts []string) (string, error) {
+			argv := append(append([]string{"remove", "-y"}, opts...), pkgs...)
 			return runAptGet(env, argv...)
 		},
-		refresh: func(env *RunEnv) (string, error) {
+		refresh: func(env *RunEnv, _ []string) (string, error) {
 			return runAptGet(env, "update")
 		},
 	},
@@ -63,17 +96,17 @@ var pkgManagers = map[string]*pkgManager{
 			_, err := runOut(env, "apk", "info", "-e", pkg)
 			return err == nil
 		},
-		install: func(env *RunEnv, pkgs []string, latest bool) (string, error) {
+		install: func(env *RunEnv, pkgs []string, latest bool, _ []string) (string, error) {
 			argv := []string{"add"}
 			if latest {
 				argv = append(argv, "--upgrade")
 			}
 			return runOut(env, "apk", append(argv, pkgs...)...)
 		},
-		remove: func(env *RunEnv, pkgs []string) (string, error) {
+		remove: func(env *RunEnv, pkgs []string, _ []string) (string, error) {
 			return runOut(env, "apk", append([]string{"del"}, pkgs...)...)
 		},
-		refresh: func(env *RunEnv) (string, error) {
+		refresh: func(env *RunEnv, _ []string) (string, error) {
 			return runOut(env, "apk", "update")
 		},
 	},
@@ -86,14 +119,14 @@ func rpmManager(cmd string) *pkgManager {
 			_, err := runOut(env, "rpm", "-q", pkg)
 			return err == nil
 		},
-		install: func(env *RunEnv, pkgs []string, latest bool) (string, error) {
-			return runOut(env, cmd, append([]string{"install", "-y"}, pkgs...)...)
+		install: func(env *RunEnv, pkgs []string, latest bool, opts []string) (string, error) {
+			return runOut(env, cmd, append(append([]string{"install", "-y"}, opts...), pkgs...)...)
 		},
-		remove: func(env *RunEnv, pkgs []string) (string, error) {
-			return runOut(env, cmd, append([]string{"remove", "-y"}, pkgs...)...)
+		remove: func(env *RunEnv, pkgs []string, opts []string) (string, error) {
+			return runOut(env, cmd, append(append([]string{"remove", "-y"}, opts...), pkgs...)...)
 		},
-		refresh: func(env *RunEnv) (string, error) {
-			return runOut(env, cmd, "makecache")
+		refresh: func(env *RunEnv, opts []string) (string, error) {
+			return runOut(env, cmd, append([]string{"makecache"}, opts...)...)
 		},
 	}
 }
@@ -114,8 +147,27 @@ func mkPkg(mgrName string) ModuleFunc {
 				return agentproto.Fail("no supported package manager found (apt, dnf, yum, apk)")
 			}
 		}
+		// yum on a dnf-only system (RHEL 8+) is dnf, as in Ansible's yum
+		// action; use_backend picks explicitly.
+		if mgr.name == "yum" || mgr.name == "dnf" {
+			switch p.Str("use_backend") {
+			case "dnf", "dnf4", "yum4":
+				mgr = pkgManagers["dnf"]
+			case "dnf5":
+				mgr = rpmManager("dnf5")
+			case "yum":
+				mgr = pkgManagers["yum"]
+			}
+			if _, err := exec.LookPath(pkgBinary(mgr.name)); err != nil && mgr.name == "yum" {
+				mgr = pkgManagers["dnf"]
+			}
+		}
 		if _, err := exec.LookPath(pkgBinary(mgr.name)); err != nil {
 			return agentproto.Fail("package manager %q is not available on this host", mgr.name)
+		}
+		opts, err := pkgOptions(mgr.name, p, rawArgs)
+		if err != nil {
+			return agentproto.Fail("%v", err)
 		}
 
 		var names []string
@@ -137,9 +189,9 @@ func mkPkg(mgrName string) ModuleFunc {
 
 		res := &agentproto.Result{Extra: map[string]any{}}
 
-		if p.Bool("update_cache") {
+		if p.Bool("update_cache") && !aptCacheFresh(mgr.name, int(p.Int("cache_valid_time"))) {
 			if !env.CheckMode {
-				if out, err := mgr.refresh(env); err != nil {
+				if out, err := mgr.refresh(env, opts.repo); err != nil {
 					return agentproto.Fail("cache update failed: %v: %s", err, tail(out))
 				}
 			}
@@ -172,7 +224,7 @@ func mkPkg(mgrName string) ModuleFunc {
 				res.Extra["would_install"] = targets
 				return res
 			}
-			out, err := mgr.install(env, targets, state == "latest")
+			out, err := mgr.install(env, targets, state == "latest", opts.install)
 			if err != nil {
 				return agentproto.Fail("package install failed: %v: %s", err, tail(out))
 			}
@@ -193,7 +245,7 @@ func mkPkg(mgrName string) ModuleFunc {
 				res.Extra["would_remove"] = present
 				return res
 			}
-			out, err := mgr.remove(env, present)
+			out, err := mgr.remove(env, present, opts.remove)
 			if err != nil {
 				return agentproto.Fail("package removal failed: %v: %s", err, tail(out))
 			}
@@ -273,4 +325,101 @@ func tail(s string) string {
 
 func environWith(k, v string) []string {
 	return append(osEnviron(), fmt.Sprintf("%s=%s", k, v))
+}
+
+type pkgOpts struct {
+	repo, install, remove []string
+}
+
+// pkgOptions maps module options onto the manager's CLI flags, rejecting
+// options that belong to the other package family.
+func pkgOptions(mgr string, p *args.Parsed, raw map[string]any) (pkgOpts, error) {
+	var o pkgOpts
+	rpm := mgr == "dnf" || mgr == "yum" || mgr == "dnf5"
+	reject := aptOnlyOpts
+	if !rpm {
+		reject = rpmOnlyOpts
+	}
+	for _, k := range reject {
+		if _, set := raw[k]; set {
+			return o, fmt.Errorf("the %q option is not supported by %s", k, mgr)
+		}
+	}
+	if rpm {
+		for _, r := range p.List("enablerepo") {
+			o.repo = append(o.repo, "--enablerepo="+fmt.Sprint(r))
+		}
+		for _, r := range p.List("disablerepo") {
+			o.repo = append(o.repo, "--disablerepo="+fmt.Sprint(r))
+		}
+		for _, x := range p.List("exclude") {
+			o.repo = append(o.repo, "--exclude="+fmt.Sprint(x))
+		}
+		for flag, key := range map[string]string{"--config=": "conf_file", "--releasever=": "releasever",
+			"--installroot=": "installroot", "--disableexcludes=": "disable_excludes"} {
+			if v := p.Str(key); v != "" {
+				o.repo = append(o.repo, flag+v)
+			}
+		}
+		if !p.Bool("sslverify") || !p.Bool("validate_certs") {
+			o.repo = append(o.repo, "--setopt=sslverify=False")
+		}
+		o.install = append([]string(nil), o.repo...)
+		if p.Bool("disable_gpg_check") {
+			o.install = append(o.install, "--nogpgcheck")
+		}
+		if p.Bool("skip_broken") {
+			o.install = append(o.install, "--skip-broken")
+		}
+		if p.Bool("allowerasing") {
+			o.install = append(o.install, "--allowerasing")
+		}
+		if p.Bool("nobest") {
+			o.install = append(o.install, "--nobest")
+		}
+		if !p.Bool("install_weak_deps") {
+			o.install = append(o.install, "--setopt=install_weak_deps=False")
+		}
+		if p.Bool("security") {
+			o.install = append(o.install, "--security")
+		}
+		if p.Bool("bugfix") {
+			o.install = append(o.install, "--bugfix")
+		}
+		if p.Bool("download_only") {
+			o.install = append(o.install, "--downloadonly")
+		}
+		o.remove = append([]string(nil), o.repo...)
+		if !p.Bool("autoremove") {
+			o.remove = append(o.remove, "--setopt=clean_requirements_on_remove=False")
+		}
+		return o, nil
+	}
+	if mgr == "apt" {
+		if _, set := raw["install_recommends"]; set {
+			if p.Bool("install_recommends") {
+				o.install = append(o.install, "--install-recommends")
+			} else {
+				o.install = append(o.install, "--no-install-recommends")
+			}
+		}
+		if p.Bool("autoremove") {
+			o.remove = append(o.remove, "--auto-remove")
+		}
+	}
+	return o, nil
+}
+
+// aptCacheFresh reports whether apt's cache is younger than validSecs
+// (cache_valid_time), letting update_cache skip the refresh.
+func aptCacheFresh(mgr string, validSecs int) bool {
+	if mgr != "apt" || validSecs <= 0 {
+		return false
+	}
+	for _, stamp := range []string{"/var/lib/apt/periodic/update-success-stamp", "/var/lib/apt/lists"} {
+		if info, err := os.Stat(stamp); err == nil {
+			return time.Since(info.ModTime()) < time.Duration(validSecs)*time.Second
+		}
+	}
+	return false
 }
