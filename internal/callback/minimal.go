@@ -143,3 +143,8 @@ func (m *Minimal) adhocError(task *playbook.Task, res *agentproto.Result) {
 	fmt.Fprint(m.Out, m.paint(cRed, strings.TrimRight(block, "\n")))
 	fmt.Fprint(m.Out, "\n\n")
 }
+
+// The minimal callback does not report retries or async progress.
+func (m *Minimal) Retrying(string, *playbook.Task, string, int, *agentproto.Result) {}
+func (m *Minimal) AsyncPoll(string, string)                                         {}
+func (m *Minimal) AsyncDone(string, string, bool)                                   {}

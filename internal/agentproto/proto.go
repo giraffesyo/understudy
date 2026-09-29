@@ -24,17 +24,18 @@ const (
 // TaskRequest is the JSON header line the control node writes to the agent's
 // stdin, optionally followed by PayloadLen raw bytes (file content).
 type TaskRequest struct {
-	Proto      int               `json:"proto"`
-	Op         string            `json:"op"` // "task"; future: session ops
-	Module     string            `json:"module"`
-	Args       map[string]any    `json:"args,omitempty"`
-	FreeForm   string            `json:"free_form,omitempty"` // command/shell raw params
-	CheckMode  bool              `json:"check_mode,omitempty"`
-	Diff       bool              `json:"diff,omitempty"`
-	Env        map[string]string `json:"env,omitempty"` // task environment: for shell-outs
-	PayloadLen int64             `json:"payload_len,omitempty"`
-	BecomeUser string            `json:"become_user,omitempty"` // informational
-	Background bool              `json:"background,omitempty"`  // async poll:0 fire-and-forget
+	Proto        int               `json:"proto"`
+	Op           string            `json:"op"` // "task"; future: session ops
+	Module       string            `json:"module"`
+	Args         map[string]any    `json:"args,omitempty"`
+	FreeForm     string            `json:"free_form,omitempty"` // command/shell raw params
+	CheckMode    bool              `json:"check_mode,omitempty"`
+	Diff         bool              `json:"diff,omitempty"`
+	Env          map[string]string `json:"env,omitempty"` // task environment: for shell-outs
+	PayloadLen   int64             `json:"payload_len,omitempty"`
+	BecomeUser   string            `json:"become_user,omitempty"`   // informational
+	Background   bool              `json:"background,omitempty"`    // run as an async job (ansible's async_wrapper)
+	AsyncTimeout int               `json:"async_timeout,omitempty"` // async: seconds before the job is killed
 }
 
 // Result is the outcome of one module invocation. Its shape mirrors

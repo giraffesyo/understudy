@@ -17,17 +17,18 @@ import (
 
 // Context carries everything one action invocation needs.
 type Context struct {
-	Host       string
-	Vars       *vars.Context
-	Conn       connection.Connection
-	Become     *connection.BecomeSpec
-	CheckMode  bool
-	Diff       bool
-	Background bool   // async fire-and-forget (poll: 0)
-	BaseDir    string // playbook directory, for src/vars_files resolution
-	SrcDir     string // role root when the task came from a role ("" otherwise)
-	TaskDir    string // directory of the file the task was defined in
-	Verbosity  int
+	Host         string
+	Vars         *vars.Context
+	Conn         connection.Connection
+	Become       *connection.BecomeSpec
+	CheckMode    bool
+	Diff         bool
+	Background   bool   // run as an async job (async > 0)
+	AsyncTimeout int    // async: seconds
+	BaseDir      string // playbook directory, for src/vars_files resolution
+	SrcDir       string // role root when the task came from a role ("" otherwise)
+	TaskDir      string // directory of the file the task was defined in
+	Verbosity    int
 
 	// RunModule executes a module on the target (in-process or via agent).
 	RunModule func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error)
@@ -62,14 +63,15 @@ type Normal struct{ Module string }
 
 func (n *Normal) Run(ctx context.Context, actx *Context, args map[string]any, freeForm string) *agentproto.Result {
 	req := &agentproto.TaskRequest{
-		Proto:      agentproto.ProtoVersion,
-		Op:         "task",
-		Module:     n.Module,
-		Args:       args,
-		FreeForm:   freeForm,
-		CheckMode:  actx.CheckMode,
-		Diff:       actx.Diff,
-		Background: actx.Background,
+		Proto:        agentproto.ProtoVersion,
+		Op:           "task",
+		Module:       n.Module,
+		Args:         args,
+		FreeForm:     freeForm,
+		CheckMode:    actx.CheckMode,
+		Diff:         actx.Diff,
+		Background:   actx.Background,
+		AsyncTimeout: actx.AsyncTimeout,
 	}
 	res, err := actx.RunModule(ctx, req, nil)
 	if err != nil {

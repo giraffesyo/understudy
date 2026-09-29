@@ -311,3 +311,26 @@ func (p *profileTasks) Recap(map[string]*executor.HostStats, []string) {
 		fmt.Fprintln(p.out, name+val)
 	}
 }
+
+func (quiet) Retrying(string, *playbook.Task, string, int, *agentproto.Result) {}
+func (quiet) AsyncPoll(string, string)                                         {}
+func (quiet) AsyncDone(string, string, bool)                                   {}
+
+func (m *fanout) Retrying(h string, t *playbook.Task, name string, left int, r *agentproto.Result) {
+	m.primary.Retrying(h, t, name, left, r)
+	for _, c := range m.extras {
+		c.Retrying(h, t, name, left, r)
+	}
+}
+func (m *fanout) AsyncPoll(h, jid string) {
+	m.primary.AsyncPoll(h, jid)
+	for _, c := range m.extras {
+		c.AsyncPoll(h, jid)
+	}
+}
+func (m *fanout) AsyncDone(h, jid string, failed bool) {
+	m.primary.AsyncDone(h, jid, failed)
+	for _, c := range m.extras {
+		c.AsyncDone(h, jid, failed)
+	}
+}

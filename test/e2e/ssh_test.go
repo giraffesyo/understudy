@@ -154,3 +154,30 @@ func TestSSHAgentCachedAcrossTasks(t *testing.T) {
 		t.Fatalf("exit=%d\n%s", code, out)
 	}
 }
+
+func TestSSHAsyncJob(t *testing.T) {
+	port := startContainer(t)
+	out, code := runSSH(t, port, `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - shell: "sleep 1; hostname"
+      async: 30
+      poll: 0
+      register: job
+    - async_status: {jid: "{{ job.ansible_job_id }}"}
+      register: st
+      until: st.finished
+      retries: 20
+      delay: 1
+    - assert: {that: ["st.rc == 0", "st.stdout | length > 0"]}
+    - command: echo polled
+      async: 20
+      poll: 1
+      register: p
+    - assert: {that: ["p.stdout == 'polled'"]}
+`)
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s", code, out)
+	}
+}

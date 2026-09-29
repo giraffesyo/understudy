@@ -38,6 +38,11 @@ type Callback interface {
 	HostResult(host string, task *playbook.Task, res *agentproto.Result, ignored bool, item any)
 	LoopResult(host string, task *playbook.Task, res *agentproto.Result, ignored bool)
 	HostUnreachable(host string, task *playbook.Task, msg string)
+	// Retrying reports a failed until: attempt with retries left.
+	Retrying(host string, task *playbook.Task, name string, left int, res *agentproto.Result)
+	// AsyncPoll / AsyncDone report a poll > 0 async job's progress.
+	AsyncPoll(host, jid string)
+	AsyncDone(host, jid string, failed bool)
 	// Included announces a dynamic include's target for a group of hosts
 	// (with the loop item's label when hasItem).
 	Included(task *playbook.Task, target string, hosts []string, item any, hasItem bool)
@@ -1072,6 +1077,9 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 	retriesExhausted := false
 	for attempt := 1; attempt <= attempts; attempt++ {
 		res = r.dispatch(ctx, task, actx, args, freeForm)
+		if task.Async > 0 && task.Poll != 0 && !res.Failed && res.Extra["ansible_job_id"] != nil {
+			res = r.pollAsync(ctx, host, task, actx, res)
+		}
 		if task.Until == "" {
 			break
 		}
@@ -1088,6 +1096,11 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			break
 		}
 		if attempt < attempts {
+			name := r.taskDisplayName(task, []string{host})
+			if name == "" {
+				name = task.Module
+			}
+			r.Callback.Retrying(host, task, name, task.Retries-attempt, res)
 			time.Sleep(time.Duration(task.Delay) * time.Second)
 		} else {
 			retriesExhausted = !res.Failed
@@ -1131,7 +1144,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			}
 		}
 	}
-	if res.Failed && !retriesExhausted {
+	if res.Failed && !retriesExhausted && res.Origin != "plain" {
 		// ansible-core attaches an ErrorSummary to every failed task
 		// result; templated (register, ansible_failed_result) it renders as
 		// this placeholder unless tracebacks are enabled. The callback
@@ -1187,17 +1200,18 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		return nil, target, &unreachableError{host: host, err: err}
 	}
 	return &actions.Context{
-		Host:       host,
-		Vars:       vctx,
-		Conn:       conn,
-		Become:     become,
-		CheckMode:  r.effectiveCheckMode(task),
-		Diff:       r.effectiveDiff(task),
-		Background: task.Async > 0 && task.Poll == 0,
-		BaseDir:    r.Opts.BaseDir,
-		SrcDir:     task.SrcDir,
-		TaskDir:    taskDir(task),
-		Verbosity:  r.Opts.Verbosity,
+		Host:         host,
+		Vars:         vctx,
+		Conn:         conn,
+		Become:       become,
+		CheckMode:    r.effectiveCheckMode(task),
+		Diff:         r.effectiveDiff(task),
+		Background:   task.Async > 0,
+		AsyncTimeout: task.Async,
+		BaseDir:      r.Opts.BaseDir,
+		SrcDir:       task.SrcDir,
+		TaskDir:      taskDir(task),
+		Verbosity:    r.Opts.Verbosity,
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
 			return r.runModule(ctx, host, target, kw, inProcess, become, task, req, payload)
 		},
@@ -1687,4 +1701,46 @@ func (r *Runner) startGate(task *playbook.Task, name string) bool {
 		fmt.Fprintln(os.Stdout)
 	}
 	return true
+}
+
+// pollAsync waits for an async job started with poll > 0, checking it
+// every poll seconds with async_status like ansible's strategy does.
+func (r *Runner) pollAsync(ctx context.Context, host string, task *playbook.Task, actx *actions.Context, started *agentproto.Result) *agentproto.Result {
+	jid, _ := started.Extra["ansible_job_id"].(string)
+	poll := task.Poll
+	if poll < 0 {
+		poll = 10 // ansible's default poll interval
+	}
+	left := task.Async
+	var last *agentproto.Result
+	for left > 0 {
+		time.Sleep(time.Duration(poll) * time.Second)
+		left -= poll
+		st, err := actx.RunModule(ctx, &agentproto.TaskRequest{
+			Proto: agentproto.ProtoVersion, Op: "task", Module: "async_status",
+			Args: map[string]any{"jid": jid},
+		}, nil)
+		if err != nil {
+			return agentproto.Fail("async_status: %v", err)
+		}
+		last = st
+		if f, _ := st.Extra["finished"].(bool); f {
+			r.Callback.AsyncDone(host, jid, st.Failed)
+			return st
+		}
+		r.Callback.AsyncPoll(host, jid)
+	}
+	r.Callback.AsyncDone(host, jid, true)
+	status := map[string]any{"ansible_job_id": jid, "changed": false, "deprecations": []any{},
+		"failed": false, "finished": false, "started": true, "stderr": "", "stderr_lines": []any{},
+		"stdout": "", "stdout_lines": []any{}, "warnings": []any{}}
+	if last != nil {
+		if rf, ok := last.Extra["results_file"]; ok {
+			status["results_file"] = rf
+		}
+	}
+	// ansible-core 2.19+'s wording when a job outlives async:.
+	// Not an exception: no [ERROR] block, no exception key.
+	return &agentproto.Result{Failed: true, Msg: "async task produced unparsable results",
+		Origin: "plain", Extra: map[string]any{"async_result": status}}
 }

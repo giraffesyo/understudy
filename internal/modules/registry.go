@@ -73,6 +73,9 @@ func Run(req *agentproto.TaskRequest, payload io.Reader) (res *agentproto.Result
 	if !ok {
 		return agentproto.Fail("unknown module %q", req.Module)
 	}
+	if req.Background {
+		return StartAsync(req, payload)
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			res = agentproto.Fail("module %s panicked: %v\n%s", req.Module, r, debug.Stack())

@@ -338,6 +338,9 @@ func (d *Default) warnings(res *agentproto.Result) {
 // taskError prints ansible-core's "[ERROR]: Task failed" block with the
 // task's source excerpt. Identical blocks print once, as Display dedupes.
 func (d *Default) taskError(task *playbook.Task, res *agentproto.Result) {
+	if res.Origin == "plain" {
+		return // a plain failure (not an exception) has no error block
+	}
 	var b strings.Builder
 	if ec := res.ErrorChain; ec != nil {
 		d.taskErrorChain(task, ec)
@@ -428,4 +431,35 @@ func (d *Default) excerpt(file string, line, col int) string {
 	}
 	fmt.Fprintf(&b, "%s^ column %d\n", strings.Repeat(" ", width+1+max(col-1, 0)), col)
 	return b.String()
+}
+
+const cDebug color = "0;90" // COLOR_DEBUG (dark gray)
+
+// Retrying is v2_runner_retry: "FAILED - RETRYING: [host]: task (N retries left)."
+func (d *Default) Retrying(host string, task *playbook.Task, name string, left int, res *agentproto.Result) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	line := fmt.Sprintf("FAILED - RETRYING: [%s]: %s (%d retries left).", host, name, left)
+	if d.Verbosity > 2 {
+		line += "Result was: " + d.dump(task, res)
+	}
+	d.display(cDebug, line)
+}
+
+// AsyncPoll is v2_runner_on_async_poll.
+func (d *Default) AsyncPoll(host, jid string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.display(cDebug, fmt.Sprintf("ASYNC POLL on %s: jid=%s started=True finished=False", host, jid))
+}
+
+// AsyncDone is v2_runner_on_async_ok / _failed.
+func (d *Default) AsyncDone(host, jid string, failed bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	kind := "OK"
+	if failed {
+		kind = "FAILED"
+	}
+	d.display(cDebug, fmt.Sprintf("ASYNC %s on %s: jid=%s", kind, host, jid))
 }
