@@ -72,7 +72,11 @@ func fileModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 				return res
 			}
 			mode := os.FileMode(0o755)
-			if p.Has("mode") {
+			if p.Has("mode") && fsutil.IsSymbolicMode(p.Any("mode")) {
+				// Created umask-default like Ansible; applyAttrs then
+				// resolves the symbolic mode against it.
+				mode = 0o777
+			} else if p.Has("mode") {
 				if m, err := fsutil.ParseMode(p.Any("mode")); err == nil {
 					mode = m
 				} else {
@@ -189,7 +193,7 @@ func attrsWouldChange(p *args.Parsed, path string) (bool, error) {
 		return false, err
 	}
 	if p.Has("mode") {
-		want, err := fsutil.ParseMode(p.Any("mode"))
+		want, err := fsutil.ResolveMode(p.Any("mode"), info.Mode())
 		if err != nil {
 			return false, err
 		}

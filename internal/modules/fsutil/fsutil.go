@@ -89,7 +89,8 @@ func Sha256Bytes(data []byte) string {
 
 // ParseMode parses Ansible mode values: octal strings ("0644", "644",
 // "01777"), integers (YAML 0644 already decodes to 420). Symbolic modes
-// ("u+x") are not supported in v0.1 and error clearly.
+// ("u=rw,g=r") are relative to the existing mode, so they go through
+// ResolveMode; here they error.
 func ParseMode(v any) (os.FileMode, error) {
 	switch t := v.(type) {
 	case int64:
@@ -105,8 +106,8 @@ func ParseMode(v any) (os.FileMode, error) {
 		if s == "" {
 			return 0, fmt.Errorf("empty mode")
 		}
-		if strings.ContainsAny(s, "ugoarwxXst+-=,") && !isOctalString(s) {
-			return 0, fmt.Errorf("symbolic modes (%q) are not supported in this version; use octal like '0644'", s)
+		if IsSymbolicMode(s) {
+			return 0, fmt.Errorf("symbolic mode %q needs the file's current mode (use ResolveMode)", s)
 		}
 		n, err := strconv.ParseUint(strings.TrimPrefix(s, "0o"), 8, 32)
 		if err != nil {
@@ -146,17 +147,7 @@ func permBits(n uint32) (os.FileMode, error) {
 
 // ModeString renders a FileMode as Ansible's octal string ("0644").
 func ModeString(mode os.FileMode) string {
-	n := uint32(mode.Perm())
-	if mode&os.ModeSetuid != 0 {
-		n |= 0o4000
-	}
-	if mode&os.ModeSetgid != 0 {
-		n |= 0o2000
-	}
-	if mode&os.ModeSticky != 0 {
-		n |= 0o1000
-	}
-	return "0" + strconv.FormatUint(uint64(n), 8)
+	return "0" + strconv.FormatUint(uint64(unixBits(mode)), 8)
 }
 
 // LookupOwnerGroup resolves owner/group names (or numeric ids) to uid/gid.
@@ -197,7 +188,7 @@ func ApplyFileAttrs(path string, mode any, owner, group string, followSymlink bo
 	}
 
 	if mode != nil {
-		want, err := ParseMode(mode)
+		want, err := ResolveMode(mode, info.Mode())
 		if err != nil {
 			return false, err
 		}
