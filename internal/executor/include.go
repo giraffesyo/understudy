@@ -79,6 +79,7 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 			items = []any{nil}
 		}
 		included := 0
+		var lastSkip *agentproto.Result
 		for i, item := range items {
 			ictx := base
 			if isLoop {
@@ -88,18 +89,18 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 				}
 				ictx = base.WithOverlay(overlay)
 			}
-			if len(task.When) > 0 {
-				ok, err := ictx.EvalWhen(task.When)
-				if err != nil {
-					r.record(host, task, agentproto.Fail("The conditional check failed: %v", err), nil)
-					continue
+			skip, err := whenSkip(ictx, task.When)
+			if err != nil {
+				r.record(host, task, agentproto.Fail("The conditional check failed: %v", err), nil)
+				continue
+			}
+			if skip != nil {
+				if isLoop {
+					r.Callback.HostResult(host, task, skip, false, item)
+				} else {
+					lastSkip = skip
 				}
-				if !ok {
-					if isLoop {
-						r.Callback.HostResult(host, task, &agentproto.Result{Skipped: true}, false, item)
-					}
-					continue
-				}
+				continue
 			}
 			rendered, err := ictx.TemplateString(raw)
 			if err != nil {
@@ -132,7 +133,10 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 		// when: excluded the host (every item) is a skip.
 		if included == 0 {
 			if !isLoop || len(items) > 0 {
-				r.record(host, task, &agentproto.Result{Skipped: true}, nil)
+				if lastSkip == nil {
+					lastSkip = &agentproto.Result{Skipped: true}
+				}
+				r.record(host, task, lastSkip, nil)
 			}
 			continue
 		}

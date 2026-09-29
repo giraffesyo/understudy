@@ -59,7 +59,7 @@ func (r *Runner) runMeta(ctx context.Context, play *playbook.Play, task *playboo
 				return fmt.Errorf("%s:%d: meta %s: %v", task.Src.File, task.Src.Line, action, err)
 			}
 			if !ok {
-				r.Callback.HostResult(host, task, &agentproto.Result{Skipped: true}, false, nil)
+				r.Callback.HostResult(host, task, metaSkip(action, host), false, nil)
 				continue
 			}
 			targets = append(targets, host)
@@ -92,7 +92,7 @@ func (r *Runner) runMeta(ctx context.Context, play *playbook.Play, task *playboo
 		return fmt.Errorf("%s:%d: meta %s: %v", task.Src.File, task.Src.Line, action, err)
 	}
 	if !ok {
-		r.Callback.HostResult(active[0], task, &agentproto.Result{Skipped: true}, false, nil)
+		r.Callback.HostResult(active[0], task, metaSkip(action, active[0]), false, nil)
 		return nil
 	}
 	switch action {
@@ -130,4 +130,16 @@ func (r *Runner) notEnded(playHosts, restrict []string) []string {
 		out = intersect(out, restrict)
 	}
 	return out
+}
+
+// metaSkip is ansible-core's result for a meta task whose when: is false.
+func metaSkip(action, host string) *agentproto.Result {
+	res := &agentproto.Result{Skipped: true, Msg: action, Extra: map[string]any{
+		"skip_reason": action + " conditional evaluated to False",
+	}}
+	if action == "end_host" {
+		res.Extra["skip_reason"] = "end_host conditional evaluated to False, continuing execution for " + host
+		res.Msg = "end_host conditional evaluated to false, continuing execution for " + host
+	}
+	return res
 }

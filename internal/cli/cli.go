@@ -234,6 +234,14 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 	if err != nil {
 		return executor.Options{}, err
 	}
+	if p.verbosity > 0 {
+		// ansible-playbook -v announces its configuration source first.
+		if cfg.Source == "" {
+			fmt.Println("No config file found; using defaults")
+		} else if abs, err := filepath.Abs(cfg.Source); err == nil {
+			fmt.Printf("Using %s as config file\n", abs)
+		}
+	}
 	forks := p.forks
 	if forks <= 0 {
 		forks = cfg.Forks
