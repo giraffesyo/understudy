@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"reflect"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
@@ -44,9 +45,10 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 	if name == "" && isRole {
 		name = "include_role : " + raw
 	}
-	if name != "" {
-		name = r.taskDisplayName(&playbook.Task{Name: name, RoleName: task.RoleName, Src: task.Src}, active)
+	if name == "" {
+		name = task.Module
 	}
+	name = r.taskDisplayName(&playbook.Task{Name: name, RoleName: task.RoleName, Src: task.Src}, active)
 	r.Callback.TaskStart(task, name, false)
 
 	pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
@@ -109,6 +111,9 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 				if target, err = r.resolveIncludePath(target, task); err != nil {
 					r.record(host, task, agentproto.Fail("%v", err), nil)
 					continue
+				}
+				if abs, err := filepath.Abs(target); err == nil {
+					target = abs // "included:" lines show absolute paths
 				}
 			}
 			u := includeUnit{target: target, hasItem: isLoop}
@@ -175,6 +180,10 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 			tasks = loaded
 		}
 		for _, t := range tasks {
+			if !isRole && t.RoleName == "" {
+				// Tasks included from a role belong to that role.
+				t.RoleName = task.RoleName
+			}
 			if len(scope) > 0 {
 				merged := maps.Clone(scope)
 				maps.Copy(merged, t.Vars)
