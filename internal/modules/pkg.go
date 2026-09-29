@@ -171,6 +171,14 @@ func mkPkg(mgrName string) ModuleFunc {
 		if err != nil {
 			return agentproto.Fail("%v", err)
 		}
+		// dnf/apt only lock the final transaction, not their download
+		// cache: concurrent package tasks (parallel blocks, async jobs)
+		// must not overlap. The lock is cross-process (each agent call is
+		// its own process).
+		if !env.CheckMode {
+			unlock := lockPackageManager()
+			defer unlock()
+		}
 
 		var names []string
 		for _, n := range p.List("name") {
