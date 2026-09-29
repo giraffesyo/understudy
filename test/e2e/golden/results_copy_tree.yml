@@ -1,0 +1,37 @@
+---
+# Result dicts of copying a local directory tree (files/tree): contents
+# ("tree/") versus the directory itself ("tree"), idempotence, and a
+# single-file tree whose result is that file's module result.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/ct"
+  tasks:
+    - file: {path: "{{ d }}", state: directory}
+
+    - name: copy the tree's contents
+      copy: {src: tree/, dest: "{{ d }}/contents"}
+      register: r
+    - debug: {var: r}
+
+    - name: copy the tree's contents again
+      copy: {src: tree/, dest: "{{ d }}/contents"}
+      register: r
+    - debug: {var: r}
+
+    - name: copy the tree itself with a directory mode
+      copy: {src: tree, dest: "{{ d }}/itself/", directory_mode: "0750"}
+      register: r
+    - debug: {var: r}
+
+    - name: copy a one-file subtree
+      copy: {src: tree/sub/deeper/, dest: "{{ d }}/one"}
+      register: r
+    # printed without "src": the per-run transfer temp file on the target
+    - debug: {msg: "{{ r | dict2items | rejectattr('key', 'equalto', 'src') | items2dict }}"}
+
+    - name: list what was copied
+      find: {paths: "{{ d }}", recurse: true, file_type: any}
+      register: found
+    - debug: {msg: "{{ found.files | map(attribute='path') | sort }}"}
+    - debug: {msg: "{{ found.files | selectattr('isdir') | map(attribute='mode') | list | unique | sort }}"}

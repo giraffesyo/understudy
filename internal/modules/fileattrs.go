@@ -414,18 +414,70 @@ func pyExpandVars(p string) string {
 	return b.String()
 }
 
-// pyRealpath is os.path.realpath (non-strict: missing tails are kept).
+// pyRealpath is os.path.realpath (non-strict): symlinks are resolved
+// component by component, dangling ones included; missing components are
+// kept as they are.
 func pyRealpath(p string) string {
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		if abs, err := filepath.Abs(r); err == nil {
-			return abs
+	path, _ := joinRealpath("", p, map[string]*string{})
+	if !filepath.IsAbs(path) {
+		wd, _ := os.Getwd()
+		path = filepath.Join(wd, path)
+	}
+	return filepath.Clean(path)
+}
+
+// joinRealpath is posixpath._joinrealpath.
+func joinRealpath(path, rest string, seen map[string]*string) (string, bool) {
+	if strings.HasPrefix(rest, "/") {
+		rest = rest[1:]
+		path = "/"
+	}
+	for rest != "" {
+		var name string
+		name, rest, _ = strings.Cut(rest, "/")
+		if name == "" || name == "." {
+			continue
 		}
-		return r
+		if name == ".." {
+			switch {
+			case path == "":
+				path = ".."
+			case path == "/":
+			case filepath.Base(path) == "..":
+				path = path + "/.."
+			default:
+				path = filepath.Dir(path)
+				if path == "." {
+					path = ""
+				}
+			}
+			continue
+		}
+		newpath := pyJoin(path, name)
+		if path == "" {
+			newpath = name
+		}
+		info, err := os.Lstat(newpath)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			path = newpath
+			continue
+		}
+		if prev, ok := seen[newpath]; ok {
+			if prev != nil {
+				path = *prev
+				continue
+			}
+			return pyJoin(newpath, rest), false // symlink loop
+		}
+		seen[newpath] = nil
+		target, _ := os.Readlink(newpath)
+		var ok bool
+		path, ok = joinRealpath(path, target, seen)
+		if !ok {
+			return pyJoin(path, rest), false
+		}
+		resolved := path
+		seen[newpath] = &resolved
 	}
-	dir, base := filepath.Split(filepath.Clean(p))
-	if dir == "" || dir == p {
-		abs, _ := filepath.Abs(p)
-		return abs
-	}
-	return filepath.Join(pyRealpath(strings.TrimSuffix(dir, "/")), base)
+	return path, true
 }

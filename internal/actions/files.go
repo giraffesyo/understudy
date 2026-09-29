@@ -84,7 +84,7 @@ func runCopy(ctx context.Context, actx *Context, args map[string]any, _ string) 
 			data = []byte(template.PyStr(t))
 		}
 		tmp := filepath.Join(localTmp(), "."+randomName())
-		return forwardToCopy(ctx, actx, args, data, tmp, filepath.Base(tmp), true)
+		return stripNone(forwardToCopy(ctx, actx, args, data, tmp, filepath.Base(tmp), true))
 	}
 	if isTruthy(args["remote_src"]) {
 		// The source lives on the target: the module reads it there.
@@ -118,7 +118,15 @@ func runCopy(ctx context.Context, actx *Context, args map[string]any, _ string) 
 	if args["mode"] == "preserve" {
 		fwd = withArg(args, "mode", fmt.Sprintf("0%03o", fsutil.UnixBits(info.Mode())))
 	}
-	return forwardToCopy(ctx, actx, fwd, data, resolved, filepath.Base(resolved), false)
+	return stripNone(forwardToCopy(ctx, actx, fwd, data, resolved, filepath.Base(resolved), false))
+}
+
+// stripNone drops the directory-copy marker from a single file's result.
+func stripNone(res *agentproto.Result) *agentproto.Result {
+	if res.Extra != nil {
+		delete(res.Extra, copyNoneKey)
+	}
+	return res
 }
 
 func withArg(args map[string]any, k string, v any) map[string]any {
@@ -193,7 +201,7 @@ func runTemplate(ctx context.Context, actx *Context, args map[string]any, _ stri
 	}
 	_ = dest
 	local := filepath.Join(localTmp(), "tmp"+randomName(), filepath.Base(resolved))
-	return forwardToCopy(ctx, actx, fwd, []byte(rendered), local, filepath.Base(resolved), false)
+	return stripNone(forwardToCopy(ctx, actx, fwd, []byte(rendered), local, filepath.Base(resolved), false))
 }
 
 // forwardToCopy sends one file's content to the target's copy module,
@@ -227,6 +235,10 @@ func forwardToCopy(ctx context.Context, actx *Context, args map[string]any, cont
 	}
 	return res
 }
+
+// copyNoneKey marks the copy module's "nothing to do" answer for one file
+// of a directory copy (ActionModule._copy_file returning None).
+const copyNoneKey = "_copy_none"
 
 var (
 	localTmpOnce sync.Once
@@ -412,63 +424,158 @@ func isTruthy(v any) bool {
 	return false
 }
 
-// copyLocalTree implements copy of a local directory: "dir/" copies its
-// contents into dest, "dir" copies the directory itself (cp -r rules).
-// Each file goes through the copy module; directories are created first.
+// copyLocalTree is the copy action for a local directory (_walk_dirs plus
+// the files/directories/symlinks passes of ActionModule.run): "dir/"
+// copies the contents into dest, "dir" the directory itself. Files go to
+// the target's copy module with dest as a directory; leaf directories
+// and symlinks are made by the file module.
 func copyLocalTree(ctx context.Context, actx *Context, args map[string]any, src, resolved string) *agentproto.Result {
-	dest, _ := args["dest"].(string)
-	root := dest
-	if !strings.HasSuffix(src, "/") {
-		root = filepath.Join(dest, filepath.Base(resolved))
+	trailing := strings.HasSuffix(src, "/")
+	source := resolved
+	base := resolved
+	if trailing {
+		source += "/"
+	} else {
+		base = filepath.Dir(resolved)
 	}
-	agg := &agentproto.Result{Extra: map[string]any{"dest": dest, "src": resolved}}
-	err := filepath.WalkDir(resolved, func(path string, d os.DirEntry, err error) error {
+	localFollow := args["local_follow"] == nil || isTruthy(args["local_follow"])
+	type entry struct{ from, rel string }
+	var files, dirs, links []entry
+	var walk func(dir, relBase string)
+	walk = func(dir, relBase string) {
+		fh, err := os.Open(dir)
 		if err != nil {
-			return err
+			return
 		}
-		rel, _ := filepath.Rel(resolved, path)
-		target := filepath.Join(root, rel)
-		if d.IsDir() {
-			dirArgs := map[string]any{"path": target, "state": "directory"}
-			if m, ok := args["directory_mode"]; ok {
-				dirArgs["mode"] = m
+		ents, _ := fh.ReadDir(-1) // directory order, like os.walk
+		fh.Close()
+		var subdirs []os.DirEntry
+		for _, e := range ents {
+			full := filepath.Join(dir, e.Name())
+			rel := pyJoin(relBase, e.Name())
+			info, err := os.Stat(full)
+			if err == nil && info.IsDir() {
+				subdirs = append(subdirs, e)
+				continue
 			}
-			for _, k := range []string{"owner", "group"} {
-				if v, ok := args[k]; ok {
-					dirArgs[k] = v
+			if e.Type()&os.ModeSymlink != 0 {
+				real, _ := filepath.EvalSymlinks(full)
+				if ri, err := os.Stat(real); localFollow && err == nil && ri.Mode().IsRegular() {
+					files = append(files, entry{real, rel})
+				} else {
+					target, _ := os.Readlink(full)
+					links = append(links, entry{target, rel})
 				}
+				continue
 			}
-			res, err := actx.RunModule(ctx, &agentproto.TaskRequest{
-				Proto: agentproto.ProtoVersion, Op: "task", Module: "file",
-				Args: dirArgs, CheckMode: actx.CheckMode,
-			}, nil)
-			if err != nil {
-				return err
+			files = append(files, entry{full, rel})
+		}
+		for _, e := range subdirs {
+			full := filepath.Join(dir, e.Name())
+			rel := pyJoin(relBase, e.Name())
+			if e.Type()&os.ModeSymlink != 0 && !localFollow {
+				target, _ := os.Readlink(full)
+				links = append(links, entry{target, rel})
+				continue
 			}
-			if res.Failed {
-				return fmt.Errorf("%s", res.Msg)
-			}
-			agg.Changed = agg.Changed || res.Changed
-			return nil
+			dirs = append(dirs, entry{full, rel})
+			walk(full, rel)
 		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		fileArgs := make(map[string]any, len(args))
-		for k, v := range args {
-			fileArgs[k] = v
-		}
-		fileArgs["dest"] = target
-		res := forwardToCopy(ctx, actx, fileArgs, content, path, filepath.Base(path), false)
-		if res.Failed {
-			return fmt.Errorf("%s", res.Msg)
-		}
-		agg.Changed = agg.Changed || res.Changed
-		return nil
-	})
-	if err != nil {
-		return agentproto.Fail("copy: %v", err)
 	}
-	return agg
+	rootRel := ""
+	if !trailing {
+		rootRel, _ = filepath.Rel(base, resolved)
+	}
+	walk(resolved, rootRel)
+
+	dest, _ := args["dest"].(string)
+	if !strings.HasSuffix(dest, "/") {
+		dest += "/"
+	}
+	changed, executed := false, false
+	var last *agentproto.Result
+	implicit := map[string]bool{}
+	for _, f := range files {
+		content, err := os.ReadFile(f.from)
+		if err != nil {
+			return actionFail("could not find src=%s, %v", f.from, err)
+		}
+		fargs := withArg(args, "dest", dest)
+		fargs["follow"] = false
+		res := forwardToCopy(ctx, actx, fargs, content, f.from, f.rel, false)
+		if res.Extra != nil && res.Extra[copyNoneKey] == true {
+			continue
+		}
+		if res.Failed {
+			return res
+		}
+		for d := filepath.Dir(f.rel); d != "." && d != "/"; d = filepath.Dir(d) {
+			implicit[d] = true
+		}
+		executed, changed, last = true, changed || res.Changed, res
+	}
+	fileArgs := func(extra map[string]any) map[string]any {
+		out := map[string]any{}
+		for k, v := range args {
+			switch k {
+			case "mode", "owner", "group", "seuser", "serole", "selevel", "setype", "attributes",
+				"attr", "unsafe_writes", "force":
+				out[k] = v
+			}
+		}
+		for k, v := range extra {
+			out[k] = v
+		}
+		return out
+	}
+	runFile := func(a map[string]any) *agentproto.Result {
+		for k, v := range a {
+			if v == nil {
+				delete(a, k)
+			}
+		}
+		res, err := actx.RunModule(ctx, &agentproto.TaskRequest{
+			Proto: agentproto.ProtoVersion, Op: "task", Module: "file",
+			Args: a, CheckMode: actx.CheckMode, Diff: actx.Diff,
+		}, nil)
+		if err != nil {
+			return agentproto.Fail("copy: %v", err)
+		}
+		return res
+	}
+	for _, d := range dirs {
+		if implicit[d.rel] {
+			continue
+		}
+		res := runFile(fileArgs(map[string]any{"path": pyJoin(dest, d.rel), "state": "directory",
+			"mode": args["directory_mode"], "recurse": false}))
+		if res.Failed {
+			return res
+		}
+		executed, changed, last = true, changed || res.Changed, res
+	}
+	for _, l := range links {
+		a := fileArgs(map[string]any{"path": pyJoin(dest, l.rel), "src": l.from, "state": "link", "force": true})
+		if len(dirs) > 0 {
+			a["follow"] = false
+		}
+		if a["mode"] == "preserve" {
+			delete(a, "mode")
+		}
+		res := runFile(a)
+		executed = true
+		if res.Failed {
+			return res
+		}
+		changed, last = changed || res.Changed, res
+	}
+	if executed && len(files) == 1 && last != nil {
+		if p, ok := last.Extra["path"]; ok {
+			if _, has := last.Extra["dest"]; !has {
+				last.Extra["dest"] = p
+			}
+		}
+		return last
+	}
+	return &agentproto.Result{Changed: changed, Extra: map[string]any{"dest": dest, "src": source}}
 }

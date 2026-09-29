@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -137,7 +138,8 @@ func copyAction(env *RunEnv, user map[string]any, a map[string]any) *agentproto.
 		st = statForCopy(destFile, follow)
 	}
 	if st.exists && !force {
-		return &agentproto.Result{Origin: "action", Extra: map[string]any{"dest": dest, "src": source}}
+		// _copy_file returns None; the action reports dest and src.
+		return &agentproto.Result{Origin: "action", Extra: map[string]any{"dest": dest, "src": source, "_copy_none": true}}
 	}
 
 	localSum := sha1Hex(payload)
@@ -278,7 +280,7 @@ func stagePayload(content []byte, ext string) (string, string, error) {
 
 // pyFloat is repr(float) for ordinary magnitudes.
 func pyFloat(f float64) string {
-	s := fmt.Sprintf("%v", f)
+	s := strconv.FormatFloat(f, 'f', -1, 64)
 	if !strings.ContainsAny(s, ".e") {
 		s += ".0"
 	}
