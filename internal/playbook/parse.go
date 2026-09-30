@@ -477,56 +477,11 @@ func parseImportTasks(item, pathNode *yaml.Node, file string, handlers bool, bc 
 		return nil, err
 	}
 
-	// Inheritance from the import entry itself.
-	inh := &Task{LoopVar: "item"}
-	for _, key := range item.MapKeys() {
-		val := item.MapGet(key)
-		var err error
-		switch key {
-		case "when":
-			inh.When, inh.WhenPos = decodeExprList(val), exprPositions(val, file)
-		case "vars":
-			inh.Vars, err = decodeMap(val, file, "vars")
-		case "tags":
-			inh.Tags = decodeStringList(val)
-		case "become":
-			var b, ok bool
-			if b, ok, err = decodeBoolKW(inh, val, file, "become"); err == nil && ok {
-				inh.Become.Become = &b
-			}
-		case "become_user", "become_method", "become_flags", "become_exe":
-			err = parseBecomeKey(&inh.Become, key, val, file)
-		case "debugger":
-			inh.Debugger, err = parseDebugger(val, file)
-		case "environment":
-			inh.Environment, err = decodeEnvironment(val)
-		case "timeout":
-			inh.Timeout, err = val.Decode()
-		case "no_log":
-			inh.NoLog, _, err = decodeBoolKW(inh, val, file, "no_log")
-		case "delegate_to":
-			inh.Delegate, _ = val.Str()
-		case "check_mode":
-			var b bool
-			if b, err = decodeBool(val, file, "check_mode"); err == nil {
-				inh.CheckMode = &b
-			}
-		case "diff":
-			var b bool
-			if b, err = decodeBool(val, file, "diff"); err == nil {
-				inh.Diff = &b
-			}
-		case "any_errors_fatal":
-			var b bool
-			if b, err = decodeBool(val, file, "any_errors_fatal"); err == nil {
-				inh.AnyErrorsFatal = &b
-			}
-		case "run_once":
-			inh.RunOnce, err = decodeBool(val, file, "run_once")
-		}
-		if err != nil {
-			return nil, err
-		}
+	// Inheritance from the import entry itself: a static import is its
+	// tasks' parent, so every inheritable keyword on it applies.
+	inh, err := parseInheritable(item, file)
+	if err != nil {
+		return nil, err
 	}
 	for _, t := range tasks {
 		applyBlockInheritance(t, inh)
@@ -659,8 +614,51 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 	}
 
 	// The inheritable keywords, parsed once.
-	var inh Task
-	inh.LoopVar = "item"
+	inh, err := parseInheritable(node, file)
+	if err != nil {
+		return nil, err
+	}
+
+	id := bc.next
+	bc.next++
+	hasRescue := node.MapGet("rescue") != nil
+
+	var out []*Task
+	for _, sec := range []struct {
+		key     string
+		section int
+	}{
+		{"block", SectionBlock},
+		{"rescue", SectionRescue},
+		{"always", SectionAlways},
+	} {
+		secNode := node.MapGet(sec.key)
+		if secNode == nil {
+			continue
+		}
+		refs := append(append([]BlockRef{}, enclosing...),
+			BlockRef{ID: id, Section: sec.section, HasRescue: hasRescue,
+				Parallel: sec.section == SectionBlock && truthyVar(inh.Vars["understudy_parallel"])})
+		tasks, err := parseTaskListIn(secNode, file, handlers, bc, refs)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range tasks {
+			applyBlockInheritance(t, inh)
+		}
+		out = append(out, tasks...)
+	}
+	if len(out) == 0 {
+		return nil, errAt(file, node, "a block must contain at least one task")
+	}
+	return out, nil
+}
+
+// parseInheritable parses the keywords a block, a static import or an
+// include's apply: passes down to the tasks it contains (other keys are
+// ignored).
+func parseInheritable(node *yaml.Node, file string) (*Task, error) {
+	inh := &Task{LoopVar: "item"}
 	for _, key := range node.MapKeys() {
 		val := node.MapGet(key)
 		var err error
@@ -669,7 +667,7 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 			inh.When, inh.WhenPos = decodeExprList(val), exprPositions(val, file)
 		case "become":
 			var b, ok bool
-			if b, ok, err = decodeBoolKW(&inh, val, file, "become"); err == nil && ok {
+			if b, ok, err = decodeBoolKW(inh, val, file, "become"); err == nil && ok {
 				inh.Become.Become = &b
 			}
 		case "become_user", "become_method", "become_flags", "become_exe":
@@ -685,9 +683,9 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 		case "timeout":
 			inh.Timeout, err = val.Decode()
 		case "no_log":
-			inh.NoLog, _, err = decodeBoolKW(&inh, val, file, "no_log")
+			inh.NoLog, _, err = decodeBoolKW(inh, val, file, "no_log")
 		case "ignore_errors":
-			inh.IgnoreErrors, _, err = decodeBoolKW(&inh, val, file, "ignore_errors")
+			inh.IgnoreErrors, _, err = decodeBoolKW(inh, val, file, "ignore_errors")
 		case "delegate_to":
 			inh.Delegate, _ = val.Str()
 		case "check_mode":
@@ -716,45 +714,25 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 			return nil, err
 		}
 	}
-
-	id := bc.next
-	bc.next++
-	hasRescue := node.MapGet("rescue") != nil
-
-	var out []*Task
-	for _, sec := range []struct {
-		key     string
-		section int
-	}{
-		{"block", SectionBlock},
-		{"rescue", SectionRescue},
-		{"always", SectionAlways},
-	} {
-		secNode := node.MapGet(sec.key)
-		if secNode == nil {
-			continue
-		}
-		refs := append(append([]BlockRef{}, enclosing...),
-			BlockRef{ID: id, Section: sec.section, HasRescue: hasRescue,
-				Parallel: sec.section == SectionBlock && truthyVar(inh.Vars["understudy_parallel"])})
-		tasks, err := parseTaskListIn(secNode, file, handlers, bc, refs)
-		if err != nil {
-			return nil, err
-		}
-		for _, t := range tasks {
-			applyBlockInheritance(t, &inh)
-		}
-		out = append(out, tasks...)
-	}
-	if len(out) == 0 {
-		return nil, errAt(file, node, "a block must contain at least one task")
-	}
-	return out, nil
+	return inh, nil
 }
+
+// Inherit applies a parent's inheritable keywords to a task, as a block
+// does to its tasks (the task's own settings win).
+func Inherit(t, parent *Task) { applyBlockInheritance(t, parent) }
 
 // applyBlockInheritance merges block-level keywords into a task: when
 // clauses AND together; task-level settings win on conflicts.
 func applyBlockInheritance(t *Task, inh *Task) {
+	if t.IsDynamicInclude() {
+		// A dynamic include is not its tasks' parent (ansible-core skips
+		// a parent that is not statically loaded): they inherit from its
+		// enclosing blocks and role, not from the include's own keywords.
+		if t.Parents == nil {
+			t.Parents = &Task{LoopVar: "item"}
+		}
+		applyBlockInheritance(t.Parents, inh)
+	}
 	if len(inh.When) > 0 {
 		t.When = append(append([]string{}, inh.When...), t.When...)
 		for k, p := range inh.WhenPos {
@@ -914,6 +892,11 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 		// Module args: map form, k=v string form, or null.
 		argsNode := node.MapGet(moduleKeys[0])
 		if err := parseModuleArgs(task, argsNode, file); err != nil {
+			return nil, err
+		}
+	}
+	if task.IsDynamicInclude() {
+		if err := checkIncludeKeywords(task, node, keys, moduleKeys[0], file, handler); err != nil {
 			return nil, err
 		}
 	}
@@ -1144,7 +1127,82 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			}
 		}
 	}
+	if task.IsDynamicInclude() {
+		if err := parseIncludeApply(task, node, moduleKeys[0], file); err != nil {
+			return nil, err
+		}
+	}
 	return task, nil
+}
+
+// includeKeywords are TaskInclude.VALID_INCLUDE_KEYWORDS: the only task
+// keywords include_tasks and include_role accept (a handler's also takes
+// listen). The rest would apply to the include itself, not its tasks, so
+// ansible-core rejects them; apply: passes keywords down instead.
+var includeKeywords = map[string]bool{
+	"action": true, "args": true, "collections": true, "debugger": true, "ignore_errors": true,
+	"loop": true, "loop_control": true, "name": true, "no_log": true, "register": true,
+	"run_once": true, "tags": true, "timeout": true, "vars": true, "when": true,
+}
+
+// checkIncludeKeywords is TaskInclude.preprocess_data's check: a keyword
+// an include does not accept is an error.
+func checkIncludeKeywords(task *Task, node *yaml.Node, keys []string, moduleKey, file string, handler bool) error {
+	class := "TaskInclude"
+	switch {
+	case task.Module == "include_role":
+		class = "IncludeRole"
+	case handler:
+		class = "HandlerTaskInclude"
+	}
+	for _, key := range keys {
+		if key == moduleKey || includeKeywords[key] || strings.HasPrefix(key, "with_") || (handler && key == "listen") {
+			continue
+		}
+		if key == "local_action" {
+			key = "delegate_to" // local_action is delegate_to: localhost
+		}
+		return errAt(file, node, "'%s' is not a valid attribute for a %s", key, class)
+	}
+	return nil
+}
+
+// parseIncludeApply parses an include's apply: argument, the block
+// keywords its included tasks inherit (TaskInclude.build_parent_block).
+func parseIncludeApply(task *Task, node *yaml.Node, moduleKey, file string) error {
+	var applyNode *yaml.Node
+	for _, argsNode := range []*yaml.Node{node.MapGet(moduleKey), node.MapGet("args")} {
+		if argsNode != nil && argsNode.Kind == yaml.MappingNode {
+			if n := argsNode.MapGet("apply"); n != nil {
+				applyNode = n
+			}
+		}
+	}
+	if _, ok := task.Args["apply"]; !ok {
+		return nil
+	}
+	delete(task.Args, "apply")
+	if applyNode == nil {
+		return nil
+	}
+	if applyNode.Kind != yaml.MappingNode {
+		v, _ := applyNode.Decode()
+		return errAt(file, node, "Expected a dict for apply but got %s instead", pyTaggedType(v))
+	}
+	for _, key := range applyNode.MapKeys() {
+		if !blockKeywords[key] {
+			// The apply block loads when the include runs: the error
+			// ends the run then.
+			task.ApplyErr = errAtKey(file, applyNode, key, "'%s' is not a valid attribute for a Block", key)
+			return nil
+		}
+	}
+	inh, err := parseInheritable(applyNode, file)
+	if err != nil {
+		return err
+	}
+	task.Apply = inh
+	return nil
 }
 
 // parseActionValue handles action:/local_action: — "module k=v ..." or a

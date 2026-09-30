@@ -1,0 +1,13 @@
+---
+- name: show the environment
+  command: sh -c 'echo "KW_ENV=${KW_ENV-unset}"'
+  changed_when: false
+  register: env_out
+- debug:
+    var: env_out.stdout
+- name: fail inside
+  fail:
+    msg: "failed in {{ where | default('an include') }}"
+- name: after the failure
+  debug:
+    msg: "continued in {{ where | default('an include') }}"

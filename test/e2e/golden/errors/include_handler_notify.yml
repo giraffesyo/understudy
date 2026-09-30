@@ -1,0 +1,9 @@
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=first
+  handlers:
+    - name: included handler
+      include_tasks: missing.yml
+      listen: go
+      delegate_to: localhost

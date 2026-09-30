@@ -140,6 +140,12 @@ type Task struct {
 	// on parsed tasks); Identity() is stable across copies.
 	Orig *Task
 
+	// On include_tasks/include_role: Apply is the include's apply:
+	// keywords, and Parents what its enclosing blocks and role pass down
+	// (both inherited by the included tasks; nil = none).
+	Apply, Parents *Task
+	ApplyErr       error // apply: failed to load as a block (raised at run time)
+
 	literalKW map[string]bool // keywords set to literal values (parse time)
 }
 
@@ -150,6 +156,11 @@ func (t *Task) DisplayAction() string {
 		return t.Action
 	}
 	return t.Module
+}
+
+// IsDynamicInclude reports an include_tasks or include_role task.
+func (t *Task) IsDynamicInclude() bool {
+	return t.Module == "include_tasks" || t.Module == "include_role"
 }
 
 // Identity returns the parsed task this one was derived from.

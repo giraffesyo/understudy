@@ -1,0 +1,3 @@
+- name: included task
+  debug:
+    msg: included

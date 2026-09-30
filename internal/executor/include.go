@@ -104,7 +104,7 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 			if skip != nil {
 				if isLoop {
 					lc.annotate(skip.Extra, i)
-					r.Callback.HostResult(host, task, skip, false, lc.label(ictx, i))
+					r.Callback.HostResult(host, task, shown(task, skip), false, lc.label(ictx, i))
 					itemResults = append(itemResults, orderedResult(task, task.Module, skip.ToVars()))
 				} else {
 					lastSkip = skip
@@ -185,8 +185,17 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 		if errors.As(loadErrs[i], &ye) {
 			return loadErrs[i]
 		}
+		if loadErrs[i] == nil && task.ApplyErr != nil {
+			return task.ApplyErr // apply: loads with the included file
+		}
 	}
 	for _, u := range units {
+		if task.NoLog {
+			// The included file's vars carry _ansible_no_log, which the
+			// callback's item label censors, loop or not.
+			r.Callback.Included(task, u.target, u.hosts, "(censored due to no_log)", true)
+			continue
+		}
 		r.Callback.Included(task, u.target, u.hosts, u.label, u.hasItem)
 	}
 	for ui, u := range units {
@@ -223,13 +232,14 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 				maps.Copy(merged, t.Vars)
 				t.Vars = merged
 			}
-			t.Tags = append(append([]string{}, task.Tags...), t.Tags...)
-			// The include is the included tasks' parent for check_mode/diff.
-			if t.CheckMode == nil {
-				t.CheckMode = task.CheckMode
+			// The include's own keywords stay on the include; its tasks
+			// inherit its apply: keywords, then what its enclosing blocks
+			// and role pass down.
+			if task.Apply != nil {
+				playbook.Inherit(t, task.Apply)
 			}
-			if t.Diff == nil {
-				t.Diff = task.Diff
+			if task.Parents != nil {
+				playbook.Inherit(t, task.Parents)
 			}
 		}
 		if err := r.runTaskList(ctx, play, tasks, playHosts, u.hosts, depth+1); err != nil {
