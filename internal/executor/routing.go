@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
@@ -48,6 +49,48 @@ func addRoutingDeprecation(task *playbook.Task, res *agentproto.Result) {
 		"msg":             d.collection + "." + task.Module + " has been deprecated. Use " + d.redirectTo + " instead.",
 		"version":         d.version,
 	})
+}
+
+// RoutingDeprecationWarnings renders the deprecation warnings ansible-core's
+// plugin loader prints (to stderr, once each) while it resolves the plays'
+// tasks: an FQCN through a deprecated redirect is reported at the task's
+// origin, a short name routed through ansible.builtin at an unknown one.
+// The first is preceded by the "can be disabled" hint.
+func RoutingDeprecationWarnings(plays []*playbook.Play) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, pl := range plays {
+		for _, list := range [][]*playbook.Task{pl.PreTasks, pl.Tasks, pl.PostTasks, pl.Handlers} {
+			for _, t := range list {
+				d, ok := routingDeprecations[t.Module]
+				if !ok {
+					continue
+				}
+				old := d.collection + "." + t.Module
+				head := "[DEPRECATION WARNING]: " + old + " has been deprecated. Use " + d.redirectTo +
+					" instead. This feature will be removed from collection '" + d.collection + "' version " + d.version + ".\n"
+				var msg string
+				switch t.Action {
+				case old:
+					msg = fmt.Sprintf("%sOrigin: %s:%d:%d\n\n%s\n", head, t.Src.File, t.Src.Line, t.Src.Col,
+						playbook.SourceContext(t.Src.File, t.Src.Line, t.Src.Col))
+				case t.Module, "ansible.legacy." + t.Module:
+					msg = head + "Origin: <unknown>\n\n" + old + "\n\n"
+				default:
+					continue
+				}
+				if seen[msg] {
+					continue
+				}
+				seen[msg] = true
+				if len(out) == 0 {
+					out = append(out, "[WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.\n")
+				}
+				out = append(out, msg)
+			}
+		}
+	}
+	return out
 }
 
 // nameCheckModeSkip names the module in "remote module (...) does not

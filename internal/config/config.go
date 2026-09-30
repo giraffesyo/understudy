@@ -27,6 +27,7 @@ type Config struct {
 	CallbacksEnabled    []string
 	DisplayOkHosts      bool
 	DisplaySkippedHosts bool
+	DeprecationWarnings bool // deprecation_warnings / ANSIBLE_DEPRECATION_WARNINGS
 }
 
 // Defaults returns Ansible's defaults for the supported keys.
@@ -38,6 +39,7 @@ func Defaults() *Config {
 		Timeout:             10 * time.Second,
 		DisplayOkHosts:      true,
 		DisplaySkippedHosts: true,
+		DeprecationWarnings: true,
 	}
 }
 
@@ -129,6 +131,8 @@ func applyINI(cfg *Config, content string) {
 				cfg.DisplayOkHosts = iniBool(val, cfg.DisplayOkHosts)
 			case "display_skipped_hosts":
 				cfg.DisplaySkippedHosts = iniBool(val, cfg.DisplaySkippedHosts)
+			case "deprecation_warnings":
+				cfg.DeprecationWarnings = iniBool(val, cfg.DeprecationWarnings)
 			case "roles_path":
 				cfg.RolesPath = splitPathspec(val)
 			case "interpreter_python":
@@ -210,6 +214,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ANSIBLE_DISPLAY_SKIPPED_HOSTS"); v != "" {
 		cfg.DisplaySkippedHosts = iniBool(v, cfg.DisplaySkippedHosts)
+	}
+	if v := os.Getenv("ANSIBLE_DEPRECATION_WARNINGS"); v != "" {
+		cfg.DeprecationWarnings = iniBool(v, cfg.DeprecationWarnings)
 	}
 }
 

@@ -51,7 +51,6 @@ type Default struct {
 	mu        sync.Mutex
 	errors    map[string]bool // Display de-duplicates repeated errors
 	warns     map[string]bool // ... and repeated warnings
-	srcCache  map[string][]string
 }
 
 // New builds the default callback, auto-detecting color and terminal width.
@@ -363,7 +362,8 @@ func (d *Default) warnings(res *agentproto.Result) {
 		if seen {
 			continue
 		}
-		fmt.Fprintf(d.Err, "%s\n\n", d.paint(cBrightPurp, "[WARNING]: "+msg))
+		// Display.display: a message ending in a newline gets no second one.
+		fmt.Fprintf(d.Err, "%s\n", d.paint(cBrightPurp, "[WARNING]: "+strings.TrimSuffix(msg, "\n")))
 	}
 }
 
@@ -445,50 +445,9 @@ func (d *Default) taskErrorChain(task *playbook.Task, ec *agentproto.ErrorChain)
 	fmt.Fprint(d.Out, "\n\n")
 }
 
-// excerpt renders up to two lines of context plus the target line, with
-// right-aligned line numbers and a caret under the column.
+// excerpt renders the annotated source context of an origin.
 func (d *Default) excerpt(file string, line, col int) string {
-	if d.srcCache == nil {
-		d.srcCache = map[string][]string{}
-	}
-	lines, ok := d.srcCache[file]
-	if !ok {
-		data, err := os.ReadFile(file)
-		if err == nil {
-			lines = strings.Split(string(data), "\n")
-		}
-		d.srcCache[file] = lines
-	}
-	if line > len(lines) {
-		return ""
-	}
-	width := len(strconv.Itoa(line))
-	// SourceContext: annotated lines are at most 120 columns; longer
-	// source lines are cut with "...", and a caret beyond the usable
-	// width is omitted.
-	const maxAnnotated, marker = 120, "..."
-	maxSrc := maxAnnotated - width - 1
-	usable := maxSrc
-	var b strings.Builder
-	for n := max(1, line-2); n <= line; n++ {
-		src := strings.ReplaceAll(lines[n-1], "\t", " ")
-		if r := []rune(src); len(r) > maxSrc {
-			src = string(r[:maxSrc-len(marker)]) + marker
-			usable = maxSrc - len(marker)
-		}
-		fmt.Fprintf(&b, "%s\n", strings.TrimRight(fmt.Sprintf("%*d %s", width, n, src), " \t\r"))
-	}
-	if col >= 1 && col <= usable {
-		label := fmt.Sprintf("column %d", col)
-		if col-1+2+len(label) > maxSrc {
-			fmt.Fprintf(&b, "%s %s%s ^\n", strings.Repeat(" ", width), strings.Repeat(" ", max(col-1-len(label)-1, 0)), label)
-		} else {
-			fmt.Fprintf(&b, "%s^ %s\n", strings.Repeat(" ", width+1+col-1), label)
-		}
-	} else if col < 1 {
-		fmt.Fprintf(&b, "%s^ column %d\n", strings.Repeat(" ", width+1), col)
-	}
-	return b.String()
+	return playbook.SourceContext(file, line, col)
 }
 
 const cDebug color = "0;90" // COLOR_DEBUG (dark gray)
