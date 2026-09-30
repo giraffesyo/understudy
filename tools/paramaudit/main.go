@@ -232,7 +232,7 @@ func diff(ans map[string][]string, accepted map[string]bool) (missing, aliases, 
 			continue
 		}
 		for _, a := range append([]string{name}, al...) {
-			if !accepted[a] {
+			if !accepted[a] && !(a == "free_form" && accepted["_raw_params"]) {
 				aliases = append(aliases, a)
 			}
 		}
