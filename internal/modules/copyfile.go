@@ -427,7 +427,7 @@ func copyCore(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		}
 	}
 	if isDir(dest) {
-		base := filepath.Base(src)
+		base := src[strings.LastIndex(src, "/")+1:] // os.path.basename: "" for "dir/"
 		if origBase != "" {
 			base = origBase
 		}
@@ -513,14 +513,27 @@ func copyCore(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		changed = true
 	}
 
-	// remote_src directory trees
+	// remote_src directory trees: "src/" copies the contents into dest,
+	// "src" the directory itself.
+	attrDest := dest
 	if checksumSrc == nil && checksumDest == nil && remoteSrc && isDir(p.Str("src")) &&
 		(isDir(p.Str("dest")) || !pathExists(p.Str("dest"))) {
-		treeChanged, fail := copyRemoteTree(env, p, p.Str("src"), p.Str("dest"))
-		if fail != nil {
-			return fail
+		tsrc, tdest := p.Str("src"), p.Str("dest")
+		if !strings.HasSuffix(tsrc, "/") {
+			tdest = pyJoin(tdest, filepath.Base(tsrc))
+			tsrc = pyJoin(tsrc, "")
+		}
+		o := &treeOpts{env: env, owner: fa.Owner, group: fa.Group}
+		if p.Has("local_follow") {
+			b := p.Bool("local_follow")
+			o.localFollow = &b
+		}
+		treeChanged, err := copyDirectory(o, tsrc, tdest)
+		if err != nil {
+			return treeFailure(err)
 		}
 		changed = changed || treeChanged
+		attrDest = tdest
 	}
 
 	res := &agentproto.Result{Extra: map[string]any{
@@ -530,7 +543,7 @@ func copyCore(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		res.Extra["backup_file"] = backupFile
 	}
 	fa.Path = dest
-	if isDir(dest) && p.Has("directory_mode") {
+	if isDir(attrDest) && p.Has("directory_mode") {
 		fa.Mode = p.Any("directory_mode")
 	}
 	changed, fail := setFSAttrs(env, fa, changed, nil)
@@ -603,63 +616,4 @@ func lines(s string) []any {
 		out = append(out, l)
 	}
 	return out
-}
-
-// copyRemoteTree implements copy with remote_src and a directory src: like
-// cp -r, "src/" copies the directory's contents into dest, "src" copies
-// the directory itself into dest.
-func copyRemoteTree(env *RunEnv, p *args.Parsed, src, dest string) (bool, *agentproto.Result) {
-	root := dest
-	if !strings.HasSuffix(src, "/") {
-		root = filepath.Join(dest, filepath.Base(src))
-	}
-	changed := false
-	var dirMode any = p.Any("directory_mode")
-	err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(src, path)
-		target := filepath.Join(root, rel)
-		if d.IsDir() {
-			if _, err := os.Stat(target); os.IsNotExist(err) {
-				changed = true
-				if env.CheckMode {
-					return nil
-				}
-				info, _ := d.Info()
-				if err := os.MkdirAll(target, info.Mode().Perm()); err != nil {
-					return err
-				}
-			}
-			if dirMode != nil && !env.CheckMode {
-				c, err := fsutil.ApplyFileAttrs(target, dirMode, p.Str("owner"), p.Str("group"), true)
-				if err != nil {
-					return err
-				}
-				changed = changed || c
-			}
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		old, rerr := os.ReadFile(target)
-		exists := rerr == nil
-		if !exists || (p.Bool("force") && !bytes.Equal(old, data)) {
-			changed = true
-			if !env.CheckMode {
-				info, _ := d.Info()
-				if err := fsutil.AtomicRewrite(target, bytes.NewReader(data), info.Mode().Perm()); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return changed, agentproto.Fail("copy %s -> %s: %v", src, dest, err)
-	}
-	return changed, nil
 }

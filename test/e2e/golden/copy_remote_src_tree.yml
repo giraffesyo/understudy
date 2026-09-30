@@ -1,0 +1,83 @@
+# copy remote_src with a directory src: "src" copies the directory itself,
+# "src/" its contents; new trees keep each entry's mode (copytree), later
+# runs copy only differing/missing entries, and mode/directory_mode apply
+# to the top-level dest only.
+- hosts: all
+  gather_facts: false
+  vars:
+    s: "{{ workdir }}/src"
+  tasks:
+    - file: {path: "{{ s }}/sub/deep", state: directory, mode: "0750"}
+    - file: {path: "{{ s }}/sub", state: directory, mode: "0700"}
+    - copy: {dest: "{{ s }}/a.txt", content: "a\n", mode: "0600"}
+    - copy: {dest: "{{ s }}/run.sh", content: "#!/bin/sh\n", mode: "0755"}
+    - copy: {dest: "{{ s }}/sub/b.txt", content: "b\n", mode: "0640"}
+    - copy: {dest: "{{ s }}/sub/deep/c.txt", content: "c\n", mode: "0604"}
+    - file: {src: a.txt, dest: "{{ s }}/link.txt", state: link}
+
+    - name: directory itself into a new dest
+      copy: {src: "{{ s }}", dest: "{{ workdir }}/out1", remote_src: true}
+      register: r1
+    - debug: {msg: "{{ r1 | dict2items | rejectattr('key', 'in', ['invocation']) | items2dict }}"}
+
+    - name: contents into a new dest with directory_mode
+      copy: {src: "{{ s }}/", dest: "{{ workdir }}/out2", remote_src: true, directory_mode: "0711"}
+      register: r2
+    - debug: {var: r2.changed}
+
+    - name: contents again (no change)
+      copy: {src: "{{ s }}/", dest: "{{ workdir }}/out2", remote_src: true, directory_mode: "0711"}
+      register: r2b
+    - debug: {var: r2b.changed}
+
+    - name: into an existing directory with mode
+      file: {path: "{{ workdir }}/out3", state: directory, mode: "0755"}
+    - copy: {src: "{{ s }}", dest: "{{ workdir }}/out3", remote_src: true, mode: "0700"}
+      register: r3
+    - debug: {var: r3.changed}
+
+    - find:
+        paths: ["{{ workdir }}/out1", "{{ workdir }}/out2", "{{ workdir }}/out3"]
+        recurse: true
+        file_type: any
+      register: found
+    - debug:
+        msg: "{{ found.files | map(attribute='path') | map('replace', workdir, '') | zip(found.files | map(attribute='mode')) | sort | list }}"
+    - stat: {path: "{{ workdir }}/{{ item }}"}
+      loop: [out1, out1/src, out2, out3, out3/src, out1/src/link.txt]
+      register: tops
+    - debug: {msg: "{{ tops.results | map(attribute='stat.mode') | list }} {{ tops.results[-1].stat.islnk }}"}
+
+    - name: change the source
+      copy: {dest: "{{ s }}/sub/b.txt", content: "bb\n", mode: "0444"}
+    - copy: {dest: "{{ s }}/sub/new.txt", content: "new\n", mode: "0660"}
+    - file: {path: "{{ s }}/sub/newdir", state: directory, mode: "0701"}
+    - name: update an existing tree
+      copy: {src: "{{ s }}/", dest: "{{ workdir }}/out2", remote_src: true}
+      register: r4
+    - debug: {var: r4.changed}
+    - stat: {path: "{{ workdir }}/out2/{{ item }}"}
+      loop: [sub/b.txt, sub/new.txt, sub/newdir]
+      register: upd
+    - debug: {msg: "{{ upd.results | map(attribute='stat.mode') | list }}"}
+    - debug: {msg: "{{ lookup('file', workdir ~ '/out2/sub/b.txt') }}"}
+
+    - command: id -gn
+      register: gname
+      changed_when: false
+    - name: group applies recursively
+      copy: {src: "{{ s }}/", dest: "{{ workdir }}/out2", remote_src: true, group: "{{ gname.stdout }}"}
+    - name: group again
+      copy: {src: "{{ s }}/", dest: "{{ workdir }}/out2", remote_src: true, group: "{{ gname.stdout }}"}
+    - find: {paths: "{{ workdir }}/out2", recurse: true, file_type: any}
+      register: grp
+    - debug: {msg: "{{ grp.files | map(attribute='gr_name') | unique | list == [gname.stdout] }}"}
+
+    - name: check mode on a new dest
+      copy: {src: "{{ s }}/", dest: "{{ workdir }}/out4", remote_src: true}
+      check_mode: true
+      register: r5
+    - debug: {var: r5.changed}
+    - stat: {path: "{{ workdir }}/out4"}
+      register: out4
+    - debug: {var: out4.stat.exists}
