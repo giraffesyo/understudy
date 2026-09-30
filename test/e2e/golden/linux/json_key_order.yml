@@ -28,10 +28,14 @@
               def log_message(self, *args):
                   pass
           http.server.HTTPServer(('127.0.0.1', 18765), H).serve_forever()
-    - name: start it
-      shell: nohup python3 /tmp/jko_server.py >/dev/null 2>&1 &
+    - name: start it, and wait until it listens
+      shell: |
+        nohup python3 /tmp/jko_server.py >/dev/null 2>&1 &
+        for i in $(seq 100); do
+          python3 -c "import socket; socket.create_connection(('127.0.0.1', 18765))" 2>/dev/null && break
+          sleep 0.1
+        done
       changed_when: false
-    - wait_for: {port: 18765, host: 127.0.0.1, timeout: 20}
 
     - name: the server's order
       uri: {url: "http://127.0.0.1:18765/doc"}
@@ -50,5 +54,5 @@
     - debug: {msg: "{{ r.json | to_json }} {{ r.json.aa.keys() | list }}"}
 
     - name: stop the server
-      shell: pkill -f jko_server.py || true
+      shell: pkill -f 'jko_[s]erver.py' || true
       changed_when: false
