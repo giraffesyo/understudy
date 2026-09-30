@@ -131,7 +131,10 @@ func (s *hostnameStrategy) getPermanent() string {
 	case "Unimplemented":
 		s.fail("%s", s.unimpl)
 	case "Base":
-		s.fail("NotImplementedError")
+		// GenericStrategy raises a bare NotImplementedError: the module
+		// crashes, and with no exception message ansible-core reports
+		// only the summary.
+		s.fail("Task failed: Module failed.")
 	case "File", "SLES", "Alpine", "OpenBSD":
 		if !isFile(s.file) {
 			return ""

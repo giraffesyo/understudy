@@ -52,6 +52,14 @@
       hostname: {name: web07, use: nope}
       ignore_errors: true
 
+    - name: the generic strategy is not implemented
+      hostname: {name: web08, use: generic}
+      register: generic
+      ignore_errors: true
+
+    - name: its result
+      debug: {var: generic}
+
     - name: files afterwards
       shell: cat /etc/hostname /etc/sysconfig/network /etc/HOSTNAME 2>/dev/null; true
       changed_when: false
