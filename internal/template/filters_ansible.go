@@ -947,7 +947,7 @@ func filterMap(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, err
 				if def, hasDef := kwargs["default"]; hasDef {
 					v = def
 				} else {
-					return nil, &UndefinedError{Pos: ec.pos, Name: u.Name}
+					return nil, u.useError(ec.pos)
 				}
 			}
 			out[i] = v

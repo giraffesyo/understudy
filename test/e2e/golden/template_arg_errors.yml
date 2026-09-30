@@ -1,0 +1,49 @@
+# A module argument that fails to template fails the task with
+# ansible-core's "Finalization of task args" error, caused by the
+# argument's error at its origin: undefined variables and attributes,
+# missing list indexes, and errors raised while rendering.
+- name: argument templating errors
+  hosts: all
+  gather_facts: false
+  vars:
+    d: {a: {b: 1}}
+  tasks:
+    - name: undefined variable in free-form args
+      command: "echo {{ nope }}"
+      ignore_errors: true
+
+    - name: missing dict attribute
+      set_fact:
+        x: "{{ d.a.zz }}"
+      ignore_errors: true
+
+    - name: missing attribute of a missing attribute
+      copy:
+        content: "{{ d.q.r }}"
+        dest: "{{ workdir }}/never"
+      ignore_errors: true
+
+    - name: missing list index
+      debug:
+        msg: "{{ [1][5] }}"
+      ignore_errors: true
+
+    - name: a missing index is undefined
+      debug:
+        msg: "{{ [1][5] is defined }} {{ [1][-3] | default('dflt') }}"
+
+    - name: attribute of an int
+      debug:
+        msg: "{{ d.a.b.c }}"
+      ignore_errors: true
+
+    - name: string concatenation
+      debug:
+        msg: "{{ 'a' + 1 }}"
+      ignore_errors: true
+
+    - name: undefined in assert's fail_msg
+      assert:
+        that: true
+        fail_msg: "{{ nope2 }}"
+      ignore_errors: true

@@ -129,6 +129,7 @@ type Task struct {
 	Src            Pos
 	ArgPos         map[string]Pos // source position of each map-form module arg value
 	ArgsPos        Pos            // the module's value (k=v or free-form string args share it)
+	ActionPos      Pos            // the module's key (or action:/local_action:)
 	KeywordPos     map[string]Pos // source position of each task keyword's value (when, ...)
 	WhenPos        map[string]Pos // source position of each when: condition, by its text
 

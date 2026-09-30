@@ -114,6 +114,14 @@ func pyTaggedType(v any) string {
 	return tagged("Dict")
 }
 
+// keyPos is the source position of a mapping key.
+func keyPos(node *yaml.Node, key, file string) Pos {
+	if k := node.MapKeyNode(key); k != nil {
+		return Pos{File: file, Line: k.Line, Col: k.Column}
+	}
+	return Pos{File: file, Line: node.Line, Col: node.Column}
+}
+
 // errAtKey points at a mapping key (ansible-core's origin for an invalid
 // attribute).
 func errAtKey(file string, node *yaml.Node, key string, format string, args ...any) error {
@@ -867,6 +875,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			if key == "local_action" {
 				task.Delegate = "localhost"
 			}
+			task.ActionPos = keyPos(node, key, file)
 			moduleKeys = []string{""}
 		}
 	}
@@ -888,6 +897,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 		}
 		task.Module = moduleName
 		task.Action = moduleKeys[0]
+		task.ActionPos = keyPos(node, moduleKeys[0], file)
 
 		// Module args: map form, k=v string form, or null.
 		argsNode := node.MapGet(moduleKeys[0])

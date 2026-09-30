@@ -1248,7 +1248,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		}
 		v, err := argsCtx.At(argPos(task, k)).Sourced().TemplateValue(raw)
 		if err != nil {
-			return agentproto.Fail("error templating argument %q: %v", k, err)
+			return argTemplateError(task, k, argPos(task, k), err)
 		}
 		if _, isOmit := v.(template.Omit); isOmit {
 			continue
@@ -1259,9 +1259,12 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 	if freeForm != "" {
 		v, err := vctx.At(task.ArgsPos).TemplateString(freeForm)
 		if err != nil {
-			return agentproto.Fail("error templating command: %v", err)
+			return argTemplateError(task, "_raw_params", task.ArgsPos, err)
 		}
-		freeForm = fmt.Sprintf("%v", v)
+		freeForm = ""
+		if v != nil { // a template with no output is None
+			freeForm = fmt.Sprintf("%v", v)
+		}
 	}
 
 	actx, target, err := r.actionContext(ctx, host, task, play, vctx)

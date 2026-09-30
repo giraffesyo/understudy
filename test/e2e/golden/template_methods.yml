@@ -1,0 +1,103 @@
+# In-place list and dict methods in templates (ansible-core's Jinja
+# sandbox allows them): the change shows in the rest of the template and
+# never reaches the variable; a lone {{ }} after statements stays native.
+# A failing call raises "Error rendering template" in the task-args
+# finalization chain, unless {% set %} captured it and it is never used.
+- name: template methods
+  hosts: all
+  gather_facts: false
+  vars:
+    d: {a: 1}
+    l: [1, 2]
+  tasks:
+    - name: update a variable in a template
+      debug:
+        msg: "{{ d.update({'b': 2}) }}{{ d }}"
+
+    - name: the variable itself is unchanged
+      debug:
+        var: d
+
+    - name: append, extend, insert, remove, reverse, sort
+      debug:
+        msg: >-
+          {% set x = [3, 1] %}{% set _ = x.append(2) %}{% set _ = x.extend([5, 4]) %}{% set _ = x.insert(0, 9) %}{% set _ = x.remove(1) %}{{ x }}
+          {% set _ = x.reverse() %}{{ x }} {% set _ = x.sort() %}{{ x }} {% set _ = x.sort(reverse=true) %}{{ x }}
+
+    - name: pop, setdefault, popitem, clear
+      debug:
+        msg: >-
+          {% set x = [1, 2, 3] %}{{ x.pop() }} {{ x.pop(0) }} {{ x }}
+          {% set m = {'a': 1, 'b': 2} %}{{ m.pop('a') }} {{ m.pop('zz', 'dflt') }} {{ m }}
+          {{ m.setdefault('c', 3) }} {{ m.setdefault('b', 9) }} {{ m }} {{ m.popitem() }}
+          {% set _ = m.clear() %}{{ m }} {{ l.append(3) }}{{ l }}
+
+    - name: update forms
+      debug:
+        msg: "{% set x = {'a': 1} %}{% set _ = x.update(b=2) %}{% set _ = x.update([['c', 3]]) %}{% set _ = x.update({'a': 0}, d=4) %}{{ x }}"
+
+    - name: accumulate in a loop (native result)
+      debug:
+        msg: "{% set x = [] %}{% for i in range(3) %}{% set _ = x.append(i * 2) %}{% endfor %}{{ x }}"
+
+    - name: accumulate a dict in set_fact
+      set_fact:
+        acc: "{% set out = {} %}{% for k in ['a', 'b'] %}{% set _ = out.update({k: k | upper}) %}{% endfor %}{{ out }}"
+
+    - debug:
+        var: acc
+
+    - name: nested and namespace values
+      debug:
+        msg: "{% set x = {'a': [1]} %}{% set _ = x['a'].append(2) %}{% set ns = namespace(d={}) %}{% set _ = ns.d.update({'k': 'v'}) %}{{ x }} {{ ns.d }}"
+
+    - name: a change shows through every name and container holding the object
+      debug:
+        msg: >-
+          {% for u in users %}{% set _ = u.update({'seen': true}) %}{% endfor %}{{ users }}
+          {% set s = cfg.sub %}{% set _ = s.update({'y': 2}) %}{{ cfg }}
+          {% set x = [1] %}{% set y = x %}{% set _ = x.append(2) %}{{ y }}
+          {% set nested = [[1]] %}{% for l in nested %}{% set _ = l.append(2) %}{% endfor %}{{ nested }}
+      vars:
+        users: [{n: a}, {n: b}]
+        cfg: {sub: {x: 1}}
+
+    - name: the variables are unchanged afterwards
+      debug:
+        msg: "{{ users | default('undefined') }} {{ d }} {{ l }}"
+
+    - name: copies and read-only methods
+      debug:
+        msg: "{{ [1].copy() }} {{ {'a': 1}.copy() }} {{ [1, 2, 1].count(1) }} {{ [1, 2].index(2) }}"
+
+    - name: an unused failing call in set is captured
+      debug:
+        msg: "{% set _ = [].pop() %}{% set y = d.nosuch() %}after"
+
+    - name: templates with no output are None
+      set_fact:
+        nothing: "{% set z = 1 %}"
+        one_value: "{% if true %}{{ [5] }}{% endif %}"
+
+    - debug:
+        msg: "{{ nothing is none }} {{ one_value | type_debug }}"
+
+    - name: pop from an empty list
+      debug:
+        msg: "{{ [].pop() }}"
+      ignore_errors: true
+
+    - name: pop a missing key
+      debug:
+        msg: "{% set x = {} %}{{ x.pop('zz') }}"
+      ignore_errors: true
+
+    - name: using a captured error raises it
+      debug:
+        msg: "{% set x = [1] %}{% set y = x.remove(5) %}{{ y }}"
+      ignore_errors: true
+
+    - name: update with a non-iterable
+      debug:
+        msg: "{{ d.update(1) }}"
+      ignore_errors: true

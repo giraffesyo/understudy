@@ -1,6 +1,7 @@
 package template
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -50,17 +51,18 @@ func (ec *EvalCtx) eval(e Expr) (any, error) {
 		return ec.evalSlice(t)
 
 	case *listExpr:
-		out := make([]any, 0, len(t.items))
+		out := make([]any, 0, max(len(t.items), 1)) // its own backing array: its identity
 		for _, item := range t.items {
 			v, err := ec.eval(item)
 			if err != nil {
 				return nil, err
 			}
 			if u, ok := v.(Undefined); ok {
-				return nil, &UndefinedError{Pos: ec.pos, Name: u.Name}
+				return nil, u.useError(ec.pos)
 			}
 			out = append(out, v)
 		}
+		ec.own.mark(out)
 		return out, nil
 
 	case *dictExpr:
@@ -82,6 +84,7 @@ func (ec *EvalCtx) eval(e Expr) (any, error) {
 			}
 			out.Set(ks, v)
 		}
+		ec.own.mark(out)
 		return out, nil
 
 	case *negExpr:
@@ -152,7 +155,7 @@ func (ec *EvalCtx) eval(e Expr) (any, error) {
 
 func (ec *EvalCtx) rejectUndefined(v any, off int) error {
 	if u, ok := v.(Undefined); ok {
-		return &UndefinedError{Pos: ec.pos, Name: u.Name}
+		return u.useError(ec.pos)
 	}
 	return nil
 }
@@ -161,7 +164,7 @@ func (ec *EvalCtx) rejectUndefined(v any, off int) error {
 func (ec *EvalCtx) getAttr(x any, name string, off int) (any, error) {
 	x = ec.access(x)
 	if u, ok := x.(Undefined); ok {
-		return Undefined{Name: u.Name + "." + name}, nil
+		return Undefined{Name: u.Name + "." + name, Err: u.Err}, nil
 	}
 	switch t := x.(type) {
 	case map[string]any:
@@ -170,7 +173,7 @@ func (ec *EvalCtx) getAttr(x any, name string, off int) (any, error) {
 		}
 	case Mapping:
 		if v, ok := t.GetItem(name); ok {
-			return ec.access(v), nil
+			return ec.ownedChild(x, name, ec.access(v)), nil
 		}
 	}
 	if m, ok := lookupMethod(x, name); ok {
@@ -184,9 +187,9 @@ func (ec *EvalCtx) getItem(x, idx any, off int) (any, error) {
 	x, idx = ec.access(x), ec.access(idx)
 	if u, ok := x.(Undefined); ok {
 		if s, ok := asString(idx); ok {
-			return Undefined{Name: u.Name + "." + s}, nil
+			return Undefined{Name: u.Name + "." + s, Err: u.Err}, nil
 		}
-		return Undefined{Name: u.Name + "[...]"}, nil
+		return Undefined{Name: u.Name + "[...]", Err: u.Err}, nil
 	}
 	if err := ec.rejectUndefined(idx, off); err != nil {
 		return nil, err
@@ -207,7 +210,7 @@ func (ec *EvalCtx) getItem(x, idx any, off int) (any, error) {
 			return nil, ec.errf(off, "dict indices must be strings, got %s", typeName(idx))
 		}
 		if v, found := t.GetItem(s); found {
-			return ec.access(v), nil
+			return ec.ownedChild(x, s, ec.access(v)), nil
 		}
 		return Undefined{Name: describeOwner(x) + "." + s}, nil
 	case []any:
@@ -215,14 +218,16 @@ func (ec *EvalCtx) getItem(x, idx any, off int) (any, error) {
 		if !ok {
 			return nil, ec.errf(off, "list indices must be integers, got %s", typeName(idx))
 		}
-		n := int64(len(t))
+		n, orig := int64(len(t)), i
 		if i < 0 {
 			i += n
 		}
 		if i < 0 || i >= n {
-			return nil, ec.errf(off, "list index out of range: %d (length %d)", i, n)
+			// Jinja's getitem falls back to getattr: a missing index is
+			// undefined, not an error.
+			return Undefined{Name: fmt.Sprintf("%s[%d]", describeOwner(x), orig)}, nil
 		}
-		return ec.access(t[i]), nil
+		return ec.ownedChild(x, i, ec.access(t[i])), nil
 	case string:
 		return stringIndex(ec, t, idx, off)
 	case yaml.UnsafeString:
@@ -514,7 +519,7 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 	}
 	if isUndefined(in) && !undefinedTolerantFilters[t.name] {
 		u := in.(Undefined)
-		return nil, &UndefinedError{Pos: ec.pos, Name: u.Name}
+		return nil, u.useError(ec.pos)
 	}
 	args, kwargs, err := ec.evalArgs(t.args, t.kwargs)
 	if err != nil {
@@ -553,7 +558,7 @@ func (ec *EvalCtx) evalTest(t *testExpr) (any, error) {
 	}
 	if isUndefined(in) && !undefinedTolerantTests[t.name] {
 		u := in.(Undefined)
-		return nil, &UndefinedError{Pos: ec.pos, Name: u.Name}
+		return nil, u.useError(ec.pos)
 	}
 	args, _, err := ec.evalArgs(t.args, nil)
 	if err != nil {
@@ -602,6 +607,11 @@ func (ec *EvalCtx) evalArgs(argExprs []Expr, kwargExprs []kwarg) ([]any, map[str
 }
 
 func (ec *EvalCtx) evalCall(t *callExpr) (any, error) {
+	if ga, ok := t.fn.(*getAttrExpr); ok && (listMutators[ga.name] != nil || dictMutators[ga.name] != nil) {
+		if out, handled, err := ec.callMutator(t, ga); handled {
+			return out, err
+		}
+	}
 	// Method calls (x.upper()) are boundMethod values from getAttr.
 	fn, err := ec.eval(t.fn)
 	if err != nil {
