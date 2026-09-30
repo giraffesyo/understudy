@@ -318,9 +318,33 @@ func (p *parser) parsePrimary() (Expr, error) {
 		return &literalExpr{off: t.off, val: s}, nil
 	case tokLParen:
 		p.next()
+		if p.kind() == tokRParen { // () is the empty tuple
+			p.next()
+			return &listExpr{off: t.off}, nil
+		}
 		inner, err := p.parseExpression()
 		if err != nil {
 			return nil, err
+		}
+		if p.kind() == tokComma {
+			// A tuple literal: (a, b) or (a,). Tuples evaluate as lists,
+			// which behave the same for in / iteration / indexing.
+			tuple := &listExpr{off: t.off, items: []Expr{inner}}
+			for p.kind() == tokComma {
+				p.next()
+				if p.kind() == tokRParen {
+					break
+				}
+				item, err := p.parseExpression()
+				if err != nil {
+					return nil, err
+				}
+				tuple.items = append(tuple.items, item)
+			}
+			if _, err := p.expect(tokRParen); err != nil {
+				return nil, err
+			}
+			return tuple, nil
 		}
 		if _, err := p.expect(tokRParen); err != nil {
 			return nil, err

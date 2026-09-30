@@ -60,6 +60,7 @@ func New() *Engine {
 	registerFilters(e)
 	registerAnsibleFilters(e)
 	registerRegexFilters(e)
+	registerCompatFilters(e)
 	registerTests(e)
 	registerAnsibleTests(e)
 	registerGlobals(e)
@@ -165,7 +166,9 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 			if err != nil {
 				return nil, err
 			}
-			ec.locals[s.name] = v
+			if err := ec.assignSet(s, v); err != nil {
+				return nil, err
+			}
 		}
 		v, err := ec.eval(single.expr)
 		if err != nil {

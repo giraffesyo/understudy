@@ -1,0 +1,65 @@
+---
+# Template features found missing across popular roles: the comment filter
+# (ansible_managed headers), urlsplit, shuffle, tuple literals, and tuple
+# unpacking in for/set.
+- name: jinja compat
+  hosts: all
+  gather_facts: false
+  vars:
+    managed: "Ansible managed"
+    multi: "line one\n\nline three"
+    url: "HTTP://user:pa%20ss@WWW.Example.com:9000/dir/index.html?query=term&x=1#frag"
+    exporter:
+      collectors: [{textfile: {directory: /var/lib}}, cpu]
+    rc: 257
+  tasks:
+    - name: comment styles
+      debug:
+        msg:
+          - "{{ managed | comment }}"
+          - "{{ multi | comment }}"
+          - "{{ managed | comment('c') }}"
+          - "{{ managed | comment('erlang') }}"
+          - "{{ multi | comment('cblock') }}"
+          - "{{ managed | comment('xml') }}"
+          - "{{ managed | comment(decoration='; ') }}"
+          - "{{ multi | comment('plain', prefix='#!', prefix_count=2, postfix_count=0) }}"
+          - "{{ managed | comment(beginning='BEGIN', end='END', decoration='| ') }}"
+
+    - name: urlsplit
+      debug:
+        msg:
+          - "{{ url | urlsplit }}"
+          - "{{ url | urlsplit('hostname') }}"
+          - "{{ url | urlsplit('port') }}"
+          - "{{ url | urlsplit('path') }}"
+          - "{{ 'file:///etc/hosts' | urlsplit }}"
+          - "{{ 'https://[::1]:8443/x' | urlsplit('hostname') }}"
+          - "{{ 'example.com/path' | urlsplit }}"
+
+    - name: shuffle keeps the elements
+      debug:
+        msg: "{{ [3, 1, 2] | shuffle | sort }}"
+
+    - name: tuple literals
+      debug:
+        msg:
+          - "{{ rc not in (0, 257) }}"
+          - "{{ 'a' in ('a',) }}"
+          - "{{ (1, 2)[1] }}"
+          - "{{ () | length }}"
+          - "{{ ('x', 'y') | join('-') }}"
+
+    - name: tuple unpacking in for and set
+      debug:
+        msg: >-
+          {% for (k, v) in {'a': 1, 'b': 2}.items() %}{{ k }}={{ v }} {% endfor %}
+          {%- for c in exporter.collectors -%}
+          {%- if c is mapping -%}
+          {%- set name, options = (c.items() | list)[0] -%}
+          [{{ name }}:{{ options.directory }}]
+          {%- else -%}
+          [{{ c }}]
+          {%- endif -%}
+          {%- endfor %}
+          {% set x, y = 1, 2 %}{{ x + y }}
