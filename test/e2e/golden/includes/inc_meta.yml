@@ -1,0 +1,7 @@
+---
+- name: meta in a dynamically included file
+  ansible.builtin.meta: flush_handlers
+- meta: noop
+- name: after meta
+  debug:
+    msg: after meta

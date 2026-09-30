@@ -70,6 +70,9 @@ type Options struct {
 	BaseDir      string // playbook directory
 	Tags         []string
 	SkipTags     []string
+	RolesPath    []string                  // roles_path search directories (after <playbook>/roles)
+	ConfigFile   string                    // ansible.cfg in effect ("" = none): ansible_config_file
+	Inventory    []string                  // inventory sources: ansible_inventory_sources
 	ConnOpts     connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
 
 	ForceHandlers bool           // --force-handlers: notified handlers run on failed hosts too
@@ -98,6 +101,7 @@ type Runner struct {
 	failed         map[string]bool
 	notified       map[string]map[string]bool // handler name -> hosts to run on
 	blockFailed    map[string]map[int]bool    // host -> block ID -> failure caught by rescue
+	nextBlockID    int                        // fresh IDs for blocks of included files
 	failedIn       map[string]map[int]bool    // host -> blocks it was inside when it failed hard
 	ended          map[string]bool            // meta: end_host (per play)
 	runOnceHosts   []string                   // hosts a running run_once task fans out to
@@ -323,6 +327,9 @@ func (r *Runner) runPlayBatch(ctx context.Context, play *playbook.Play, playHost
 	r.resetNotified()
 	r.mu.Lock()
 	r.blockFailed = map[string]map[int]bool{}
+	if r.nextBlockID < 1<<20 {
+		r.nextBlockID = 1 << 20 // above any parse-time block ID
+	}
 	r.failedIn = map[string]map[int]bool{}
 	r.mu.Unlock()
 	if play.GatherFacts == nil || *play.GatherFacts {
@@ -552,6 +559,7 @@ func (r *Runner) runImportRole(ctx context.Context, play *playbook.Play, task *p
 		}
 		return nil
 	}
+	r.adoptBlocks(task, tasks)
 	for _, t := range tasks {
 		if len(task.Vars) > 0 {
 			merged := maps.Clone(task.Vars)
@@ -609,7 +617,7 @@ func (r *Runner) taskDisplayName(task *playbook.Task, active []string) string {
 	// to the action for unnamed tasks.
 	if task.RoleName != "" {
 		if name == "" {
-			name = task.Module
+			name = task.DisplayAction()
 		}
 		return task.RoleName + " : " + name
 	}
@@ -879,6 +887,7 @@ func (r *Runner) newHostContext(host string, pos template.Position, playHosts []
 	}
 	c.SetMagic("playbook_dir", r.Opts.BaseDir)
 	c.SetMagic("ansible_check_mode", r.Opts.CheckMode)
+	r.setRunMagic(c, host, playHosts)
 	// ansible_connection reflects the connection in effect when the host
 	// does not set it: play keyword, then -c, then the default.
 	if _, ok := r.Store.RawHostVar(host, "ansible_connection"); !ok {
@@ -941,9 +950,9 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 		if r.quitRequested() {
 			return
 		}
-		res, items := r.execTaskOnHost(ctx, play, task, host, playHosts, override)
-		if !r.needsDebugger(play, task, res) {
-			r.record(host, task, res, items)
+		res, items, resolved := r.execTaskOnHost(ctx, play, task, host, playHosts, override)
+		if !r.needsDebugger(play, resolved, res) {
+			r.record(host, resolved, res, items)
 			return
 		}
 		// The result is displayed and counted first, then the debugger
@@ -980,8 +989,9 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 }
 
 // execTaskOnHost runs one task (all loop items) on a host and returns the
-// result to record, with the per-item results for loops.
-func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, playHosts []string, override map[string]any) (*agentproto.Result, []any) {
+// result to record, with the per-item results for loops, and the task with
+// its templated keywords resolved for this host.
+func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, playHosts []string, override map[string]any) (*agentproto.Result, []any, *playbook.Task) {
 	pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
 	base := r.newHostContext(host, pos, playHosts)
 	if len(task.Vars) > 0 {
@@ -990,15 +1000,31 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 	if len(override) > 0 {
 		base = base.WithOverlay(override)
 	}
+	// ansible_search_path: the role (if any) then the task's directory;
+	// file lookups search it (DataLoader.path_dwim_relative_stack).
+	var search []any
+	if task.SrcDir != "" {
+		search = append(search, task.SrcDir)
+	}
+	if d := taskDir(task); d != "" && d != task.SrcDir {
+		search = append(search, d)
+	}
+	base.SetMagic("ansible_search_path", search)
+	base.SetMagic(taskActionVar, task.DisplayAction())
+	resolved, err := resolveKeywords(task, base)
+	if err != nil {
+		return agentproto.Fail("%v", err), nil, task
+	}
+	task = resolved
 
 	// Resolve the loop (nil = run once with no loop var).
 	items, isLoop, err := r.resolveLoop(task, base)
 	if err != nil {
-		return agentproto.Fail("error templating loop: %v", err), nil
+		return agentproto.Fail("error templating loop: %v", err), nil, task
 	}
 
 	if !isLoop {
-		return r.runOnce(ctx, play, task, host, base, nil), nil
+		return r.runOnce(ctx, play, task, host, base, nil), nil, task
 	}
 
 	// Loop: aggregate per-item results Ansible-style.
@@ -1038,7 +1064,7 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 				label = l
 			}
 		}
-		r.Callback.HostResult(host, task, res, false, label)
+		r.Callback.HostResult(host, task, shown(task, res), false, label)
 		m := res.ToVars()
 		itemResults = append(itemResults, m)
 		anyChanged = anyChanged || res.Changed
@@ -1062,7 +1088,7 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 	default:
 		agg.Msg = "All items completed"
 	}
-	return agg, itemResults
+	return agg, itemResults, task
 }
 
 // resolveLoop templates the loop value. Returns isLoop=false when absent.
@@ -1083,7 +1109,7 @@ func (r *Runner) resolveLoop(task *playbook.Task, vctx *vars.Context) ([]any, bo
 		if !ok {
 			terms = []any{v}
 		}
-		out, err := r.Engine.Lookup(nil, task.LoopWith, terms, nil)
+		out, err := r.Engine.Lookup(r.Engine.NewEvalCtx(vctx, template.Position{File: task.Src.File, Line: task.Src.Line}), task.LoopWith, terms, nil)
 		if err != nil {
 			return nil, false, err
 		}
@@ -1198,9 +1224,9 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			setExtra(res, "attempts", attempt+1)
 			name := r.taskDisplayName(task, []string{host})
 			if name == "" {
-				name = task.Module
+				name = task.DisplayAction()
 			}
-			r.Callback.Retrying(host, task, name, total-(attempt+1), res)
+			r.Callback.Retrying(host, task, name, total-(attempt+1), shown(task, res))
 			time.Sleep(time.Duration(task.Delay) * time.Second)
 		} else {
 			// Out of attempts: ansible-core records retries-1 attempts and
@@ -1339,6 +1365,11 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		SetFact: func(name string, value any) {
 			for _, h := range r.factHosts(host, target, task) {
 				r.Store.SetHostFact(h, name, value)
+			}
+		},
+		SetIncludeVars: func(vars map[string]any) {
+			for _, h := range r.factHosts(host, target, task) {
+				r.Store.SetIncludeVars(h, vars)
 			}
 		},
 	}, target, nil
@@ -1600,6 +1631,9 @@ func moduleOrigin(res *agentproto.Result) string {
 
 // dispatch routes to a control-side action or the module runtime.
 func (r *Runner) dispatch(ctx context.Context, task *playbook.Task, actx *actions.Context, args map[string]any, freeForm string) *agentproto.Result {
+	if task.Module == "include_vars" {
+		return r.runIncludeVars(task, actx, args)
+	}
 	if a := actions.Lookup(task.Module); a != nil {
 		res := a.Run(ctx, actx, args, freeForm)
 		if res != nil && res.Origin == "" {
@@ -1627,12 +1661,17 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	}
 	ignored := task.IgnoreErrors && res.Failed
 	if loopItems == nil {
-		r.Callback.HostResult(host, task, res, ignored, nil)
+		r.Callback.HostResult(host, task, shown(task, res), ignored, nil)
 	} else {
-		r.Callback.LoopResult(host, task, res, ignored)
+		r.Callback.LoopResult(host, task, shown(task, res), ignored)
 	}
 	if task.Register != "" {
 		for _, h := range r.fanOut(host, task) {
+			if task.Module == "include_vars" {
+				// include_vars data stays trusted (templated on use).
+				r.Store.SetHostVarRaw(h, task.Register, res.ToVars())
+				continue
+			}
 			r.Store.SetHostFact(h, task.Register, res.ToVars())
 		}
 	}
@@ -1789,10 +1828,11 @@ type freeBanner struct {
 func (f *freeCallback) announce(task *playbook.Task, name string, handler bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.names[task] = freeBanner{name, handler}
+	f.names[task.Identity()] = freeBanner{name, handler}
 }
 
 func (f *freeCallback) banner(task *playbook.Task) {
+	task = task.Identity()
 	if f.last == task {
 		return
 	}

@@ -19,7 +19,8 @@ type Config struct {
 	PrivateKeyFile  string
 	Timeout         time.Duration
 	RemoteTmp       string
-	Source          string // which file was loaded ("" = defaults)
+	Source          string   // which file was loaded ("" = defaults)
+	RolesPath       []string // roles_path / ANSIBLE_ROLES_PATH
 
 	StdoutCallback      string
 	CallbackPlugins     []string // callback_plugins / ANSIBLE_CALLBACK_PLUGINS
@@ -31,6 +32,7 @@ type Config struct {
 // Defaults returns Ansible's defaults for the supported keys.
 func Defaults() *Config {
 	return &Config{
+		RolesPath:           splitPathspec(strings.Join(DefaultRolesPath, ":")),
 		Forks:               5,
 		HostKeyChecking:     true,
 		Timeout:             10 * time.Second,
@@ -62,6 +64,12 @@ func Load() (*Config, error) {
 		}
 		applyINI(cfg, string(data))
 		cfg.Source = path
+		// pathspec values in the file resolve against its directory.
+		for i, p := range cfg.RolesPath {
+			if !filepath.IsAbs(p) {
+				cfg.RolesPath[i] = filepath.Join(filepath.Dir(path), p)
+			}
+		}
 		break
 	}
 
@@ -121,14 +129,46 @@ func applyINI(cfg *Config, content string) {
 				cfg.DisplayOkHosts = iniBool(val, cfg.DisplayOkHosts)
 			case "display_skipped_hosts":
 				cfg.DisplaySkippedHosts = iniBool(val, cfg.DisplaySkippedHosts)
-			case "interpreter_python", "roles_path":
-				// Parsed and ignored in v0.1.
+			case "roles_path":
+				cfg.RolesPath = splitPathspec(val)
+			case "interpreter_python":
+				// Parsed and ignored.
 			}
 		}
 	}
 }
 
+// DefaultRolesPath is ansible-core's DEFAULT_ROLES_PATH.
+var DefaultRolesPath = []string{"~/.ansible/roles", "/usr/share/ansible/roles", "/etc/ansible/roles"}
+
+// splitPathspec splits a colon-separated path list, expanding ~.
+func splitPathspec(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ":") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if p == "~" || strings.HasPrefix(p, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				p = home + p[1:]
+			}
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
 func applyEnvOverrides(cfg *Config) {
+	if v := os.Getenv("ANSIBLE_ROLES_PATH"); v != "" {
+		cfg.RolesPath = nil
+		for _, p := range splitPathspec(v) {
+			if abs, err := filepath.Abs(p); err == nil {
+				p = abs
+			}
+			cfg.RolesPath = append(cfg.RolesPath, p)
+		}
+	}
 	if v := os.Getenv("ANSIBLE_INVENTORY"); v != "" {
 		cfg.Inventory = splitPathList(v)
 	}

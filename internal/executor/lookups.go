@@ -58,11 +58,22 @@ var lookupPlugins = map[string]lookupPlugin{
 	"dig":                 lookupDig,
 }
 
+// normalizeLookupName strips the collection prefixes lookups accept.
+func normalizeLookupName(name string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(name, "ansible.builtin."), "community.general.")
+}
+
+// LookupKnown reports whether a lookup plugin is implemented (argscan).
+func LookupKnown(name string) bool {
+	_, ok := lookupPlugins[normalizeLookupName(name)]
+	return ok
+}
+
 // installLookups wires the control-side lookup plugins into the template
 // engine (lookup(), query(), and with_<name> loops).
 func (r *Runner) installLookups() {
 	r.Engine.Lookup = func(ec *template.EvalCtx, name string, terms []any, kwargs map[string]any) (any, error) {
-		name = strings.TrimPrefix(strings.TrimPrefix(name, "ansible.builtin."), "community.general.")
+		name = normalizeLookupName(name)
 		plugin, ok := lookupPlugins[name]
 		if !ok {
 			return nil, fmt.Errorf("lookup plugin %q is not supported yet", name)
@@ -136,16 +147,75 @@ func (r *Runner) resolveLookupPath(path string) string {
 
 // findLookupFile searches a relative file like Ansible's
 // find_file_in_search_path: <subdir>/ then the playbook dir.
-func (r *Runner) findLookupFile(name, subdir string) string {
+func (r *Runner) findLookupFile(ec *template.EvalCtx, name, subdir string) string {
 	if filepath.IsAbs(name) {
 		return name
 	}
-	for _, c := range []string{filepath.Join(r.Opts.BaseDir, subdir, name), filepath.Join(r.Opts.BaseDir, name), name} {
+	if strings.HasPrefix(name, "~") {
+		if home, err := os.UserHomeDir(); err == nil && (name == "~" || strings.HasPrefix(name, "~/")) {
+			return home + name[1:]
+		}
+	}
+	// DataLoader.path_dwim_relative_stack over ansible_search_path (role
+	// root, then the task's directory), then the playbook dir.
+	var paths []string
+	isRole := false
+	if ec != nil && ec.Vars() != nil {
+		if v, ok := ec.Vars().Get("ansible_search_path"); ok {
+			if list, ok := v.([]any); ok {
+				for _, p := range list {
+					paths = append(paths, template.PyStr(p))
+				}
+			}
+		}
+		_, isRole = ec.Vars().Get("role_path")
+	}
+	root := strings.SplitN(name, "/", 2)[0]
+	var search []string
+	for _, p := range paths {
+		up := filepath.Clean(p)
+		pbBase := filepath.Dir(up)
+		if isRole && strings.HasSuffix(pbBase, "/tasks") {
+			if subdir != "" {
+				search = append(search, filepath.Join(filepath.Dir(pbBase), subdir, name))
+			}
+			search = append(search, filepath.Join(pbBase, name))
+		}
+		if subdir != "" && root != subdir {
+			search = append(search, filepath.Join(up, subdir, name))
+		}
+		search = append(search, filepath.Join(up, name))
+	}
+	if subdir != "" && root != subdir {
+		search = append(search, filepath.Join(r.Opts.BaseDir, subdir, name))
+	}
+	search = append(search, filepath.Join(r.Opts.BaseDir, name))
+	for _, c := range search {
 		if _, err := os.Stat(c); err == nil {
 			return c
 		}
 	}
 	return filepath.Join(r.Opts.BaseDir, name)
+}
+
+// taskActionVar carries the running task's action into lookups (first_found
+// picks its subdir from it, as ansible-core does).
+const taskActionVar = "__understudy_task_action"
+
+// lookupSubdir is first_found's subdir choice from the enclosing action.
+func lookupSubdir(ec *template.EvalCtx) string {
+	action := "file"
+	if ec != nil && ec.Vars() != nil {
+		if v, ok := ec.Vars().Get(taskActionVar); ok {
+			action = template.PyStr(v)
+		}
+	}
+	for _, s := range []string{"template", "var", "file"} {
+		if strings.Contains(action, s) {
+			return s + "s"
+		}
+	}
+	return "files"
 }
 
 func shellOut(cmd string) (string, int, error) {
@@ -196,10 +266,10 @@ func lookupEnv(_ *Runner, _ *template.EvalCtx, terms []any, kw map[string]any) (
 	return out, nil
 }
 
-func lookupFile(r *Runner, _ *template.EvalCtx, terms []any, kw map[string]any) ([]any, error) {
+func lookupFile(r *Runner, ec *template.EvalCtx, terms []any, kw map[string]any) ([]any, error) {
 	out := make([]any, 0, len(terms))
 	for _, t := range termStrings(terms) {
-		data, err := os.ReadFile(r.findLookupFile(t, "files"))
+		data, err := os.ReadFile(r.findLookupFile(ec, t, "files"))
 		if err != nil {
 			return nil, fmt.Errorf("The 'file' lookup had an issue accessing the file '%s'", t)
 		}
@@ -257,7 +327,7 @@ func (r *Runner) globLookup(pattern string) ([]any, error) {
 
 // lookupFirstFound: terms are file names, lists of names, or dicts with
 // files/paths/skip (and kwargs of the same names).
-func lookupFirstFound(r *Runner, _ *template.EvalCtx, terms []any, kw map[string]any) ([]any, error) {
+func lookupFirstFound(r *Runner, ec *template.EvalCtx, terms []any, kw map[string]any) ([]any, error) {
 	var files, paths []string
 	skip := false
 	addOpts := func(m map[string]any) {
@@ -303,7 +373,7 @@ func lookupFirstFound(r *Runner, _ *template.EvalCtx, terms []any, kw map[string
 		}
 	}
 	for _, c := range candidates {
-		path := r.findLookupFile(c, "files")
+		path := r.findLookupFile(ec, c, lookupSubdir(ec))
 		if _, err := os.Stat(path); err == nil {
 			abs, _ := filepath.Abs(path)
 			return []any{abs}, nil
@@ -619,7 +689,7 @@ func lookupPipe(_ *Runner, _ *template.EvalCtx, terms []any, _ map[string]any) (
 func lookupTemplate(r *Runner, ec *template.EvalCtx, terms []any, _ map[string]any) ([]any, error) {
 	var out []any
 	for _, name := range termStrings(terms) {
-		path := r.findLookupFile(name, "templates")
+		path := r.findLookupFile(ec, name, "templates")
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("the template file %s could not be found for the lookup", name)
@@ -673,7 +743,7 @@ func lookupVarnames(_ *Runner, ec *template.EvalCtx, terms []any, _ map[string]a
 
 // lookupIni reads a key from an INI file section, or a Java properties
 // file (type=properties).
-func lookupIni(r *Runner, _ *template.EvalCtx, terms []any, kw map[string]any) ([]any, error) {
+func lookupIni(r *Runner, ec *template.EvalCtx, terms []any, kw map[string]any) ([]any, error) {
 	var out []any
 	for _, term := range termStrings(terms) {
 		key, opts := kvTerm(term, kw)
@@ -686,7 +756,7 @@ func lookupIni(r *Runner, _ *template.EvalCtx, terms []any, kw map[string]any) (
 			section = "global"
 		}
 		props := opts["type"] == "properties"
-		data, err := os.ReadFile(r.findLookupFile(file, "files"))
+		data, err := os.ReadFile(r.findLookupFile(ec, file, "files"))
 		if err != nil {
 			return nil, fmt.Errorf("The ini lookup had an issue reading %s: %v", file, err)
 		}
@@ -755,7 +825,7 @@ func parseIni(data string, properties bool) map[string]map[string]string {
 	return out
 }
 
-func lookupCsvfile(r *Runner, _ *template.EvalCtx, terms []any, kw map[string]any) ([]any, error) {
+func lookupCsvfile(r *Runner, ec *template.EvalCtx, terms []any, kw map[string]any) ([]any, error) {
 	var out []any
 	for _, term := range termStrings(terms) {
 		key, opts := kvTerm(term, kw)
@@ -776,7 +846,7 @@ func lookupCsvfile(r *Runner, _ *template.EvalCtx, terms []any, kw map[string]an
 			}
 			col = n
 		}
-		f, err := os.Open(r.findLookupFile(file, "files"))
+		f, err := os.Open(r.findLookupFile(ec, file, "files"))
 		if err != nil {
 			return nil, fmt.Errorf("csvfile: %v", err)
 		}
@@ -819,10 +889,10 @@ func lookupInventoryHostnames(r *Runner, _ *template.EvalCtx, terms []any, _ map
 	return out, nil
 }
 
-func lookupUnvault(r *Runner, _ *template.EvalCtx, terms []any, _ map[string]any) ([]any, error) {
+func lookupUnvault(r *Runner, ec *template.EvalCtx, terms []any, _ map[string]any) ([]any, error) {
 	var out []any
 	for _, name := range termStrings(terms) {
-		data, err := os.ReadFile(r.findLookupFile(name, "files"))
+		data, err := os.ReadFile(r.findLookupFile(ec, name, "files"))
 		if err != nil {
 			return nil, fmt.Errorf("Unable to find file matching %q", name)
 		}

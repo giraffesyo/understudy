@@ -1351,6 +1351,9 @@ func Plain(v any) any { return jsonSanitize(v) }
 // PyStr renders a value like Python's str() (what "%s" and loop labels show).
 func PyStr(v any) string { return toStr(v) }
 
+// PyRepr is Python repr() of a value.
+func PyRepr(v any) string { return pyRepr(v) }
+
 type pyJSONEncoder struct {
 	b           strings.Builder
 	indent      int

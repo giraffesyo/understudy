@@ -1,0 +1,3 @@
+- name: other entry point
+  debug:
+    msg: "{{ as_other }}"

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -385,14 +386,19 @@ func parseImportTasks(item, pathNode *yaml.Node, file string, handlers bool, bc 
 			inh.Vars, err = decodeMap(val, file, "vars")
 		case "tags":
 			inh.Tags = decodeStringList(val)
-		case "become", "become_user", "become_method", "become_flags", "become_exe":
+		case "become":
+			var b, ok bool
+			if b, ok, err = decodeBoolKW(inh, val, file, "become"); err == nil && ok {
+				inh.Become.Become = &b
+			}
+		case "become_user", "become_method", "become_flags", "become_exe":
 			err = parseBecomeKey(&inh.Become, key, val, file)
 		case "debugger":
 			inh.Debugger, err = parseDebugger(val, file)
 		case "environment":
 			inh.Environment, err = decodeMap(val, file, "environment")
 		case "no_log":
-			inh.NoLog, err = decodeBool(val, file, "no_log")
+			inh.NoLog, _, err = decodeBoolKW(inh, val, file, "no_log")
 		case "delegate_to":
 			inh.Delegate, _ = val.Str()
 		case "check_mode":
@@ -514,8 +520,12 @@ func parseRoleRefs(node *yaml.Node, file string) ([]*RoleRef, error) {
 var blockKeywords = map[string]bool{
 	"block": true, "rescue": true, "always": true, "name": true,
 	"when": true, "become": true, "become_user": true, "become_method": true,
-	"become_flags": true, "become_exe": true, "debugger": true, "vars": true, "tags": true, "environment": true, "no_log": true,
+	"vars": true, "tags": true, "environment": true, "no_log": true,
 	"ignore_errors": true, "check_mode": true, "diff": true, "delegate_to": true, "any_errors_fatal": true,
+	"run_once": true, "remote_user": true, "connection": true, "become_flags": true,
+	"become_exe": true, "collections": true, "module_defaults": true, "throttle": true,
+	"timeout": true, "ignore_unreachable": true, "debugger": true, "port": true,
+	"notify": true,
 }
 
 // parseBlock flattens a block/rescue/always entry: block-level keywords are
@@ -537,7 +547,12 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 		switch key {
 		case "when":
 			inh.When = decodeExprList(val)
-		case "become", "become_user", "become_method", "become_flags", "become_exe":
+		case "become":
+			var b, ok bool
+			if b, ok, err = decodeBoolKW(&inh, val, file, "become"); err == nil && ok {
+				inh.Become.Become = &b
+			}
+		case "become_user", "become_method", "become_flags", "become_exe":
 			err = parseBecomeKey(&inh.Become, key, val, file)
 		case "debugger":
 			inh.Debugger, err = parseDebugger(val, file)
@@ -548,9 +563,9 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 		case "environment":
 			inh.Environment, err = decodeMap(val, file, "environment")
 		case "no_log":
-			inh.NoLog, err = decodeBool(val, file, "no_log")
+			inh.NoLog, _, err = decodeBoolKW(&inh, val, file, "no_log")
 		case "ignore_errors":
-			inh.IgnoreErrors, err = decodeBool(val, file, "ignore_errors")
+			inh.IgnoreErrors, _, err = decodeBoolKW(&inh, val, file, "ignore_errors")
 		case "delegate_to":
 			inh.Delegate, _ = val.Str()
 		case "check_mode":
@@ -563,6 +578,17 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 			if b, err = decodeBool(val, file, "diff"); err == nil {
 				inh.Diff = &b
 			}
+		case "run_once":
+			inh.RunOnce, err = decodeBool(val, file, "run_once")
+		case "any_errors_fatal":
+			var b bool
+			if b, err = decodeBool(val, file, "any_errors_fatal"); err == nil {
+				inh.AnyErrorsFatal = &b
+			}
+		case "remote_user":
+			inh.RemoteUser, _ = val.Str()
+		case "connection":
+			inh.Connection, _ = val.Str()
 		}
 		if err != nil {
 			return nil, err
@@ -668,6 +694,22 @@ func applyBlockInheritance(t *Task, inh *Task) {
 		t.Diff = inh.Diff
 	}
 	t.RunOnce = t.RunOnce || inh.RunOnce
+	if t.RemoteUser == "" {
+		t.RemoteUser = inh.RemoteUser
+	}
+	if t.Connection == "" {
+		t.Connection = inh.Connection
+	}
+	// Templated keywords inherit unless the task sets its own value.
+	for k, v := range inh.KeywordTemplates {
+		if _, own := t.KeywordTemplates[k]; own || t.hasLiteral(k) {
+			continue
+		}
+		if t.KeywordTemplates == nil {
+			t.KeywordTemplates = map[string]string{}
+		}
+		t.KeywordTemplates[k] = v
+	}
 }
 
 func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
@@ -716,11 +758,12 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 	}
 	if moduleKeys[0] != "" {
 		moduleName := normalizeModuleName(moduleKeys[0])
-		if !ModuleKnown(moduleName) && !executorStatement(moduleName) {
+		if !ModuleKnown(moduleName) && !executorStatement(moduleName) && moduleName != "meta" {
 			return nil, errAt(file, node.MapGet(moduleKeys[0]),
 				"couldn't resolve module/action %q", moduleKeys[0])
 		}
 		task.Module = moduleName
+		task.Action = moduleKeys[0]
 
 		// Module args: map form, k=v string form, or null.
 		argsNode := node.MapGet(moduleKeys[0])
@@ -788,7 +831,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 		case "register":
 			task.Register, _ = val.Str()
 		case "ignore_errors":
-			b, err := decodeBool(val, file, "ignore_errors")
+			b, _, err := decodeBoolKW(task, val, file, "ignore_errors")
 			if err != nil {
 				return nil, err
 			}
@@ -803,19 +846,35 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 				task.Delay = 5
 			}
 		case "retries":
-			n, err := decodeInt(val, file, "retries")
+			n, ok, err := decodeIntKW(task, val, file, "retries")
 			if err != nil {
 				return nil, err
 			}
-			task.Retries = int(n)
+			if ok {
+				task.Retries = int(n)
+			} else {
+				task.Retries = 3 // placeholder until resolved per host
+			}
 			task.RetriesSet = true
 		case "delay":
-			n, err := decodeInt(val, file, "delay")
+			n, ok, err := decodeIntKW(task, val, file, "delay")
 			if err != nil {
 				return nil, err
 			}
-			task.Delay = int(n)
-		case "become", "become_user", "become_method", "become_flags", "become_exe":
+			if ok {
+				task.Delay = int(n)
+			} else {
+				task.Delay = 5
+			}
+		case "become":
+			b, ok, err := decodeBoolKW(task, val, file, "become")
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				task.Become.Become = &b
+			}
+		case "become_user", "become_method", "become_flags", "become_exe":
 			if err := parseBecomeKey(&task.Become, key, val, file); err != nil {
 				return nil, err
 			}
@@ -847,7 +906,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 		case "tags":
 			task.Tags = decodeStringList(val)
 		case "no_log":
-			b, err := decodeBool(val, file, "no_log")
+			b, _, err := decodeBoolKW(task, val, file, "no_log")
 			if err != nil {
 				return nil, err
 			}
@@ -855,11 +914,13 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 		case "delegate_to":
 			task.Delegate, _ = val.Str()
 		case "check_mode":
-			b, err := decodeBool(val, file, "check_mode")
+			b, ok, err := decodeBoolKW(task, val, file, "check_mode")
 			if err != nil {
 				return nil, err
 			}
-			task.CheckMode = &b
+			if ok {
+				task.CheckMode = &b
+			}
 		case "run_once":
 			b, err := decodeBool(val, file, "run_once")
 			if err != nil {
@@ -883,11 +944,13 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 		case "connection":
 			task.Connection, _ = val.Str()
 		case "diff":
-			b, err := decodeBool(val, file, "diff")
+			b, ok, err := decodeBoolKW(task, val, file, "diff")
 			if err != nil {
 				return nil, err
 			}
-			task.Diff = &b
+			if ok {
+				task.Diff = &b
+			}
 		case "throttle", "timeout", "ignore_unreachable", "collections",
 			"module_defaults", "port":
 			// Accepted: no effect on execution outcome here.
@@ -933,6 +996,7 @@ func parseActionValue(task *Task, node *yaml.Node, file string) error {
 			return errAt(file, node, "action: mapping form requires a module key")
 		}
 		task.Module = normalizeModuleName(mod)
+		task.Action = mod
 		args := map[string]any{}
 		for k, val := range m {
 			if k != "module" {
@@ -956,7 +1020,7 @@ func parseActionValue(task *Task, node *yaml.Node, file string) error {
 			return errAt(file, node, "%v", err)
 		}
 	}
-	if !ModuleKnown(task.Module) && !executorStatement(task.Module) {
+	if !ModuleKnown(task.Module) && !executorStatement(task.Module) && task.Module != "meta" {
 		return errAt(file, node, "couldn't resolve module/action %q", task.Module)
 	}
 	return nil
@@ -1021,6 +1085,7 @@ func parseModuleArgs(task *Task, node *yaml.Node, file string) error {
 // value (k=v pairs, or free-form for command/shell/raw).
 func ParseAdhocArgs(task *Task, module, raw string) error {
 	task.Module = normalizeModuleName(module)
+	task.Action = module
 	if freeFormModule(task.Module) {
 		free, kv := splitFreeForm(raw, task.Module)
 		task.FreeForm = free
@@ -1101,11 +1166,111 @@ func decodeBool(node *yaml.Node, file, key string) (bool, error) {
 	case bool:
 		return t, nil
 	case string:
-		// A template string like "{{ x }}" is resolved at run time; v0.1
-		// requires literal booleans on these keywords.
-		return false, errAt(file, node, "%q must be a literal boolean in this version", key)
+		if b, ok := ParseBool(t); ok {
+			return b, nil
+		}
+		if isTemplate(t) {
+			return false, errAt(file, node, "%q cannot be templated here", key)
+		}
+	case int64:
+		if b, ok := ParseBool(t); ok {
+			return b, nil
+		}
 	}
 	return false, errAt(file, node, "%q must be a boolean", key)
+}
+
+// ParseBool is Ansible's strict boolean(): the accepted true/false
+// spellings of a keyword value.
+func ParseBool(v any) (bool, bool) {
+	switch t := v.(type) {
+	case bool:
+		return t, true
+	case int64:
+		if t == 0 || t == 1 {
+			return t == 1, true
+		}
+	case int:
+		if t == 0 || t == 1 {
+			return t == 1, true
+		}
+	case float64:
+		if t == 0 || t == 1 {
+			return t == 1, true
+		}
+	case string:
+		switch strings.ToLower(strings.TrimSpace(t)) {
+		case "y", "yes", "on", "1", "true", "t":
+			return true, true
+		case "n", "no", "off", "0", "false", "f":
+			return false, true
+		}
+	}
+	return false, false
+}
+
+func isTemplate(s string) bool {
+	return strings.Contains(s, "{{") || strings.Contains(s, "{%")
+}
+
+// decodeBoolKW decodes a keyword that may be a template: a template is
+// stashed in task.KeywordTemplates for per-host resolution and ok=false.
+func decodeBoolKW(task *Task, node *yaml.Node, file, key string) (b, ok bool, err error) {
+	if s, isStr := node.Str(); isStr && isTemplate(s) {
+		if v, _ := node.Decode(); v != nil {
+			if _, str := v.(string); str {
+				setKeywordTemplate(task, key, s)
+				return false, false, nil
+			}
+		}
+	}
+	b, err = decodeBool(node, file, key)
+	if err == nil {
+		task.markLiteral(key)
+	}
+	return b, err == nil, err
+}
+
+// decodeIntKW is decodeBoolKW for integer keywords (retries, delay).
+func decodeIntKW(task *Task, node *yaml.Node, file, key string) (n int64, ok bool, err error) {
+	v, err := node.Decode()
+	if err != nil {
+		return 0, false, err
+	}
+	if s, isStr := v.(string); isStr {
+		if isTemplate(s) {
+			setKeywordTemplate(task, key, s)
+			return 0, false, nil
+		}
+		if i, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
+			task.markLiteral(key)
+			return i, true, nil
+		}
+	}
+	n, err = decodeInt(node, file, key)
+	if err == nil {
+		task.markLiteral(key)
+	}
+	return n, err == nil, err
+}
+
+func (t *Task) markLiteral(key string) {
+	if t.KeywordTemplates != nil {
+		delete(t.KeywordTemplates, key)
+	}
+	if t.literalKW == nil {
+		t.literalKW = map[string]bool{}
+	}
+	t.literalKW[key] = true
+}
+
+func (t *Task) hasLiteral(key string) bool { return t.literalKW[key] }
+
+func setKeywordTemplate(task *Task, key, s string) {
+	if task.KeywordTemplates == nil {
+		task.KeywordTemplates = map[string]string{}
+	}
+	task.KeywordTemplates[key] = s
 }
 
 func decodeInt(node *yaml.Node, file, key string) (int64, error) {

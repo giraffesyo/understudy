@@ -1,0 +1,35 @@
+---
+argument_specs:
+  main:
+    short_description: The main entry point for argspec_ok
+    options:
+      as_name:
+        type: str
+        required: true
+      as_port:
+        type: int
+        default: 80
+      as_enabled:
+        type: bool
+        default: true
+      as_mode:
+        type: str
+        choices: [fast, slow]
+        default: fast
+      as_tags:
+        type: list
+        elements: str
+        default: []
+      as_conf:
+        type: dict
+        options:
+          level:
+            type: int
+            required: true
+          label:
+            type: str
+  other:
+    options:
+      as_other:
+        type: str
+        required: true

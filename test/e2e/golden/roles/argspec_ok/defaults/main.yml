@@ -1,0 +1,3 @@
+as_port: "8080"
+as_enabled: "yes"
+as_mode: fast

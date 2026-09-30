@@ -1,0 +1,14 @@
+---
+- name: failrole inner block survives its own failure
+  block:
+    - name: failrole inner fail
+      fail:
+        msg: inner boom
+  rescue:
+    - name: failrole inner rescue
+      debug:
+        msg: inner rescued
+
+- name: failrole fails for real
+  fail:
+    msg: failrole boom

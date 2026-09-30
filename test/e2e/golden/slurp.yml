@@ -1,0 +1,23 @@
+# ansible.builtin.slurp: base64 and unarmored content, failures.
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - copy: {content: "hello\nworld\n", dest: "{{ workdir }}/s.txt"}
+
+    - slurp: {src: "{{ workdir }}/s.txt"}
+      register: r
+    - debug: {var: r}
+
+    - ansible.builtin.slurp: {path: "{{ workdir }}/s.txt", armor: false}
+      register: r
+    - debug: {var: r}
+
+    - slurp: {src: "{{ workdir }}/missing"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - slurp: {src: "{{ workdir }}"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}

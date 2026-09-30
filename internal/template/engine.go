@@ -60,10 +60,17 @@ func New() *Engine {
 	registerFilters(e)
 	registerAnsibleFilters(e)
 	registerRegexFilters(e)
+	registerCompatFilters(e)
 	registerTests(e)
 	registerAnsibleTests(e)
 	registerGlobals(e)
 	return e
+}
+
+// NewEvalCtx builds an evaluation context over vars, for callers that
+// invoke plugins directly (with_<lookup> loops).
+func (e *Engine) NewEvalCtx(vars VarGetter, pos Position) *EvalCtx {
+	return &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: pos}
 }
 
 // TemplateError is a template syntax or evaluation error, pointing at both
@@ -165,7 +172,9 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 			if err != nil {
 				return nil, err
 			}
-			ec.locals[s.name] = v
+			if err := ec.assignSet(s, v); err != nil {
+				return nil, err
+			}
 		}
 		v, err := ec.eval(single.expr)
 		if err != nil {

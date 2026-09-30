@@ -25,9 +25,10 @@ type forNode struct {
 }
 
 type setNode struct {
-	name string
-	attr string // {% set ns.attr = ... %}
-	val  Expr
+	names []string // tuple unpack targets (name unused), or nil
+	name  string
+	attr  string // {% set ns.attr = ... %}
+	val   Expr
 }
 
 func (ifNode) tmplNode()  {}
@@ -213,6 +214,10 @@ func (p *parser) parseIf() (tmplNode, error) {
 
 func (p *parser) parseFor() (tmplNode, error) {
 	node := &forNode{}
+	paren := p.kind() == tokLParen // {% for (k, v) in ... %}
+	if paren {
+		p.next()
+	}
 	for {
 		t, err := p.expect(tokName)
 		if err != nil {
@@ -224,6 +229,11 @@ func (p *parser) parseFor() (tmplNode, error) {
 			continue
 		}
 		break
+	}
+	if paren {
+		if _, err := p.expect(tokRParen); err != nil {
+			return nil, err
+		}
 	}
 	if !p.acceptName("in") {
 		return nil, p.errf("expected 'in' in for statement")
@@ -289,6 +299,18 @@ func (p *parser) parseSet() (tmplNode, error) {
 	if attr == "" && (p.kind() == tokBlockEnd || p.kind() == tokPipe) {
 		return p.parseSetBlock(t.val)
 	}
+	var names []string
+	if attr == "" && p.kind() == tokComma {
+		names = []string{t.val}
+		for p.kind() == tokComma {
+			p.next()
+			n, err := p.expect(tokName)
+			if err != nil {
+				return nil, err
+			}
+			names = append(names, n.val)
+		}
+	}
 	if p.kind() != tokAssign {
 		return nil, p.errf("expected '=' in set statement")
 	}
@@ -297,10 +319,25 @@ func (p *parser) parseSet() (tmplNode, error) {
 	if err != nil {
 		return nil, err
 	}
+	if p.kind() == tokComma { // {% set a, b = 1, 2 %}: a bare tuple
+		tuple := &listExpr{off: val.exprOff(), items: []Expr{val}}
+		for p.kind() == tokComma {
+			p.next()
+			if p.kind() == tokBlockEnd {
+				break
+			}
+			item, err := p.parseExpression()
+			if err != nil {
+				return nil, err
+			}
+			tuple.items = append(tuple.items, item)
+		}
+		val = tuple
+	}
 	if _, err := p.expect(tokBlockEnd); err != nil {
 		return nil, err
 	}
-	return &setNode{name: t.val, attr: attr, val: val}, nil
+	return &setNode{names: names, name: t.val, attr: attr, val: val}, nil
 }
 
 // renderOutput accumulates rendered template text.
@@ -357,16 +394,9 @@ func (ec *EvalCtx) execNodes(nodes []tmplNode, out *renderOutput) error {
 			if err != nil {
 				return err
 			}
-			if t.attr != "" {
-				target, _ := ec.lookupName(t.name)
-				ns, ok := target.(*namespaceValue)
-				if !ok {
-					return ec.errf(0, "cannot assign attribute on non-namespace object")
-				}
-				ns.attrs[t.attr] = v
-				continue
+			if err := ec.assignSet(t, v); err != nil {
+				return err
 			}
-			ec.locals[t.name] = v
 		default:
 			handled, err := ec.execExt(n, out)
 			if err != nil {
@@ -464,6 +494,38 @@ func (ec *EvalCtx) runLoop(node *forNode, iterVal any, depth int, out *renderOut
 			return err
 		}
 	}
+	return nil
+}
+
+// assignSet binds a {% set %}: one name, a namespace attribute, or a
+// tuple unpack (`{% set a, b = pair %}`).
+func (ec *EvalCtx) assignSet(t *setNode, v any) error {
+	if t.attr != "" {
+		target, _ := ec.lookupName(t.name)
+		ns, ok := target.(*namespaceValue)
+		if !ok {
+			return ec.errf(0, "cannot assign attribute on non-namespace object")
+		}
+		ns.attrs[t.attr] = v
+		return nil
+	}
+	if len(t.names) > 0 {
+		items, ok := v.([]any)
+		if !ok {
+			return ec.errf(0, "cannot unpack non-iterable %s object", typeName(v))
+		}
+		if len(items) != len(t.names) {
+			if len(items) > len(t.names) {
+				return ec.errf(0, "too many values to unpack (expected %d)", len(t.names))
+			}
+			return ec.errf(0, "not enough values to unpack (expected %d, got %d)", len(t.names), len(items))
+		}
+		for i, n := range t.names {
+			ec.locals[n] = items[i]
+		}
+		return nil
+	}
+	ec.locals[t.name] = v
 	return nil
 }
 
