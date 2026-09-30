@@ -1,0 +1,119 @@
+# community.general.alternatives over dpkg's update-alternatives (Ubuntu)
+# and chkconfig's alternatives (Rocky); Alpine has neither.
+- name: alternatives
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: fake programs
+      shell: |
+        for p in a b c; do
+          printf '#!/bin/sh\necho %s\n' $p > /usr/local/bin/golden-$p
+          chmod 755 /usr/local/bin/golden-$p
+          echo "man $p" > /usr/local/share/golden-$p.1
+        done
+      changed_when: false
+      ignore_errors: true
+
+    - name: install in check mode
+      alternatives: {name: golden, path: /usr/local/bin/golden-a, link: /usr/local/bin/golden, priority: 10}
+      check_mode: true
+      diff: true
+      ignore_errors: true
+
+    - name: install and select
+      alternatives: {name: golden, path: /usr/local/bin/golden-a, link: /usr/local/bin/golden, priority: 10}
+      diff: true
+      ignore_errors: true
+
+    - name: again is a no-op
+      community.general.alternatives: {name: golden, path: /usr/local/bin/golden-a, link: /usr/local/bin/golden, priority: 10}
+      diff: true
+      ignore_errors: true
+
+    - name: a second alternative, present only
+      alternatives: {name: golden, path: /usr/local/bin/golden-b, link: /usr/local/bin/golden, priority: 20, state: present}
+      diff: true
+      ignore_errors: true
+
+    - name: back to auto mode
+      alternatives: {name: golden, path: /usr/local/bin/golden-b, state: auto}
+      diff: true
+      ignore_errors: true
+
+    - name: auto again is a no-op
+      alternatives: {name: golden, path: /usr/local/bin/golden-b, state: auto}
+      ignore_errors: true
+
+    - name: select the lower priority one without a link (known name)
+      alternatives: {name: golden, path: /usr/local/bin/golden-a}
+      diff: true
+      ignore_errors: true
+
+    - name: change a priority
+      alternatives: {name: golden, path: /usr/local/bin/golden-a, priority: 30}
+      diff: true
+      ignore_errors: true
+
+    - name: with subcommands
+      alternatives:
+        name: golden
+        path: /usr/local/bin/golden-c
+        link: /usr/local/bin/golden
+        priority: 5
+        subcommands:
+          - {name: golden.1, link: /usr/local/share/golden.1, path: /usr/local/share/golden-c.1}
+      diff: true
+      ignore_errors: true
+
+    - name: with subcommands again
+      alternatives:
+        name: golden
+        path: /usr/local/bin/golden-c
+        link: /usr/local/bin/golden
+        priority: 5
+        slaves:
+          - {name: golden.1, link: /usr/local/share/golden.1, path: /usr/local/share/golden-c.1}
+      diff: true
+      ignore_errors: true
+
+    - name: display
+      command: update-alternatives --display golden
+      changed_when: false
+      ignore_errors: true
+
+    - name: remove one
+      alternatives: {name: golden, path: /usr/local/bin/golden-b, state: absent}
+      diff: true
+      ignore_errors: true
+
+    - name: remove it again
+      alternatives: {name: golden, path: /usr/local/bin/golden-b, state: absent}
+      diff: true
+      ignore_errors: true
+
+    - name: unknown name without a link
+      alternatives: {name: golden-none, path: /usr/local/bin/golden-a}
+      ignore_errors: true
+
+    - name: missing path
+      alternatives: {name: golden, path: /usr/local/bin/golden-zzz, link: /usr/local/bin/golden}
+      ignore_errors: true
+
+    - name: neither path nor family
+      alternatives: {name: golden}
+      ignore_errors: true
+
+    - name: family
+      alternatives: {name: golden, path: /usr/local/bin/golden-b, link: /usr/local/bin/golden, family: goldfam, priority: 7}
+      diff: true
+      ignore_errors: true
+
+    - name: select by family
+      alternatives: {name: golden, family: goldfam}
+      diff: true
+      ignore_errors: true
+
+    - name: a failing command
+      alternatives: {name: golden-rel, path: /usr/local/bin/golden-a, link: relative/golden}
+      ignore_errors: true
