@@ -22,10 +22,12 @@ func (l *Local) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecRes
 		}
 		return execPTYBecome(ctx, plain, startLocalPTY, cmd, opts)
 	}
-	shellCmd, stdin := applyBecome(cmd, opts)
-	c := exec.CommandContext(ctx, "/bin/sh", "-c", shellCmd)
-	if stdin != nil {
-		c.Stdin = stdin
+	if opts.Become != nil {
+		return execLocalSudo(ctx, cmd, opts)
+	}
+	c := exec.CommandContext(ctx, "/bin/sh", "-c", cmd)
+	if opts.Stdin != nil {
+		c.Stdin = opts.Stdin
 	}
 	var stdout, stderr bytes.Buffer
 	c.Stdout = &stdout

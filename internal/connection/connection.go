@@ -23,6 +23,10 @@ type BecomeSpec struct {
 	Password string  // empty: rely on NOPASSWD (sudo -n, doas -n) / root su
 	Exe      string  // become_exe: the escalation binary (default: the method)
 	Flags    *string // become_flags (nil: the method's default, "-H -S -n" for sudo)
+
+	// SuccessTimeout is the local connection's become_success_timeout
+	// (0: DefaultLocalBecomeTimeout).
+	SuccessTimeout time.Duration
 }
 
 // ExecOptions modify one Exec call.

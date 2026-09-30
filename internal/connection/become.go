@@ -294,12 +294,12 @@ func runPTYDialog(ctx context.Context, start startPTY, b *BecomeSpec, command, m
 			succeeded = true
 			continue
 		case becomeMissing(method, out):
-			return fail(fmt.Errorf("Missing %s password", method))
+			return fail(&BecomeError{Msg: fmt.Sprintf("Missing %s password", method)})
 		case sent && becomeFailed(method, out):
-			return fail(fmt.Errorf("Incorrect %s password", method))
+			return fail(&BecomeError{Msg: fmt.Sprintf("Incorrect %s password", method)})
 		case !sent && promptSeen(method, out):
 			if b.Password == "" {
-				return fail(fmt.Errorf("Missing %s password", method))
+				return fail(&BecomeError{Msg: fmt.Sprintf("Missing %s password", method)})
 			}
 			if _, err := io.WriteString(proc, b.Password+"\n"); err != nil {
 				return fail(err)
@@ -324,11 +324,11 @@ func runPTYDialog(ctx context.Context, start startPTY, b *BecomeSpec, command, m
 			proc.Wait()
 			switch {
 			case becomeMissing(method, out):
-				return fmt.Errorf("Missing %s password", method)
+				return &BecomeError{Msg: fmt.Sprintf("Missing %s password", method)}
 			case becomeFailed(method, out) && sent:
-				return fmt.Errorf("Incorrect %s password", method)
+				return &BecomeError{Msg: fmt.Sprintf("Incorrect %s password", method)}
 			case promptSeen(method, out) && !sent:
-				return fmt.Errorf("Missing %s password", method)
+				return &BecomeError{Msg: fmt.Sprintf("Missing %s password", method)}
 			}
 			return fmt.Errorf("privilege escalation with %s failed: %s", method, scrub(string(out)))
 		case <-timer.C:

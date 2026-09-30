@@ -220,6 +220,11 @@ func (d *Default) Included(task *playbook.Task, target string, hosts []string, i
 func (d *Default) HostUnreachable(host string, task *playbook.Task, msg string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if strings.HasPrefix(msg, "Task failed: ") {
+		// A connection failure raised while running the task (become
+		// timing out) carries its exception: the error block comes first.
+		d.taskError(task, &agentproto.Result{Failed: true, Msg: msg, Origin: "verbatim"})
+	}
 	res := map[string]any{"changed": false, "msg": msg, "unreachable": true}
 	d.display(cBrightRed, fmt.Sprintf("fatal: [%s]: UNREACHABLE! => %s", host, template.PyJSON(res, d.indent(false), true, false)))
 }

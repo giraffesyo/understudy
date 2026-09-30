@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -192,7 +193,8 @@ func (r *Runner) resolvePlayHosts(play *playbook.Play) ([]string, error) {
 	return names, nil
 }
 
-// Run executes all plays and returns the exit code (0 ok, 2 failures).
+// Run executes all plays and returns the exit code (0 ok, 2 failures, 4
+// unreachable hosts).
 func (r *Runner) Run(ctx context.Context, plays []*playbook.Play) (int, error) {
 	for _, play := range plays {
 		if err := r.runPlay(ctx, play); err != nil {
@@ -207,12 +209,18 @@ func (r *Runner) Run(ctx context.Context, plays []*playbook.Play) (int, error) {
 		}
 	}
 	r.Callback.Recap(r.stats, r.order)
+	// TaskQueueManager's RUN_UNREACHABLE_HOSTS (4) outranks
+	// RUN_FAILED_HOSTS (2): unreachable hosts are remembered for the run.
+	code := 0
 	for _, st := range r.stats {
-		if st.Failed > 0 || st.Unreachable > 0 {
-			return 2, nil
+		if st.Unreachable > 0 {
+			return 4, nil
+		}
+		if st.Failed > 0 {
+			code = 2
 		}
 	}
-	return 0, nil
+	return code, nil
 }
 
 func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
@@ -1573,6 +1581,15 @@ func (r *Runner) effectiveBecome(play *playbook.Play, task *playbook.Task, vctx 
 	if spec.User == "" {
 		spec.User = "root"
 	}
+	// The local connection's become_success_timeout (values below 1 use
+	// the default).
+	if s, ok, err := hostVar("ansible_local_become_success_timeout"); err != nil {
+		return nil, err
+	} else if ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n >= 1 {
+			spec.SuccessTimeout = time.Duration(n) * time.Second
+		}
+	}
 	return spec, nil
 }
 
@@ -1602,15 +1619,38 @@ func (r *Runner) runModule(ctx context.Context, host, target string, kw connecti
 		if m, ok := yaml.AsMap(req.Args).(map[string]any); ok {
 			req.Args = m
 		}
-		res := modules.Run(req, payload)
-		res.Origin = moduleOrigin(res)
-		return res, nil
+		if become == nil {
+			res := modules.Run(req, payload)
+			res.Origin = moduleOrigin(res)
+			return res, nil
+		}
+		// Under become the module runs in a child of this binary, started
+		// through the become method like the agent on a remote host.
+		if !modules.LocalAgent {
+			return nil, fmt.Errorf("become on a local connection needs a binary that serves the understudy agent")
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			return nil, err
+		}
+		client := &connection.AgentClient{Conn: connection.NewLocal(), AgentPath: connection.ShellQuote(exe) + " " + modules.LocalAgentArg}
+		res, err := client.Run(ctx, req, payload, become)
+		if bf := actions.BecomeFailure(err); bf != nil {
+			return bf, nil
+		}
+		if res != nil {
+			res.Origin = moduleOrigin(res)
+		}
+		return res, err
 	}
 	agentClient, err := r.Conns.AgentWith(ctx, target, kw)
 	if err != nil {
 		return nil, err
 	}
 	res, err := agentClient.Run(ctx, req, payload, become)
+	if bf := actions.BecomeFailure(err); bf != nil {
+		return bf, nil
+	}
 	if res != nil {
 		res.Origin = moduleOrigin(res)
 	}

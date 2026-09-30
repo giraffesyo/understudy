@@ -273,7 +273,10 @@ where meaningful, `--diff`.
 `ProxyCommand` from `ansible_ssh_common_args`) and `local`. `become` via
 `sudo`, `su` or `doas` (su and doas answer their password prompt on a
 pseudo-terminal), configured by keywords or the `ansible_become_*`
-connection variables.
+connection variables, over either connection: on `local`, an escalated
+task's module runs in a child of the understudy binary started through
+the become method (a program embedding the Go API serves as that child
+itself).
 
 ## Architecture
 
