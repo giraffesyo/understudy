@@ -80,5 +80,8 @@
     - {include_tasks: includes/inc_a.yml, register: r}
     - debug: {msg: "{{ r }}"}
     - {command: "tar cf {{ d }}/a.tar -C {{ d }} c"}
+    # Idempotence runs extract within the same second as the last one;
+    # start clean so the result does not depend on mtime granularity.
+    - {file: {path: "{{ d }}/dir/c", state: absent}}
     - {unarchive: {src: "{{ d }}/a.tar", dest: "{{ d }}/dir", remote_src: true}, register: r}
     - debug: {msg: "{{ r.keys() | join(' ') }}"}
