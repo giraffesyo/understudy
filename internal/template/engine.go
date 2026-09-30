@@ -138,6 +138,10 @@ func Cause(err error) (msg string, ok bool) {
 		}
 		return "Error rendering template: " + te.Msg, true
 	}
+	var re *RecursionError
+	if errors.As(err, &re) {
+		return re.Error(), true
+	}
 	return "", false
 }
 

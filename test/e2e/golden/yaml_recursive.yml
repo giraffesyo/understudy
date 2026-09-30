@@ -36,3 +36,8 @@
       debug:
         var: rd.self
       ignore_errors: true
+
+    - name: template the recursive dict
+      debug:
+        msg: "{{ rd }}"
+      ignore_errors: true
