@@ -285,6 +285,18 @@
       register: r
     - debug: {var: r.json}
 
+    - name: url_password is masked in the result (no_log)
+      uri:
+        url: "{{ u }}/echo?s3cret"
+        method: POST
+        body: "pw=s3cret"
+        unix_socket: "{{ sock }}"
+        url_username: alice
+        url_password: s3cret
+        force_basic_auth: true
+      register: r
+    - debug: {var: r}
+
     - name: wrong password
       uri: {url: "{{ u }}/basic", unix_socket: "{{ sock }}", user: alice, password: nope}
       register: r

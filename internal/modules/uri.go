@@ -312,7 +312,7 @@ func uriModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 			uresp["content"] = ""
 		}
 	}
-	return uriResult(uresp, !statusOK)
+	return uriNoLog(uriResult(uresp, !statusOK), p.Str("url_password"))
 }
 
 // uriResult turns the module's result dict into a Result.
@@ -334,6 +334,53 @@ func uriResult(m map[string]any, failed bool) *agentproto.Result {
 	if _, ok := m["msg"]; ok && res.Msg == "" {
 		setMsgEmpty(res)
 	}
+	return res
+}
+
+// uriNoKeyMask are the result keys sanitize_keys leaves alone.
+var uriNoKeyMask = map[string]bool{"msg": true, "exception": true, "warnings": true, "deprecations": true,
+	"failed": true, "skipped": true, "changed": true, "rc": true, "stdout": true, "stderr": true,
+	"elapsed": true, "path": true, "location": true, "content_type": true}
+
+// uriNoLog applies the url_password no_log value: sanitize_keys on the
+// result's keys, then remove_values on every string.
+func uriNoLog(res *agentproto.Result, secret string) *agentproto.Result {
+	if secret == "" {
+		return res
+	}
+	const mask = "********"
+	var scrub func(v any) any
+	scrub = func(v any) any {
+		switch t := v.(type) {
+		case string:
+			if t == secret {
+				return "VALUE_SPECIFIED_IN_NO_LOG_PARAMETER"
+			}
+			return strings.ReplaceAll(t, secret, mask)
+		case []any:
+			out := make([]any, len(t))
+			for i, e := range t {
+				out[i] = scrub(e)
+			}
+			return out
+		case map[string]any:
+			out := make(map[string]any, len(t))
+			for k, e := range t {
+				out[strings.ReplaceAll(k, secret, mask)] = scrub(e)
+			}
+			return out
+		}
+		return v
+	}
+	res.Msg = strings.ReplaceAll(res.Msg, secret, mask)
+	extra := make(map[string]any, len(res.Extra))
+	for k, v := range res.Extra {
+		if !uriNoKeyMask[k] {
+			k = strings.ReplaceAll(k, secret, mask)
+		}
+		extra[k] = scrub(v)
+	}
+	res.Extra = extra
 	return res
 }
 
