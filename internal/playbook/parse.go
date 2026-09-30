@@ -692,7 +692,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 	}
 	if moduleKeys[0] != "" {
 		moduleName := normalizeModuleName(moduleKeys[0])
-		if !ModuleKnown(moduleName) && !executorStatement(moduleName) {
+		if !ModuleKnown(moduleName) && !executorStatement(moduleName) && moduleName != "meta" {
 			return nil, errAt(file, node.MapGet(moduleKeys[0]),
 				"couldn't resolve module/action %q", moduleKeys[0])
 		}
@@ -952,7 +952,7 @@ func parseActionValue(task *Task, node *yaml.Node, file string) error {
 			return errAt(file, node, "%v", err)
 		}
 	}
-	if !ModuleKnown(task.Module) && !executorStatement(task.Module) {
+	if !ModuleKnown(task.Module) && !executorStatement(task.Module) && task.Module != "meta" {
 		return errAt(file, node, "couldn't resolve module/action %q", task.Module)
 	}
 	return nil

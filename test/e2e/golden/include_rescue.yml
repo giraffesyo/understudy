@@ -6,6 +6,9 @@
   hosts: all
   gather_facts: false
   tasks:
+    - name: meta tasks inside an included file resolve
+      include_tasks: includes/inc_meta.yml
+
     - name: a block whose first task fails is rescued first
       block:
         - name: fail in the includer
