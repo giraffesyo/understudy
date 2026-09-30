@@ -52,6 +52,23 @@
       mysql_db: {name: [e2e_app, e2e_other], state: dump, target: /tmp/e2e_both.sql, single_transaction: true, quick: false, ignore_tables: [e2e_app.nope], <<: *maria}
       register: r
     - debug: var=r.executed_commands
+    - name: a password user for TCP logins
+      become: true
+      mysql_user: {name: e2e_dumper, host: localhost, password: "dump'pw", priv: "e2e_app.*:ALL", <<: *maria}
+    - name: dump over TCP with a password (censored in executed_commands)
+      mysql_db:
+        name: e2e_app
+        state: dump
+        target: /tmp/e2e_tcp.sql
+        login_host: 127.0.0.1
+        login_user: e2e_dumper
+        login_password: "dump'pw"
+        hex_blob: true
+        skip_lock_tables: true
+        dump_extra_args: --no-tablespaces
+        config_file: ""
+      register: r
+    - debug: var=r
     - name: dump a missing database
       become: true
       mysql_db: {name: e2e_missing, state: dump, target: /tmp/x.sql, <<: *maria}

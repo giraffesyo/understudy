@@ -120,7 +120,7 @@ CMD ["sh", "-c", "service mariadb start && exec /usr/sbin/sshd -D"]`
 // resetMySQLEnv drops everything the corpus creates.
 func resetMySQLEnv(t *testing.T) {
 	exec.Command("docker", "exec", myTarget, "sh", "-c",
-		"rm -f /tmp/e2e_*.sql* /tmp/x.sql /home/tester/.my.cnf; mariadb -e \"DROP DATABASE IF EXISTS e2e_app; DROP DATABASE IF EXISTS e2e_other; DROP USER IF EXISTS 'e2e_bob'@'%'\"").Run()
+		"rm -f /tmp/e2e_*.sql* /tmp/x.sql /home/tester/.my.cnf; mariadb -e \"DROP DATABASE IF EXISTS e2e_app; DROP DATABASE IF EXISTS e2e_other; DROP USER IF EXISTS 'e2e_bob'@'%'; DROP USER IF EXISTS 'e2e_dumper'@'localhost'\"").Run()
 	exec.Command("docker", "exec", myMySQL8, "mysql", "-uroot", "-prootpw", "-h127.0.0.1", "-e",
 		"DROP USER IF EXISTS 'e2e_carol'@'localhost'; DROP DATABASE IF EXISTS e2e_cfg; SET GLOBAL max_connections = 151").Run()
 }
