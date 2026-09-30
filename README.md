@@ -222,7 +222,7 @@ understudy vault view group_vars/all/vault.yml --vault-password-file .vault-pass
 
 **Language & structure** — plays, roles (with `meta` dependencies, defaults,
 and vars, argument-spec validation, `roles_path`), `import_tasks`/`import_role` (static) and
-`include_tasks`/`include_role` (dynamic: per-host targets, loops, `when`),
+`include_tasks`/`include_role` (dynamic: per-host targets, loops, `when`, `apply`),
 handlers with `notify`/`listen`, `block`/`rescue`/`always`, tags, `vars_prompt`, the `linear`, `free`,
 `host_pinned` and `debug` strategies (with the task debugger and the
 `debugger` keyword), `serial`
@@ -231,7 +231,8 @@ rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 `reset_connection`, `refresh_inventory`, `noop`).
 
 **Task keywords** — `when`, `loop` / `with_*` (`items`, `nested`, `together`, `subelements`,
-`sequence`, `dict`, `indexed_items`, `flattened`, `lines`, `fileglob`, ...), `register`,
+`sequence`, `dict`, `indexed_items`, `flattened`, `lines`, `fileglob`, ...) with
+`loop_control` (`loop_var`, `index_var`, `label`, `extended`), `register`,
 `until`/`retries`/`delay`, `changed_when`, `failed_when`, `ignore_errors`,
 `become`/`become_user`/`become_method`/`become_flags`/`become_exe`, `vars`,
 `environment` (mappings, templates or a list of them, merged play, role,
@@ -243,7 +244,7 @@ fire-and-forget).
 
 **Templating** — a Jinja2-compatible engine with `if`/`for`/`set`, macros and
 `call`, `include`/`import`/`extends`, block `set`/`filter`/`with`, recursive
-loops and `namespace()`, ~70
+loops and `namespace()`, in-place list/dict methods (`append`, `update`, ...), ~70
 filters (`default`, `combine`, `selectattr`, `regex_replace`, `to_json`,
 `map`, `ternary`, `hash`, …), ~50 tests (`version`, `match`, task-result
 tests, …), chainable strict `Undefined`, and the native-types rule for
