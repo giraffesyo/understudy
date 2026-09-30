@@ -22,6 +22,7 @@ type Config struct {
 	Source          string // which file was loaded ("" = defaults)
 
 	StdoutCallback      string
+	CallbackPlugins     []string // callback_plugins / ANSIBLE_CALLBACK_PLUGINS
 	CallbacksEnabled    []string
 	DisplayOkHosts      bool
 	DisplaySkippedHosts bool
@@ -110,6 +111,8 @@ func applyINI(cfg *Config, content string) {
 				}
 			case "remote_tmp":
 				cfg.RemoteTmp = val
+			case "callback_plugins":
+				cfg.CallbackPlugins = splitColonList(val)
 			case "stdout_callback":
 				cfg.StdoutCallback = val
 			case "callbacks_enabled", "callback_whitelist", "callback_enabled":
@@ -150,6 +153,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ANSIBLE_REMOTE_TMP"); v != "" {
 		cfg.RemoteTmp = v
+	}
+	if v := os.Getenv("ANSIBLE_CALLBACK_PLUGINS"); v != "" {
+		cfg.CallbackPlugins = splitColonList(v)
 	}
 	if v := os.Getenv("ANSIBLE_STDOUT_CALLBACK"); v != "" {
 		cfg.StdoutCallback = v
@@ -201,6 +207,17 @@ func splitList(s string) []string {
 	for _, p := range strings.Split(s, ",") {
 		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// splitColonList splits Ansible's pathspec lists (colon-separated).
+func splitColonList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ":") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, expandUser(p))
 		}
 	}
 	return out

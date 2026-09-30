@@ -609,7 +609,7 @@ func playbookCmd(args []string) int {
 	for _, b := range books {
 		all = append(all, b.plays...)
 	}
-	cb, err := buildCallback(p.verbosity, false)
+	cb, err := buildCallback(p.verbosity, false, filepath.Dir(p.positional[0]))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR]: %v\n", err)
 		return 1
@@ -780,7 +780,7 @@ func adhocCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
 		return 1
 	}
-	cb, err := buildCallback(p.verbosity, true)
+	cb, err := buildCallback(p.verbosity, true, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR]: %v\n", err)
 		return 1
@@ -857,7 +857,7 @@ func expandImports(play *playbook.Play, tasks []*playbook.Task) []*playbook.Task
 }
 
 // buildCallback loads the configured stdout and aggregate callbacks.
-func buildCallback(verbosity int, adhoc bool) (executor.Callback, error) {
+func buildCallback(verbosity int, adhoc bool, playbookDir string) (executor.Callback, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err
@@ -869,6 +869,7 @@ func buildCallback(verbosity int, adhoc bool) (executor.Callback, error) {
 		DisplaySkippedHosts: cfg.DisplaySkippedHosts,
 		Verbosity:           verbosity,
 		Adhoc:               adhoc,
+		PluginDirs:          callback.PluginDirs(cfg.CallbackPlugins, playbookDir),
 	}
 	if adhoc {
 		// The ad-hoc command uses minimal and ignores stdout_callback unless
