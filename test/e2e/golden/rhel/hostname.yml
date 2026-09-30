@@ -1,0 +1,44 @@
+---
+# hostname's systemd strategy (hostnamectl) on a systemd Rocky container.
+# The reset unmounts docker's /etc/hostname bind mount (hostnamed replaces
+# the file) and sets the hostname back to rhelgolden.example.
+- name: hostname with systemd
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: check mode
+      hostname: {name: web01.golden.test}
+      check_mode: true
+
+    - name: set it
+      hostname: {name: web01.golden.test}
+      register: set
+
+    - name: facts and diff
+      assert:
+        that:
+          - set is changed
+          - set.ansible_facts.ansible_hostname == 'web01'
+          - set.ansible_facts.ansible_nodename == 'web01.golden.test'
+          - set.diff.before == 'hostname = rhelgolden.example\n'
+          - set.diff.after == 'hostname = web01.golden.test\n'
+
+    - name: again is a no-op
+      hostname: {name: web01.golden.test, use: systemd}
+
+    - name: static and transient names
+      command: hostnamectl --static status
+      register: static
+      changed_when: false
+
+    - assert:
+        that: static.stdout == 'web01.golden.test'
+
+    - name: too long for systemd
+      hostname: {name: "{{ 'a' * 65 }}"}
+      register: long
+      ignore_errors: true
+
+    - assert:
+        that: long.msg == 'name cannot be longer than 64 characters on systemd servers, try a shorter name'
