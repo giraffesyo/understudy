@@ -654,3 +654,6 @@ func (r *rangeValue) materialize() []any {
 	}
 	return out
 }
+
+// Truthy is Python truthiness for a rendered value.
+func Truthy(v any) bool { return truthy(v) }

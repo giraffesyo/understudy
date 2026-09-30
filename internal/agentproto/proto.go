@@ -75,6 +75,10 @@ type ErrorChain struct {
 	Outer string // outer event message, shown with the source context
 	Inner string // cause message
 	Help  string // the cause's help text
+
+	// InnerFile/InnerLine/InnerCol locate the cause's origin, when known.
+	InnerFile           string
+	InnerLine, InnerCol int
 }
 
 // causeKey carries Result.Cause across the agent wire.

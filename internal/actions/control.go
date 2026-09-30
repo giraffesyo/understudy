@@ -86,25 +86,35 @@ func runAssert(_ context.Context, actx *Context, args map[string]any, _ string) 
 	if !ok {
 		return agentproto.Fail("assert requires the 'that' argument")
 	}
-	var exprs []string
-	switch t := that.(type) {
-	case string:
-		exprs = []string{t}
-	case []any:
-		for _, e := range t {
-			s, isStr := e.(string)
-			if !isStr {
-				return agentproto.Fail("assert 'that' entries must be strings")
-			}
-			exprs = append(exprs, s)
-		}
-	default:
-		return agentproto.Fail("assert 'that' must be a string or list of strings")
+	// that: _check_type_list_strict (a non-list becomes a one-item list);
+	// each entry is a conditional: a bool is taken as is, a string is
+	// evaluated, and anything else is a broken conditional.
+	entries, isList := that.([]any)
+	if !isList {
+		entries = []any{that}
 	}
-	for _, expr := range exprs {
-		ok, err := actx.Vars.EvalWhen([]string{expr})
-		if err != nil {
-			return agentproto.Fail("assert: error evaluating %q: %v", expr, err)
+	for _, e := range entries {
+		var ok bool
+		switch t := e.(type) {
+		case bool:
+			ok = t
+		case string:
+			var err error
+			ok, err = actx.Vars.EvalWhen([]string{t})
+			if err != nil {
+				return agentproto.Fail("assert: error evaluating %q: %v", t, err)
+			}
+		default:
+			res := agentproto.Fail("Task failed: Conditional expressions must be strings.")
+			res.ErrorChain = &agentproto.ErrorChain{
+				Outer: "Task failed.",
+				Inner: "Conditional expressions must be strings.",
+				Help:  "Broken conditionals can be temporarily allowed with the `ALLOW_BROKEN_CONDITIONALS` configuration option.",
+			}
+			if p, has := actx.ArgPos["that"]; has && !isList {
+				res.ErrorChain.InnerFile, res.ErrorChain.InnerLine, res.ErrorChain.InnerCol = p.File, p.Line, p.Col
+			}
+			return res
 		}
 		if !ok {
 			msg := "Assertion failed"
@@ -116,9 +126,9 @@ func runAssert(_ context.Context, actx *Context, args map[string]any, _ string) 
 			return &agentproto.Result{
 				Failed: true,
 				Msg:    msg,
-				Extra:  map[string]any{"assertion": expr, "evaluated_to": false},
+				Extra:  map[string]any{"assertion": e, "evaluated_to": false},
 
-				VerboseAlways: true,
+				VerboseAlways: !isTruthy(args["quiet"]),
 			}
 		}
 	}
@@ -126,7 +136,7 @@ func runAssert(_ context.Context, actx *Context, args map[string]any, _ string) 
 	if m, has := args["success_msg"].(string); has && m != "" {
 		msg = m
 	}
-	return &agentproto.Result{VerboseAlways: true, Msg: msg}
+	return &agentproto.Result{VerboseAlways: !isTruthy(args["quiet"]), Msg: msg}
 }
 
 func toInt(v any) (int64, bool) {

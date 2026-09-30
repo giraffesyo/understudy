@@ -392,6 +392,12 @@ func (d *Default) taskErrorChain(task *playbook.Task, ec *agentproto.ErrorChain)
 	}
 	b.WriteString("\n<<< caused by >>>\n\n")
 	switch {
+	case ec.InnerFile != "" && ec.InnerLine > 0:
+		fmt.Fprintf(&b, "%s\nOrigin: %s:%d:%d\n\n", ec.Inner, ec.InnerFile, ec.InnerLine, ec.InnerCol)
+		b.WriteString(d.excerpt(ec.InnerFile, ec.InnerLine, ec.InnerCol))
+		if ec.Help != "" {
+			b.WriteString("\n" + ec.Help)
+		}
 	case ec.Help != "" && !strings.Contains(ec.Inner, "\n") && !strings.Contains(ec.Help, "\n"):
 		b.WriteString(ec.Inner + " " + ec.Help)
 	case ec.Help != "":

@@ -111,6 +111,7 @@ type Task struct {
 	SrcDir         string     // role root for src resolution ("" = playbook dir)
 	RoleName       string     // owning role (for "role : task" banners); "" = play task
 	Src            Pos
+	ArgPos         map[string]Pos // source position of each map-form module arg value
 }
 
 // RoleRef is one entry in a play's roles: list.

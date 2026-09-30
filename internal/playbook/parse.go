@@ -921,6 +921,13 @@ func parseModuleArgs(task *Task, node *yaml.Node, file string) error {
 	}
 	if m, ok := yaml.PlainMap(v); ok {
 		task.Args = m
+		if node.Kind == yaml.MappingNode {
+			task.ArgPos = map[string]Pos{}
+			for i := 0; i+1 < len(node.Content); i += 2 {
+				val := node.Content[i+1]
+				task.ArgPos[node.Content[i].Value] = Pos{File: file, Line: val.Line, Col: val.Column}
+			}
+		}
 		return nil
 	}
 	switch t := v.(type) {

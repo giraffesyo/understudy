@@ -1051,6 +1051,13 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 	// Template module args, dropping omitted ones.
 	args := make(map[string]any, len(task.Args))
 	for k, raw := range task.Args {
+		if k == "that" && isAssertModule(task.Module) {
+			// assert's finalize_task_arg: 'that' stays raw (each entry is
+			// a conditional), except that a string that is entirely a
+			// template may resolve to a list of conditionals.
+			args[k] = assertThat(vctx, raw)
+			continue
+		}
 		v, err := vctx.TemplateValue(raw)
 		if err != nil {
 			return agentproto.Fail("error templating argument %q: %v", k, err)
@@ -1245,6 +1252,7 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		SrcDir:       task.SrcDir,
 		TaskDir:      taskDir(task),
 		Verbosity:    r.Opts.Verbosity,
+		ArgPos:       task.ArgPos,
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
 			return r.runModule(ctx, host, target, kw, inProcess, become, task, req, payload)
 		},
@@ -1837,4 +1845,27 @@ func (r *Runner) runParallel(ctx context.Context, play *playbook.Play, tasks []*
 		})
 	}
 	return g.Wait()
+}
+
+func isAssertModule(m string) bool {
+	return m == "assert" || m == "ansible.builtin.assert" || m == "ansible.legacy.assert"
+}
+
+func assertThat(vctx *vars.Context, raw any) any {
+	s, ok := raw.(string)
+	if !ok {
+		return raw
+	}
+	if !(strings.HasPrefix(s, "{{") && strings.HasSuffix(s, "}}") ||
+		strings.HasPrefix(s, "{%") && strings.HasSuffix(s, "%}")) {
+		return raw
+	}
+	v, err := vctx.TemplateValue(raw)
+	if err != nil {
+		return raw
+	}
+	if l, isList := v.([]any); isList {
+		return l
+	}
+	return raw
 }
