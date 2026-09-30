@@ -133,6 +133,7 @@ type parsedArgs struct {
 	step           bool
 	listTags       bool
 	sshArgs        []string // --ssh-common-args & co: not applicable to the native client
+	prog           string   // the command ansible-core's parser names (-vv version banner)
 }
 
 // cliFlag is one ansible-playbook/ansible option: its spellings, whether it
@@ -306,20 +307,42 @@ func setupVault(p *parsedArgs) (*vault.Secrets, error) {
 	return secrets, nil
 }
 
+// announceConfig is CLI.run's opening: at -vv the version banner
+// (display.vv of --version, naming understudy in place of ansible-core's
+// Python details), at -v the configuration source.
+func announceConfig(p *parsedArgs) {
+	if p.verbosity == 0 {
+		return
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return
+	}
+	configFile := ""
+	if cfg.Source != "" {
+		configFile, _ = filepath.Abs(cfg.Source)
+	}
+	if p.verbosity > 1 {
+		shown := configFile
+		if shown == "" {
+			shown = "None"
+		}
+		exe, _ := os.Executable()
+		displayVerbose(fmt.Sprintf("%s [understudy %s]\n  config file = %s\n  executable location = %s", p.prog, version, shown, exe))
+	}
+	if configFile == "" {
+		displayVerbose("No config file found; using defaults")
+	} else {
+		displayVerbose(fmt.Sprintf("Using %s as config file", configFile))
+	}
+}
+
 // buildOptions assembles executor options from CLI flags layered over
 // ansible.cfg (CLI > env > cfg > defaults), running -k/-K prompts once.
 func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (executor.Options, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return executor.Options{}, err
-	}
-	if p.verbosity > 0 {
-		// ansible-playbook -v announces its configuration source first.
-		if cfg.Source == "" {
-			fmt.Println("No config file found; using defaults")
-		} else if abs, err := filepath.Abs(cfg.Source); err == nil {
-			fmt.Printf("Using %s as config file\n", abs)
-		}
 	}
 	forks := p.forks
 	if forks <= 0 {
@@ -362,6 +385,7 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		Tags:          splitCSV(p.tags),
 		SkipTags:      splitCSV(p.skipTags),
 
+		NoColor:               callback.NoColor(),
 		NoDeprecationWarnings: !cfg.DeprecationWarnings,
 		InjectFactsSet:        cfg.InjectFactsSet,
 		TaskTimeout:           cfg.TaskTimeout,
@@ -612,6 +636,8 @@ func playbookCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "understudy: %v\n", err)
 		return 1
 	}
+	p.prog = "ansible-playbook"
+	announceConfig(p)
 	if len(p.positional) == 0 {
 		fmt.Fprintln(os.Stderr, "understudy playbook: at least one playbook file is required")
 		return 1
@@ -688,6 +714,18 @@ func playbookCmd(args []string) int {
 		}
 	}
 
+	if p.verbosity > 1 && (p.syntax || p.listTasks || p.listTags || p.listHosts) {
+		// PlaybookExecutor loads each playbook as a run would, before
+		// the listing.
+		for _, b := range books {
+			for _, pl := range b.plays {
+				for _, n := range pl.LoadNotes {
+					displayVerbose(n)
+				}
+			}
+			displayVerbose(fmt.Sprintf("%d plays in %s", len(b.plays), b.path))
+		}
+	}
 	if p.syntax {
 		for _, b := range books {
 			fmt.Printf("\nplaybook: %s\n", b.path)
@@ -742,16 +780,20 @@ func playbookCmd(args []string) int {
 		return 1
 	}
 	var all [][]*playbook.Play
+	var paths []string
 	for _, b := range books {
 		all = append(all, b.plays)
+		paths = append(paths, b.path)
 	}
-	cb, err := buildCallback(p.verbosity, false, filepath.Dir(p.positional[0]))
+	cb, cbNotes, err := buildCallback(p.verbosity, false, filepath.Dir(p.positional[0]))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR]: %v\n", err)
 		return 1
 	}
 	runner := executor.NewRunner(inv, cb, opts)
 	runner.Limit = p.limit
+	runner.BookPaths = paths
+	runner.CallbackNotes = cbNotes
 	code, err := runner.RunPlaybooks(context.Background(), all)
 	if err != nil {
 		printError(err)
@@ -869,6 +911,8 @@ func adhocCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "understudy: %v\n", err)
 		return 1
 	}
+	p.prog = "ansible"
+	announceConfig(p)
 	if len(p.positional) != 1 {
 		fmt.Fprintln(os.Stderr, "understudy adhoc: a host pattern is required")
 		return 1
@@ -923,7 +967,7 @@ func adhocCmd(args []string) int {
 		printError(err)
 		return 1
 	}
-	cb, err := buildCallback(p.verbosity, true, "")
+	cb, cbNotes, err := buildCallback(p.verbosity, true, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR]: %v\n", err)
 		return 1
@@ -933,6 +977,7 @@ func adhocCmd(args []string) int {
 	}
 	runner := executor.NewRunner(inv, cb, opts)
 	runner.Limit = p.limit
+	runner.CallbackNotes = cbNotes
 	code, err := runner.Run(context.Background(), []*playbook.Play{play})
 	if err != nil {
 		printError(err)
@@ -1004,10 +1049,10 @@ func expandImports(play *playbook.Play, tasks []*playbook.Task) []*playbook.Task
 }
 
 // buildCallback loads the configured stdout and aggregate callbacks.
-func buildCallback(verbosity int, adhoc bool, playbookDir string) (executor.Callback, error) {
+func buildCallback(verbosity int, adhoc bool, playbookDir string) (executor.Callback, []string, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	s := callback.Settings{
 		StdoutCallback:      cfg.StdoutCallback,
@@ -1023,7 +1068,41 @@ func buildCallback(verbosity int, adhoc bool, playbookDir string) (executor.Call
 		// bin_ansible_callbacks is set; aggregate callbacks do not load.
 		s.StdoutCallback, s.CallbacksEnabled = "", nil
 	}
-	return callback.Build(s, func(msg string) { fmt.Fprintf(os.Stderr, "[WARNING]: %s\n", msg) })
+	cb, err := callback.Build(s, func(msg string) { fmt.Fprintf(os.Stderr, "[WARNING]: %s\n", msg) })
+	if err != nil {
+		return nil, nil, err
+	}
+	var notes []string
+	if verbosity > 1 {
+		// TaskQueueManager.load_callbacks passes over ansible-core's other
+		// stdout callbacks.
+		stdout := strings.TrimPrefix(s.StdoutCallback, "ansible.builtin.")
+		switch {
+		case stdout == "" && adhoc:
+			stdout = "minimal"
+		case stdout == "":
+			stdout = "default"
+		}
+		for _, name := range []string{"default", "minimal", "oneline"} {
+			if name != stdout {
+				notes = append(notes, fmt.Sprintf("Skipping callback '%s', as we already have a stdout callback.", name))
+			}
+		}
+	}
+	return cb, notes, nil
+}
+
+// displayVerbose is Display.verbose: msg on stdout in COLOR_VERBOSE
+// (stringc colors each line).
+func displayVerbose(msg string) {
+	if !callback.NoColor() {
+		lines := strings.Split(msg, "\n")
+		for i, l := range lines {
+			lines[i] = "\x1b[0;34m" + l + "\x1b[0m"
+		}
+		msg = strings.Join(lines, "\n")
+	}
+	fmt.Println(msg)
 }
 
 // configureYAML applies the YAML loader settings and shows its warnings

@@ -406,6 +406,19 @@ than silently diverging. Known boundaries:
   `Removed: <nevra>`). dnf4's module iterates a set, so for multi-package
   transactions understudy lists the requested packages first and their
   dependencies after, by name.
+- **Verbose output**: `-vv` prints what ansible-core does: the `PLAYBOOK:`
+  banner and play count, task paths, handler notifications, `META:` lines,
+  skipped stdout callbacks, static imports, plugin redirects
+  (`redirecting (type: modules) ...`, at load and each time a task resolves
+  one) and the password hashing backend. Its version banner names
+  understudy's build rather than ansible-core's Python installation.
+  At `-vvv`, results dump indented and the local connection announces
+  itself (`<host> ESTABLISH LOCAL CONNECTION FOR USER: ...`); the lines that
+  trace ansible-core's Python machinery are not reproduced: the `EXEC`/`PUT`
+  commands that stage and run AnsiballZ payloads, `Using module file`, the
+  variable manager's repeated ``Read `vars_file` `` lines, inventory
+  plugins' parse attempts, and SSH connection tracing (understudy's agent
+  protocol runs no per-command `ssh`).
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
   strings; regular expressions use
   Go's RE2 (lookaround and backreferences in *patterns* are rejected with a
@@ -429,7 +442,9 @@ protocol packages, so it stays small.
 
 The golden suite runs every `test/e2e/golden/*.yml` through the installed
 `ansible-playbook` and through understudy, comparing per-task statuses and
-recaps, and stdout byte for byte at the default verbosity and at `-v`. It
+recaps, and stdout byte for byte at the default verbosity, `-v`, `-vv` and
+`-vvv` (the version banner masked at `-vv`, and at `-vvv` the lines listed
+under **Verbose output** left out). It
 needs the `ansible` package (the corpus uses a few `community.general`
 plugins) and `passlib`, e.g. `pip install ansible passlib`, with the
 matching `ansible-core` release. Set `ANSIBLE_PYTHON_INTERPRETER` to that

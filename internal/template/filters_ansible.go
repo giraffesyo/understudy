@@ -455,6 +455,15 @@ func registerAnsibleFilters(e *Engine) {
 		} else if n, ok := asInt(args1(args, 2)); ok {
 			rounds = int(n)
 		}
+		if ec.engine.Verbose != nil {
+			// BaseHash announces the backend do_encrypt picked: libxcrypt
+			// where ansible-core finds it, else passlib.
+			backend := "PasslibHash"
+			if cryptGensalt() {
+				backend = "CryptHash"
+			}
+			ec.engine.Verbose(2, fmt.Sprintf("Using %s to hash input with '%s_crypt'", backend, scheme))
+		}
 		salt, err = cryptSalt(salt)
 		if err != nil {
 			return nil, fmt.Errorf("password_hash: %v", err)

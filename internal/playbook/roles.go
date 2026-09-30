@@ -64,26 +64,57 @@ type roleContent struct {
 // load first, deduplicated by name.
 func ResolveRoles(plays []*Play, baseDir string, rolesPath []string) error {
 	for _, play := range plays {
+		// Loading the play (after its roles) announced its tasks'
+		// redirects and imports, import_role's role included.
+		var taskNotes []string
+		for _, list := range [][]*Task{play.Handlers, play.PreTasks, play.PostTasks, play.Tasks} {
+			taskNotes = append(taskNotes, importRoleNotes(list, baseDir, rolesPath)...)
+		}
+		play.LoadNotes = taskNotes
 		if len(play.Roles) == 0 {
 			continue
 		}
 		seen := map[string]bool{}
 		var roleTasks []*Task
+		var notes []string
 		for _, ref := range play.Roles {
 			play.PlayRoleNames = append(play.PlayRoleNames, ref.Name)
 		}
 		for _, ref := range play.Roles {
-			if err := resolveRoleRef(play, ref, baseDir, rolesPath, seen, &roleTasks, 0); err != nil {
+			if err := resolveRoleRef(play, ref, baseDir, rolesPath, seen, &roleTasks, &notes, 0); err != nil {
 				return err
 			}
 		}
+		play.LoadNotes = append(notes, play.LoadNotes...)
 		play.Tasks = append(roleTasks, play.Tasks...)
 		play.Roles = nil // consumed
 	}
 	return nil
 }
 
-func resolveRoleRef(play *Play, ref *RoleRef, baseDir string, rolesPath []string, seen map[string]bool, out *[]*Task, depth int) error {
+// importRoleNotes is TaskLoadNotes, with each import_role followed by
+// the notes loading its role printed.
+func importRoleNotes(tasks []*Task, baseDir string, rolesPath []string) []string {
+	var out []string
+	for _, t := range tasks {
+		out = append(out, t.LoadNotes...)
+		if t.Module != "import_role" {
+			continue
+		}
+		name, _ := t.Args["name"].(string)
+		from, _ := t.Args["tasks_from"].(string)
+		if name == "" || strings.Contains(name, "{{") {
+			continue
+		}
+		if ri, err := LoadRoleForInclude(name, baseDir, rolesPath, from); err == nil {
+			out = append(out, TaskLoadNotes(ri.Tasks)...)
+			out = append(out, TaskLoadNotes(ri.Handlers)...)
+		}
+	}
+	return out
+}
+
+func resolveRoleRef(play *Play, ref *RoleRef, baseDir string, rolesPath []string, seen map[string]bool, out *[]*Task, notes *[]string, depth int) error {
 	if depth > 20 {
 		return fmt.Errorf("%s: role dependency chain too deep at %q (cycle?)", ref.Src.File, ref.Name)
 	}
@@ -102,10 +133,13 @@ func resolveRoleRef(play *Play, ref *RoleRef, baseDir string, rolesPath []string
 		if !containsStr(play.DependentRoleNames, dep.Name) {
 			play.DependentRoleNames = append(play.DependentRoleNames, dep.Name)
 		}
-		if err := resolveRoleRef(play, dep, baseDir, rolesPath, seen, out, depth+1); err != nil {
+		if err := resolveRoleRef(play, dep, baseDir, rolesPath, seen, out, notes, depth+1); err != nil {
 			return err
 		}
 	}
+	// A role loads its dependencies, then its tasks and handlers.
+	*notes = append(*notes, TaskLoadNotes(role.tasks)...)
+	*notes = append(*notes, TaskLoadNotes(role.handlers)...)
 
 	if role.defaults != nil {
 		play.RoleDefaults = append(play.RoleDefaults, role.defaults)
@@ -300,7 +334,8 @@ func argSpecTask(dir, roleName, entry string, params map[string]any) (*Task, err
 				"type": "role", "name": roleName, "argument_spec_name": entry, "path": dir,
 			},
 		},
-		Src: Pos{File: src, Line: 1, Col: 1},
+		Src:         Pos{File: src, Line: 1, Col: 1},
+		Synthesized: true,
 	}, nil
 }
 

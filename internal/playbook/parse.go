@@ -390,6 +390,15 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 	return play, nil
 }
 
+// TaskLoadNotes gathers the tasks' LoadNotes in order.
+func TaskLoadNotes(tasks []*Task) []string {
+	var out []string
+	for _, t := range tasks {
+		out = append(out, t.LoadNotes...)
+	}
+	return out
+}
+
 // blockCounter hands out unique block IDs within one Load call.
 type blockCounter struct{ next int }
 
@@ -475,6 +484,10 @@ func parseImportTasks(item, pathNode *yaml.Node, file string, handlers bool, bc 
 	tasks, err := parseTaskListIn(doc, path, handlers, bc, enclosing)
 	if err != nil {
 		return nil, err
+	}
+	if len(tasks) > 0 {
+		// The loader announces the file before its tasks load.
+		tasks[0].LoadNotes = append([]string{"statically imported: " + path}, tasks[0].LoadNotes...)
 	}
 
 	// Inheritance from the import entry itself.
@@ -1138,6 +1151,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			}
 		}
 	}
+	task.LoadNotes = loadNotes(task)
 	return task, nil
 }
 

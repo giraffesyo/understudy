@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/template"
 )
 
@@ -73,6 +74,9 @@ func LookupKnown(name string) bool {
 // engine (lookup(), query(), and with_<name> loops).
 func (r *Runner) installLookups() {
 	r.Engine.Lookup = func(ec *template.EvalCtx, name string, terms []any, kwargs map[string]any) (any, error) {
+		if note := playbook.LookupRedirect(name); note != "" {
+			r.displayVerbose(2, note)
+		}
 		name = normalizeLookupName(name)
 		plugin, ok := lookupPlugins[name]
 		if !ok {

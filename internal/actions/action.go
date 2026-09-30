@@ -35,6 +35,9 @@ type Context struct {
 
 	// RunModule executes a module on the target (in-process or via agent).
 	RunModule func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error)
+	// Connecting is called before an action uses Conn directly (the
+	// connection's -vvv ESTABLISH line); nil = nothing to announce.
+	Connecting func()
 	// SetFact persists a fact for this host (set_fact, setup).
 	SetFact func(name string, value any)
 	// SetIncludeVars stores include_vars results at their precedence layer

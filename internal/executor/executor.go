@@ -103,6 +103,8 @@ type Options struct {
 	// TaskTimeout is TASK_TIMEOUT: the timeout keyword's default, in
 	// seconds (0 = none).
 	TaskTimeout int
+	// NoColor leaves the runner's own verbose lines (Display.vv) uncolored.
+	NoColor bool
 }
 
 // Runner executes playbooks.
@@ -114,6 +116,12 @@ type Runner struct {
 	Callback Callback
 	Opts     Options
 	Limit    string // --limit pattern, intersected with each play's hosts
+	// BookPaths name each playbook RunPlaybooks runs, as given on the
+	// command line ("N plays in <path>" at -vv); nil = the plays' files.
+	BookPaths []string
+	// CallbackNotes are the -vv lines loading the callbacks printed
+	// (skipped stdout callbacks), shown once the first playbook loads.
+	CallbackNotes []string
 
 	// DebugIn/DebugOut are the task debugger's terminal (default stdin
 	// and stdout).
@@ -124,6 +132,8 @@ type Runner struct {
 	order          []string
 	failed         map[string]bool
 	notified       map[string]map[string]bool // handler name -> hosts to run on
+	notifyOrder    map[string][]string        // host -> notifications saved, in order
+	inHandlers     bool                       // a handler flush is running
 	blockFailed    map[string]map[int]bool    // host -> block ID -> failure caught by rescue
 	nextBlockID    int                        // fresh IDs for blocks of included files
 	failedIn       map[string]map[int]bool    // host -> blocks it was inside when it failed hard
@@ -182,6 +192,7 @@ func NewRunner(inv *inventory.Inventory, cb Callback, opts Options) *Runner {
 	}
 	r.installLookups()
 	r.Engine.Deprecation = r.deprecation
+	r.Engine.Verbose = r.displayVerbose
 	return r
 }
 
@@ -253,7 +264,18 @@ func (r *Runner) Run(ctx context.Context, plays []*playbook.Play) (int, error) {
 // run. The exit code is that result.
 func (r *Runner) RunPlaybooks(ctx context.Context, books [][]*playbook.Play) (int, error) {
 	code := 0
-	for _, plays := range books {
+	for i, plays := range books {
+		r.displayLoadNotes(plays)
+		if i == 0 {
+			for _, n := range r.CallbackNotes {
+				r.displayVerbose(2, n)
+			}
+		}
+		if i < len(r.BookPaths) {
+			// A playbook file (not ad-hoc or Go API plays) announces itself.
+			ForwardPlaybookStart(r.Callback, r.BookPaths[i])
+			r.displayVerbose(2, fmt.Sprintf("%d plays in %s", len(plays), r.BookPaths[i]))
+		}
 		for _, play := range plays {
 			if err := r.runPlay(ctx, play); err != nil {
 				return 1, err
@@ -657,7 +679,7 @@ func (r *Runner) runImportRole(ctx context.Context, play *playbook.Play, task *p
 	if name == "" {
 		return fmt.Errorf("%s:%d: import_role requires a name", task.Src.File, task.Src.Line)
 	}
-	tasks, err := r.loadIncludedRole(play, task, name)
+	tasks, _, err := r.loadIncludedRole(play, task, name)
 	if err != nil {
 		for _, host := range active {
 			r.record(host, task, agentproto.Fail("%s: %v", task.Module, err), nil)
@@ -732,6 +754,11 @@ func (r *Runner) taskDisplayName(task *playbook.Task, active []string) string {
 // runTaskAcrossHosts executes one task on all active hosts with forks
 // parallelism (one errgroup per task = the linear-strategy barrier).
 func (r *Runner) runTaskAcrossHosts(ctx context.Context, play *playbook.Play, task *playbook.Task, active, playHosts []string, handler bool) {
+	if note := playbook.ActionRedirect(task.Action); note != "" && len(active) > 0 {
+		// The strategy resolves the action (for bypass_host_loop) before
+		// the banner.
+		r.displayVerbose(2, note)
+	}
 	r.taskStart(task, r.taskDisplayName(task, active), handler)
 	if task.RunOnce && len(active) > 0 {
 		// run_once: the first host runs; register/facts/notify fan out to
@@ -892,17 +919,78 @@ func (r *Runner) resetNotified() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.notified = map[string]map[string]bool{}
+	r.notifyOrder = map[string][]string{}
 }
 
 // notifyHandlers marks handlers notified by one host (called on change).
-func (r *Runner) notifyHandlers(host string, names []string) {
+// announce counts the host's own results that notified them (0 for a
+// run_once fan-out): outside a flush each result's notifications are
+// saved ("Notification for handler ... has been saved." at -vv); during
+// one, a handler that notifies another queues it at once
+// (v2_playbook_on_notify).
+func (r *Runner) notifyHandlers(host string, names []string, announce int) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	inHandlers := r.inHandlers
+	var queued []string
 	for _, name := range names {
 		if r.notified[name] == nil {
 			r.notified[name] = map[string]bool{}
 		}
+		fresh := !r.notified[name][host]
 		r.notified[name][host] = true
+		if inHandlers {
+			if fresh {
+				queued = append(queued, name)
+			}
+			continue
+		}
+		if !slices.Contains(r.notifyOrder[host], name) {
+			r.notifyOrder[host] = append(r.notifyOrder[host], name)
+		}
+	}
+	r.mu.Unlock()
+	for range announce {
+		for _, name := range names {
+			r.mu.Lock()
+			h := r.handlerNamed(name)
+			r.mu.Unlock()
+			if h == nil {
+				continue
+			}
+			if !inHandlers {
+				r.displayVerbose(2, fmt.Sprintf("Notification for handler %s has been saved.", name))
+			} else if slices.Contains(queued, name) {
+				ForwardHandlerNotified(r.Callback, h, host)
+				queued = slices.DeleteFunc(queued, func(q string) bool { return q == name })
+			}
+		}
+	}
+}
+
+// handlerNamed is the current play's handler a notification names.
+func (r *Runner) handlerNamed(name string) *playbook.Task {
+	if r.curPlay == nil {
+		return nil
+	}
+	for _, h := range r.curPlay.Handlers {
+		if h.Name == name {
+			return h
+		}
+	}
+	return nil
+}
+
+// announceNotified is flush_handlers expanding a host's saved
+// notifications into its handlers: a NOTIFIED HANDLER line for each.
+func (r *Runner) announceNotified(host string) {
+	r.mu.Lock()
+	names := r.notifyOrder[host]
+	delete(r.notifyOrder, host)
+	r.mu.Unlock()
+	for _, name := range names {
+		if h := r.handlerNamed(name); h != nil {
+			ForwardHandlerNotified(r.Callback, h, host)
+		}
 	}
 }
 
@@ -912,6 +1000,21 @@ func (r *Runner) flushHandlers(ctx context.Context, play *playbook.Play, playHos
 	r.mu.Lock()
 	handlers := append([]*playbook.Task(nil), play.Handlers...)
 	r.mu.Unlock()
+	announce := r.activeOf(playHosts)
+	if play.ForceHandlers || r.Opts.ForceHandlers {
+		announce = r.notEnded(playHosts, nil)
+	}
+	for _, h := range announce {
+		r.announceNotified(h)
+	}
+	r.mu.Lock()
+	r.inHandlers = true
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.inHandlers = false
+		r.mu.Unlock()
+	}()
 	for _, handler := range handlers {
 		key := handler.Name
 		r.mu.Lock()
@@ -1118,6 +1221,9 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 // result to record, with the per-item results for loops, and the task with
 // its templated keywords resolved for this host.
 func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, playHosts []string, override map[string]any) (*agentproto.Result, []any, *playbook.Task) {
+	// One TaskExecutor (and connection) per task and host, loop items
+	// included.
+	ctx = context.WithValue(ctx, connectedKey{}, new(string))
 	pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
 	base := r.newHostContext(host, pos, playHosts)
 	if len(task.Vars) > 0 {
@@ -1377,7 +1483,25 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			if name == "" {
 				name = task.DisplayAction()
 			}
-			r.Callback.Retrying(host, task, name, total-(attempt+1), shown(task, res))
+			retried := shown(task, res)
+			if task.Loop != nil || task.LoopWith != "" {
+				// A loop item's attempt carries its loop variables.
+				copied := *retried
+				copied.Extra = maps.Clone(retried.Extra)
+				if copied.Extra == nil {
+					copied.Extra = map[string]any{}
+				}
+				copied.Extra["ansible_loop_var"] = task.LoopVar
+				copied.Extra[task.LoopVar] = item
+				if task.IndexVar != "" {
+					copied.Extra["ansible_index_var"] = task.IndexVar
+					if v, ok := vctx.Get(task.IndexVar); ok {
+						copied.Extra[task.IndexVar] = v
+					}
+				}
+				retried = &copied
+			}
+			r.Callback.Retrying(host, task, name, total-(attempt+1), retried)
 			time.Sleep(time.Duration(task.Delay) * time.Second)
 		} else {
 			// Out of attempts: ansible-core records retries-1 attempts and
@@ -1499,6 +1623,7 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 	if err != nil {
 		return nil, target, err
 	}
+	connecting := r.connectingNote(ctx, inProcess, vctx, host, target)
 	return &actions.Context{
 		Host:         host,
 		Vars:         vctx,
@@ -1518,8 +1643,11 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 			if req.PythonInterpreter == "" {
 				req.PythonInterpreter = pythonInterpreter(vctx)
 			}
+			connecting()
+			r.displayModuleRedirect(task, req.Module)
 			return r.runModule(ctx, host, target, kw, inProcess, become, task, envKeys, env, req, payload)
 		},
+		Connecting: connecting,
 		SetFact: func(name string, value any) {
 			for _, h := range r.factHosts(host, target, task) {
 				r.Store.SetHostFact(h, name, value)
@@ -1926,6 +2054,11 @@ func moduleOrigin(res *agentproto.Result) string {
 
 // dispatch routes to a control-side action or the module runtime.
 func (r *Runner) dispatch(ctx context.Context, task *playbook.Task, actx *actions.Context, args map[string]any, freeForm string) *agentproto.Result {
+	r.displayRedirects(task)
+	// (uri refuses check mode before it gets that far.)
+	if transfersFiles[task.Module] && actx.Connecting != nil && !(task.Module == "uri" && actx.CheckMode) {
+		actx.Connecting()
+	}
 	if task.Module == "include_vars" {
 		return r.runIncludeVars(task, actx, args)
 	}
@@ -1963,6 +2096,34 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 		return
 	}
 	ignored := task.IgnoreErrors && res.Failed
+	if res.Changed && !res.Failed && !res.Skipped && len(task.Notify) > 0 {
+		// Notifications are saved before the result prints, once per
+		// result that carries them: a loop's item results that ran.
+		times := 1
+		if loopItems != nil {
+			times = 0
+			list, _ := res.Extra["results"].([]any)
+			for _, it := range list {
+				var skipped any
+				switch m := it.(type) {
+				case *yaml.OMap:
+					skipped = m.Get("skipped")
+				case map[string]any:
+					skipped = m["skipped"]
+				}
+				if skipped != true {
+					times++
+				}
+			}
+		}
+		for _, h := range r.fanOut(host, task) {
+			n := 0
+			if h == host {
+				n = times
+			}
+			r.notifyHandlers(h, task.Notify, n)
+		}
+	}
 	if loopItems == nil {
 		r.Callback.HostResult(host, task, shown(task, res), ignored, nil)
 	} else {
@@ -1997,11 +2158,6 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 		for _, h := range r.factHosts(host, target, task) {
 			r.Store.SetFacts(h, r.deprecatedFacts(res.AnsibleFacts))
 			r.Store.SetFacts(h, map[string]any{"ansible_facts": stripped})
-		}
-	}
-	if res.Changed && !res.Failed && len(task.Notify) > 0 {
-		for _, h := range r.fanOut(host, task) {
-			r.notifyHandlers(h, task.Notify)
 		}
 	}
 	if res.Failed && !ignored && r.catchInRescue(host, task) {
