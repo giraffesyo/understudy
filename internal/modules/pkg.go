@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -198,9 +199,19 @@ func dnfActionModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		}
 	}
 	if !valid[module] {
-		return &agentproto.Result{Failed: true, AnsibleFacts: facts, Extra: map[string]any{"msg": []any{
+		// The action's msg is a tuple: the result shows it as a list, the
+		// error its str().
+		msg := []any{
 			"Could not detect which major revision of dnf is in use, which is required to determine module backend.",
-			"You should manually specify use_backend to tell the module whether to use the dnf4 or dnf5 backend})"}}}
+			"You should manually specify use_backend to tell the module whether to use the dnf4 or dnf5 backend})"}
+		return &agentproto.Result{Failed: true, AnsibleFacts: facts, Origin: "action",
+			Msg:   "(" + pyStrRepr(msg[0].(string)) + ", " + pyStrRepr(msg[1].(string)) + ")",
+			Extra: map[string]any{"msg": msg}}
+	}
+	if module == "yum" {
+		// ansible.legacy.yum is only a redirect to the dnf action.
+		return &agentproto.Result{Failed: true, AnsibleFacts: facts, Origin: "action",
+			Msg: "Could not find a dnf module backend for ansible.legacy.yum."}
 	}
 	delete(raw, "use")
 	delete(raw, "use_backend")
@@ -243,11 +254,74 @@ func dnfModuleAs(env *RunEnv, raw map[string]any, backend, name string) *agentpr
 	if err := spec.MutuallyExclusive(raw, []string{"name", "list"}, []string{"best", "nobest"}); err != nil {
 		return agentproto.Fail("%v", err)
 	}
+	if fail := dnfBindings(env, p, backend); fail != nil {
+		return fail
+	}
 	mgr := rpmManager("dnf")
 	if backend == "dnf5" {
 		mgr = rpmManager("dnf5")
 	}
 	return runPkg(env, mgr, p, raw, backend)
+}
+
+// dnfBindings is the modules' check (in their constructors) that some
+// Python can import their bindings: dnf's probes the task's Python and
+// the system ones for the dnf package; dnf5 looks for libdnf5 in the
+// system Pythons and, outside check mode, first installs
+// python3-libdnf5 (auto_install_module_deps).
+func dnfBindings(env *RunEnv, p *args.Parsed, backend string) *agentproto.Result {
+	if backend != "dnf5" {
+		if pyModuleInstalled(env, "dnf") {
+			return nil
+		}
+		attempted := []any{targetPythonExecutable(env), "/usr/libexec/platform-python", "/usr/bin/python3", "/usr/bin/python"}
+		return &agentproto.Result{Failed: true,
+			Msg:   "Could not import the dnf python module. Please install `python3-dnf` package. (attempted " + pyReprValue(attempted) + ")",
+			Extra: map[string]any{"results": []any{}}}
+	}
+	if pyModuleInstalled(nil, "libdnf5") {
+		return nil
+	}
+	switch {
+	case env.CheckMode:
+		return agentproto.Fail("python3-libdnf5 must be installed to use check mode. " +
+			"If run normally this module can auto-install it, see the auto_install_module_deps option.")
+	case !p.Bool("auto_install_module_deps"):
+		return nil
+	}
+	argv := []string{"dnf", "install", "-y", "python3-libdnf5"}
+	if _, err := lookPath("dnf"); err != nil {
+		return &agentproto.Result{Failed: true, Msg: "Error executing command.", RC: agentproto.IntPtr(2),
+			Cause: "[Errno 2] No such file or directory: b'dnf'",
+			Extra: map[string]any{"cmd": strings.Join(argv, " ")}}
+	}
+	rc, out, errOut := runCommand(env, argv, cmdOpts{Env: localeEnv(bestParsableLocale(env))})
+	if rc != 0 {
+		return &agentproto.Result{Failed: true, Msg: heuristicLogSanitize(strings.TrimRight(errOut, " \t\r\n\v\f")),
+			RC: agentproto.IntPtr(rc), Stdout: out, Stderr: errOut, Extra: map[string]any{"cmd": strings.Join(argv, " ")}}
+	}
+	return nil
+}
+
+// pyModuleInstalled reports whether a Python package (a directory with
+// an __init__.py) is importable from the task's Python (env non-nil) or
+// the system Pythons' site directories.
+func pyModuleInstalled(env *RunEnv, pkg string) bool {
+	var dirs []string
+	if env != nil {
+		dirs = pySitePackages(env)
+	}
+	for _, pat := range []string{"/usr/lib/python3*/site-packages", "/usr/lib64/python3*/site-packages",
+		"/usr/lib/python3/dist-packages", "/usr/local/lib/python3*/site-packages"} {
+		m, _ := filepath.Glob(pat)
+		dirs = append(dirs, m...)
+	}
+	for _, d := range dirs {
+		if _, err := os.Stat(filepath.Join(d, pkg, "__init__.py")); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // packageModule is the package action: use (or ansible_package_use, else

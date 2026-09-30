@@ -90,8 +90,8 @@ func runPackageAction(ctx context.Context, actx *Context, args map[string]any, _
 }
 
 // runDnfAction is the dnf action plugin (yum redirects to it): the
-// pkg_mgr fact picks the backend; without one the module detects it and
-// reports it as a fact.
+// pkg_mgr fact picks the backend; when that names no dnf backend the
+// module detects it and reports it as a fact.
 func runDnfAction(ctx context.Context, actx *Context, args map[string]any, _ string) *agentproto.Result {
 	_, hasUse := args["use"]
 	if _, hasBackend := args["use_backend"]; hasUse && hasBackend {
@@ -103,7 +103,10 @@ func runDnfAction(ctx context.Context, actx *Context, args map[string]any, _ str
 	}
 	if pm := hostPkgMgr(actx); pm != "" {
 		fwd[pkgMgrFactKey] = pm
-	} else {
+	}
+	// A backend setup had to detect is reported as a fact, unless the
+	// task is delegated without delegate_facts.
+	if !actx.Delegated || actx.DelegateFacts {
 		fwd[pkgReportFactKey] = true
 	}
 	return runPkgModule(ctx, actx, "dnf", fwd)

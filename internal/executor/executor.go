@@ -1462,20 +1462,22 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		return nil, target, err
 	}
 	return &actions.Context{
-		Host:         host,
-		Vars:         vctx,
-		Conn:         conn,
-		Become:       become,
-		CheckMode:    r.effectiveCheckMode(play, task),
-		Diff:         r.effectiveDiff(play, task),
-		Background:   task.Async > 0,
-		AsyncTimeout: task.Async,
-		BaseDir:      r.Opts.BaseDir,
-		SrcDir:       task.SrcDir,
-		TaskDir:      taskDir(task),
-		Verbosity:    r.Opts.Verbosity,
-		RemoteTmp:    r.remoteTmp(vctx),
-		ArgPos:       argPositions(task),
+		Host:          host,
+		Vars:          vctx,
+		Conn:          conn,
+		Become:        become,
+		CheckMode:     r.effectiveCheckMode(play, task),
+		Diff:          r.effectiveDiff(play, task),
+		Background:    task.Async > 0,
+		AsyncTimeout:  task.Async,
+		BaseDir:       r.Opts.BaseDir,
+		SrcDir:        task.SrcDir,
+		TaskDir:       taskDir(task),
+		Verbosity:     r.Opts.Verbosity,
+		RemoteTmp:     r.remoteTmp(vctx),
+		Delegated:     target != host,
+		DelegateFacts: task.DelegateFacts,
+		ArgPos:        argPositions(task),
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
 			if req.PythonInterpreter == "" {
 				req.PythonInterpreter = pythonInterpreter(vctx)
@@ -1943,7 +1945,9 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	// Gathered facts land in the facts layer, both prefixed at top level
 	// (inject_facts_as_vars) and under the ansible_facts dict. set_fact
 	// writes its own layer via the SetFact hook.
-	if len(res.AnsibleFacts) > 0 && task.Module != "set_fact" {
+	// Only a successful result's facts are kept (a failed task's are
+	// reported but not applied).
+	if len(res.AnsibleFacts) > 0 && task.Module != "set_fact" && !res.Failed {
 		target := host
 		if res.DelegatedTo != "" {
 			target = res.DelegatedTo

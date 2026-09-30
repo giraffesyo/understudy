@@ -99,6 +99,22 @@ const causeKey = "_understudy_cause"
 // performs action-plugin work (copy) reports action-level failures.
 const originKey = "_understudy_origin"
 
+// msgTextKey carries Msg across the wire when the result's msg is not a
+// string (Extra["msg"] holds it): Msg is then its Python str(), which
+// the error display shows.
+const msgTextKey = "_understudy_msg_text"
+
+// structuredMsg reports whether Extra carries a non-string msg, which
+// then is the result's msg (Msg only being its display text).
+func (r *Result) structuredMsg() bool {
+	v, ok := r.Extra["msg"]
+	if !ok || v == nil {
+		return false
+	}
+	_, isStr := v.(string)
+	return !isStr
+}
+
 // Fail builds a failed result with a formatted message.
 func Fail(format string, args ...any) *Result {
 	return &Result{Failed: true, Msg: fmt.Sprintf(format, args...)}
@@ -133,7 +149,11 @@ func (r *Result) MarshalJSON() ([]byte, error) {
 	if r.Skipped {
 		m["skipped"] = true
 	}
-	if r.Msg != "" {
+	if r.structuredMsg() {
+		if r.Msg != "" {
+			m[msgTextKey] = r.Msg
+		}
+	} else if r.Msg != "" {
 		m["msg"] = r.Msg
 	}
 	if r.Cause != "" {
@@ -188,12 +208,23 @@ func (r *Result) UnmarshalJSON(data []byte) error {
 		r.Skipped, _ = v.(bool)
 	}
 	if v, ok := take("msg"); ok {
-		r.Msg = fmt.Sprintf("%v", v)
-		if v == "" {
-			// An explicitly empty msg (command's success result) is part
-			// of the result shape; keep it visible through Extra.
-			m["msg"] = ""
+		switch v.(type) {
+		case string, nil:
+			r.Msg = fmt.Sprintf("%v", v)
+			if v == "" {
+				// An explicitly empty msg (command's success result) is part
+				// of the result shape; keep it visible through Extra.
+				m["msg"] = ""
+			}
+		default:
+			// A structured msg stays as it is; its display text travels
+			// separately.
+			m["msg"] = v
+			r.Msg = fmt.Sprintf("%v", v)
 		}
+	}
+	if v, ok := take(msgTextKey); ok {
+		r.Msg, _ = v.(string)
 	}
 	if v, ok := take(causeKey); ok {
 		r.Cause, _ = v.(string)
@@ -252,7 +283,7 @@ func (r *Result) ToVars() map[string]any {
 	if r.Skipped {
 		m["skipped"] = true // absent unless true, as in Ansible
 	}
-	if r.Msg != "" {
+	if r.Msg != "" && !r.structuredMsg() {
 		m["msg"] = r.Msg
 	}
 	if r.RC != nil {
