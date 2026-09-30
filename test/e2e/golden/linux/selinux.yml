@@ -1,0 +1,31 @@
+# distros: rocky-systemd
+---
+# ansible.posix.selinux on a host whose kernel runs without SELinux (a
+# container): the config file's state and policy change (with
+# reboot_required), the configfile aliases, check mode, and the errors
+# for a missing policy.
+- hosts: target
+  gather_facts: false
+  become: true
+  tasks:
+    - name: permissive in check mode
+      selinux: {policy: targeted, state: permissive}
+      check_mode: true
+    - name: permissive
+      selinux: {policy: targeted, state: permissive}
+    - name: again
+      selinux: {policy: targeted, state: permissive}
+    - name: disabled
+      selinux: {state: disabled}
+    - name: enforcing through the conf alias
+      selinux: {policy: targeted, state: enforcing, conf: /etc/selinux/config}
+    - name: another config file
+      shell: printf 'SELINUX=permissive\nSELINUXTYPE=targeted\n' > /etc/selinux/golden.conf
+    - name: through the file alias
+      selinux: {policy: targeted, state: disabled, file: /etc/selinux/golden.conf}
+    - name: a policy that is not installed
+      selinux: {policy: mls, state: enforcing}
+      ignore_errors: true
+    - name: enforcing without a policy
+      selinux: {state: enforcing, configfile: /etc/selinux/golden.conf}
+      ignore_errors: true

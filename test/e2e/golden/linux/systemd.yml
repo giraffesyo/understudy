@@ -1,0 +1,106 @@
+# distros: rocky-systemd
+---
+# systemd_service (systemd, systemd_service, and service on a systemd
+# host) against a booted systemd: daemon_reload/daemon_reexec, start,
+# enable, restart (reported as started), reload failure, stop, mask,
+# no_block, force, check mode and a missing unit. The status dict carries
+# PIDs and timestamps, so results are no_log and shown through their
+# stable parts.
+- hosts: target
+  gather_facts: false
+  become: true
+  vars:
+    keep: >-
+      {{ {'changed': r.changed, 'failed': r.failed | default(false), 'msg': r.msg | default(''),
+          'name': r.name | default(''), 'state': r.state | default(''), 'enabled': r.enabled | default(''),
+          'active': r.status.ActiveState | default(''), 'unit_file': r.status.UnitFileState | default(''),
+          'load': r.status.LoadState | default('')} }}
+  tasks:
+    - name: a unit
+      shell: |
+        printf '%s\n' '[Unit]' 'Description=golden test service' '[Service]' \
+          'ExecStart=/bin/sleep infinity' '[Install]' 'WantedBy=multi-user.target' \
+          > /etc/systemd/system/golden.service
+
+    - name: start in check mode
+      systemd: {name: golden, state: started, daemon_reload: true}
+      check_mode: true
+      register: r
+      no_log: true
+    - debug: {msg: "{{ keep }}"}
+    - name: daemon_reload and start
+      systemd: {name: golden, state: started, daemon_reload: true}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ keep }}"}
+    - name: start again
+      ansible.builtin.systemd_service: {name: golden.service, state: started}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ keep }}"}
+    - name: enable
+      systemd: {name: golden, enabled: true}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ keep }}"}
+    - name: enable again
+      systemd: {name: golden, enabled: true}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ keep }}"}
+    - name: restart reports started
+      systemd: {name: golden, state: restarted}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ keep }}"}
+    - name: reload a unit that cannot reload
+      systemd: {name: golden, state: reloaded}
+      register: r
+      no_log: true
+      ignore_errors: true
+    - debug: {msg: "{{ keep }}"}
+    - name: stop without blocking
+      systemd: {name: golden, state: stopped, no_block: true}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ keep }}"}
+    - name: disable and mask
+      systemd: {name: golden, enabled: false, masked: true}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ keep }}"}
+    - name: starting a masked unit fails
+      systemd: {name: golden, state: started}
+      register: r
+      no_log: true
+      ignore_errors: true
+    - debug: {msg: "{{ keep }}"}
+    - name: unmask
+      systemd: {name: golden, masked: false}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ keep }}"}
+    - name: enable with force
+      systemd: {name: golden, enabled: true, force: true}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ keep }}"}
+    - name: daemon_reexec alone
+      systemd: {daemon_reexec: true}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ keep }}"}
+    - name: a unit that does not exist
+      systemd: {name: no-such-golden, state: started}
+      register: r
+      no_log: true
+      ignore_errors: true
+    - debug: {msg: "{{ keep }}"}
+    - name: the service module on a systemd host
+      service: {name: golden, state: stopped}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ keep }}"}
+    - name: a parameter systemd_service does not take
+      systemd: {name: golden, state: started, pattern: sleep}
+      ignore_errors: true

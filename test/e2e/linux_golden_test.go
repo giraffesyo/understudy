@@ -49,6 +49,31 @@ RUN printf 'keepcache=1\nmetadata_expire=-1\n' >> /etc/dnf/dnf.conf && \
     useradd -m ` + lgUser + ` && \
     echo '` + lgUser + ` ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/` + lgUser + `
 CMD ["/usr/sbin/sshd", "-D", "-e"]`,
+	// rocky-systemd boots systemd (sshd as a unit) for the service,
+	// firewalld and selinux modules; only playbooks that ask for it run
+	// on it.
+	"rocky-systemd": `FROM rockylinux/rockylinux:9
+RUN dnf -y install openssh-server sudo python3 systemd procps-ng firewalld \
+      python3-libselinux selinux-policy-targeted policycoreutils && \
+    ssh-keygen -A && systemctl enable sshd firewalld && \
+    sed -i 's/^IPv6_rpfilter=.*/IPv6_rpfilter=no/' /etc/firewalld/firewalld.conf && \
+    useradd -m ` + lgUser + ` && \
+    echo '` + lgUser + ` ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/` + lgUser + `
+STOPSIGNAL SIGRTMIN+3
+CMD ["/usr/sbin/init"]`,
+}
+
+// lgRunArgs are extra docker run arguments per image.
+var lgRunArgs = map[string][]string{
+	"rocky-systemd": {"--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw"},
+}
+
+// lgReady is a command that must succeed in a booted container before a
+// tool runs against it (services that start after sshd). (Docker
+// Desktop's kernel lacks the fib expression firewalld's IPv6 rpfilter
+// needs, so the image turns that off.)
+var lgReady = map[string]string{
+	"rocky-systemd": "systemctl is-system-running --wait >/dev/null; firewall-cmd --state",
 }
 
 var lgBuild sync.Map // distro -> *lgBuilt
@@ -78,11 +103,12 @@ func lgImage(t *testing.T, distro string) string {
 }
 
 // lgBoot starts a fresh container and returns its ssh port.
-func lgBoot(t *testing.T, image, name, pub string) string {
+func lgBoot(t *testing.T, image, name, pub string, extra ...string) string {
 	t.Helper()
 	exec.Command("docker", "rm", "-f", name).Run()
-	if out, err := exec.Command("docker", "run", "-d", "--name", name, "--privileged",
-		"--hostname", "golden.example.com", "-p", "127.0.0.1:0:22", image).CombinedOutput(); err != nil {
+	runArgs := append(append([]string{"run", "-d", "--name", name, "--privileged",
+		"--hostname", "golden.example.com", "-p", "127.0.0.1:0:22"}, extra...), image)
+	if out, err := exec.Command("docker", runArgs...).CombinedOutput(); err != nil {
 		t.Fatalf("docker run: %v\n%s", err, out)
 	}
 	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
@@ -146,7 +172,19 @@ func TestLinuxGoldenOutput(t *testing.T) {
 				var lastStderr string
 				run := func(tool string, bin string, pre ...string) string {
 					name := fmt.Sprintf("understudy-lg-%s-%s-%d", distro, tool, os.Getpid())
-					port := lgBoot(t, image, name, strings.TrimSpace(string(pub)))
+					port := lgBoot(t, image, name, strings.TrimSpace(string(pub)), lgRunArgs[distro]...)
+					if ready := lgReady[distro]; ready != "" {
+						ok := false
+						for i := 0; i < 60 && !ok; i++ {
+							ok = exec.Command("docker", "exec", name, "sh", "-c", ready).Run() == nil
+							if !ok {
+								time.Sleep(time.Second)
+							}
+						}
+						if !ok {
+							t.Fatalf("%s never became ready (%s)", name, ready)
+						}
+					}
 					dir := t.TempDir()
 					inv := filepath.Join(dir, "hosts")
 					os.WriteFile(inv, []byte(fmt.Sprintf(
