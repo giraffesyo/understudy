@@ -108,6 +108,12 @@ func ParseMode(v any) (os.FileMode, error) {
 		return permBits(uint32(t))
 	case int:
 		return permBits(uint32(t))
+	case float64:
+		// A JSON-decoded integer (args that crossed the agent wire
+		// without number preservation).
+		if t == float64(uint32(t)) {
+			return permBits(uint32(t))
+		}
 	case string:
 		s := strings.TrimSpace(t)
 		if s == "" {

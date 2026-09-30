@@ -29,6 +29,11 @@ var pkgSpec = args.Spec{
 	"install_recommends": {Type: "bool"},
 	"autoremove":         {Type: "bool", Default: false},
 	"dpkg_options":       {Default: "force-confdef,force-confold"},
+	"purge":              {Type: "bool", Default: false},
+	// allow_downgrade: apt passes --allow-downgrades; with dnf a versioned
+	// request older than the installed one is still refused by the CLI.
+	"allow_downgrade": {Type: "bool", Default: false, Aliases: []string{"allow-downgrade", "allow_downgrades", "allow-downgrades"}},
+	"default_release": {Aliases: []string{"default-release"}},
 
 	// dnf/yum options (Ansible's dnf and yum modules).
 	"enablerepo":        {Type: "list"},
@@ -58,7 +63,7 @@ var (
 	rpmOnlyOpts = []string{"enablerepo", "disablerepo", "use_backend", "disable_gpg_check", "exclude",
 		"skip_broken", "allowerasing", "nobest", "conf_file", "releasever", "installroot",
 		"disable_excludes", "security", "bugfix", "download_only"}
-	aptOnlyOpts = []string{"cache_valid_time", "install_recommends", "dpkg_options"}
+	aptOnlyOpts = []string{"cache_valid_time", "install_recommends", "dpkg_options", "purge", "default_release"}
 )
 
 // pkgManager abstracts one package manager's query and mutate commands.
@@ -495,6 +500,16 @@ func pkgOptions(mgr string, p *args.Parsed, raw map[string]any, repoKnown func(s
 		}
 		if p.Bool("autoremove") {
 			o.remove = append(o.remove, "--auto-remove")
+		}
+		// apt module: -t <default_release> on installs, --purge on removal.
+		if rel := p.Str("default_release"); rel != "" {
+			o.install = append(o.install, "-t", rel)
+		}
+		if p.Bool("purge") {
+			o.remove = append(o.remove, "--purge")
+		}
+		if p.Bool("allow_downgrade") {
+			o.install = append(o.install, "--allow-downgrades")
 		}
 	}
 	return o, nil

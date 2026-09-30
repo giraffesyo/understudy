@@ -43,9 +43,17 @@ func ReadFrame(r io.Reader) (*TaskRequest, io.Reader, error) {
 		return nil, nil, fmt.Errorf("reading task header: %w", err)
 	}
 	var req TaskRequest
-	if err := json.Unmarshal([]byte(line), &req); err != nil {
+	// Numbers keep their integer type (as on the in-process path, where
+	// YAML ints arrive as int64): plain decoding turned `mode: 0644` into
+	// float64 on the agent, which mode parsing rejected.
+	dec := json.NewDecoder(strings.NewReader(line))
+	dec.UseNumber()
+	if err := dec.Decode(&req); err != nil {
 		return nil, nil, fmt.Errorf(
 			"task header is not valid JSON (a become/sudo prompt may have corrupted stdin): %w", err)
+	}
+	if req.Args != nil {
+		req.Args = numbers(req.Args).(map[string]any)
 	}
 	if req.Proto != ProtoVersion {
 		return nil, nil, fmt.Errorf("protocol version mismatch: control speaks %d, agent speaks %d", req.Proto, ProtoVersion)
