@@ -1,0 +1,98 @@
+# loop_control.extended: ansible_loop (index, index0, revindex,
+# revindex0, first, last, length, allitems, previtem, nextitem) in
+# templates and in each item's result; extended_allitems: false drops
+# allitems; ansible_loop_var/ansible_index_var are variables too.
+- name: extended loops
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: the whole ansible_loop
+      debug:
+        msg: "{{ ansible_loop }}"
+      loop: [a, b, c]
+      loop_control:
+        extended: true
+
+    - name: without allitems
+      debug:
+        var: ansible_loop
+      loop: [a, b]
+      loop_control:
+        extended: yes
+        extended_allitems: false
+
+    - name: fields in templates
+      debug:
+        msg: >-
+          {{ ansible_loop.index }}/{{ ansible_loop.length }}
+          first={{ ansible_loop.first }} last={{ ansible_loop.last }}
+          prev={{ ansible_loop.previtem | default('none') }}
+          next={{ ansible_loop.nextitem | default('none') }}
+          rev={{ ansible_loop.revindex }},{{ ansible_loop.revindex0 }}
+          {{ ansible_loop_var }} {{ ansible_index_var }}={{ i }}
+      loop: [1, 2, 3]
+      loop_control:
+        extended: "{{ true }}"
+        index_var: i
+        label: "item {{ item }}"
+      register: fields
+
+    - name: registered items carry ansible_loop
+      debug:
+        var: fields.results
+
+    - name: ansible_loop in when and item results
+      command: "echo {{ word }}"
+      loop: [x, y, z]
+      loop_control:
+        extended: true
+        loop_var: word
+      when: not ansible_loop.last
+      changed_when: false
+      register: words
+
+    - name: registered command items
+      debug:
+        msg: "{{ words.results | map(attribute='ansible_loop') | map(attribute='index') | list }} {{ words.results | map(attribute='stdout', default='-') | list }}"
+
+    - name: without extended there is no ansible_loop
+      debug:
+        msg: "{{ ansible_loop | default('undefined') }} {{ ansible_loop_var }}"
+      loop: [1]
+
+    - name: an empty extended loop
+      debug:
+        msg: never
+      loop: []
+      loop_control:
+        extended: true
+      register: empty
+
+    - debug:
+        var: empty
+
+    - name: with_items and set_fact
+      set_fact:
+        seen: "{{ seen | default([]) + [ansible_loop.index0 ~ ':' ~ item ~ ':' ~ ansible_loop.nextitem | default('end')] }}"
+      with_items: [p, q]
+      loop_control:
+        extended: true
+
+    - debug:
+        var: seen
+
+    - name: looped include_tasks with extended
+      include_tasks: includes/loop_vars.yml
+      loop: [m, n]
+      loop_control:
+        extended: true
+
+    - name: looped include_role with extended
+      include_role:
+        name: looprole
+      loop: [r, s]
+      loop_control:
+        extended: true
+        extended_allitems: false
+        loop_var: it
+        index_var: idx

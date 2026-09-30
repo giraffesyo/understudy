@@ -1,0 +1,4 @@
+---
+- name: role loop variables
+  debug:
+    msg: "{{ it | default('none') }} {{ idx | default('-') }} {{ ansible_loop.first | default('-') }}"

@@ -11,7 +11,6 @@ import (
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/template"
-	"github.com/giraffesyo/understudy/internal/vars"
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
@@ -24,6 +23,7 @@ type includeUnit struct {
 	index   int
 	label   any
 	hasItem bool
+	vars    map[string]any // the item's loop variables
 	hosts   []string
 }
 
@@ -58,7 +58,7 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 	addUnit := func(u includeUnit, host string) {
 		for _, existing := range units {
 			if existing.target == u.target && existing.hasItem == u.hasItem &&
-				existing.index == u.index && reflect.DeepEqual(existing.item, u.item) {
+				existing.index == u.index && reflect.DeepEqual(existing.vars, u.vars) {
 				existing.hosts = append(existing.hosts, host)
 				return
 			}
@@ -77,19 +77,24 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 			r.recordFailure(host, task, agentproto.Fail("error templating loop: %v", err))
 			continue
 		}
-		if !isLoop {
+		var lc *loopControl
+		if isLoop {
+			if lc, err = newLoopControl(task, base, items); err != nil {
+				r.recordFailure(host, task, agentproto.Fail("%v", err))
+				continue
+			}
+		} else {
 			items = []any{nil}
 		}
 		included := 0
 		var lastSkip *agentproto.Result
+		var itemResults []any
 		for i, item := range items {
 			ictx := base
+			var loopVars map[string]any
 			if isLoop {
-				overlay := map[string]any{task.LoopVar: vars.Final{V: item}}
-				if task.IndexVar != "" {
-					overlay[task.IndexVar] = int64(i)
-				}
-				ictx = base.WithOverlay(overlay)
+				loopVars = lc.vars(i)
+				ictx = base.WithOverlay(loopVars)
 			}
 			skip, err := whenSkip(ictx, task.When, task.WhenPos)
 			if err != nil {
@@ -98,7 +103,9 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 			}
 			if skip != nil {
 				if isLoop {
-					r.Callback.HostResult(host, task, skip, false, item)
+					lc.annotate(skip.Extra, i)
+					r.Callback.HostResult(host, task, skip, false, lc.label(ictx, i))
+					itemResults = append(itemResults, orderedResult(task, task.Module, skip.ToVars()))
 				} else {
 					lastSkip = skip
 				}
@@ -119,22 +126,27 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 					target = abs // "included:" lines show absolute paths
 				}
 			}
-			u := includeUnit{target: target, hasItem: isLoop}
+			u := includeUnit{target: target, hasItem: isLoop, vars: loopVars}
 			if isLoop {
-				u.item, u.index, u.label = item, i, item
-				if task.LoopLabel != nil {
-					if l, err := ictx.TemplateValue(task.LoopLabel); err == nil {
-						u.label = l
-					}
-				}
+				u.item, u.index, u.label = item, i, lc.label(ictx, i)
+				// An inclusion is an ok result for its item.
+				ok := &agentproto.Result{Extra: map[string]any{}}
+				lc.annotate(ok.Extra, i)
+				itemResults = append(itemResults, orderedResult(task, task.Module, ok.ToVars()))
 			}
 			addUnit(u, host)
 			included++
 		}
+		if isLoop && itemResults == nil {
+			itemResults = []any{}
+		}
 		// Each inclusion is an ok result for the host; an include whose
 		// when: excluded the host (every item) is a skip.
 		if included == 0 {
-			if !isLoop || len(items) > 0 {
+			switch {
+			case isLoop:
+				r.record(host, task, loopResult(itemResults, false, false, true), itemResults)
+			default:
 				if lastSkip == nil {
 					lastSkip = &agentproto.Result{Skipped: true}
 				}
@@ -145,12 +157,15 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 		r.mu.Lock()
 		r.stats[host].OK += included
 		r.mu.Unlock()
-		if task.Register != "" && !isLoop {
+		if task.Register != "" {
 			// An include's result holds only the flags (its file and args
-			// are not result fields).
+			// are not result fields); a loop's, its items' too.
 			reg := yaml.NewOMap()
 			reg.Set("changed", false)
 			reg.Set("failed", false)
+			if isLoop {
+				reg = orderedResult(task, task.Module, loopResult(itemResults, false, false, false).ToVars())
+			}
 			r.Store.SetHostFact(host, task.Register, reg)
 		}
 	}
@@ -180,14 +195,11 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 		}
 		// Loop variables (and the include's vars:) scope the included tasks.
 		scope := maps.Clone(task.Vars)
-		if u.hasItem {
+		if len(u.vars) > 0 {
 			if scope == nil {
 				scope = map[string]any{}
 			}
-			scope[task.LoopVar] = vars.Final{V: u.item}
-			if task.IndexVar != "" {
-				scope[task.IndexVar] = int64(u.index)
-			}
+			maps.Copy(scope, u.vars)
 		}
 		tasks, err := loaded[ui], loadErrs[ui]
 		if err != nil {

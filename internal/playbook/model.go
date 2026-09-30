@@ -95,6 +95,8 @@ type Task struct {
 	LoopVar        string         // default "item"
 	IndexVar       string         // loop_control.index_var (0-based); "" = none
 	LoopLabel      any            // loop_control.label (raw template); nil = show the item
+	LoopExtended   any            // loop_control.extended as written (nil = unset)
+	LoopAllItems   any            // loop_control.extended_allitems as written (nil = true)
 	Async          int            // async timeout seconds (0 = synchronous)
 	Poll           int            // poll interval; -1 = unset, 0 = fire-and-forget
 	CheckMode      *bool          // per-task check_mode override (nil = inherit run)

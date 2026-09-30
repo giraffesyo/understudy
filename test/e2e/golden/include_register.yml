@@ -1,0 +1,94 @@
+# register on include_tasks/include_role: a plain include registers its
+# flags, a looped one each item's result (loop variables, skips), a
+# skipped one the skip, an empty loop the "No items" skip.
+- name: registered includes
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: looped include_tasks
+      include_tasks: includes/loop_vars.yml
+      loop: [a, b]
+      loop_control:
+        index_var: i
+        label: "L{{ item }}"
+      register: inc_loop
+
+    - debug:
+        var: inc_loop
+
+    - name: looped include_tasks skipping an item
+      include_tasks: includes/loop_vars.yml
+      loop: [a, b]
+      when: item == 'b'
+      register: inc_skip_one
+
+    - debug:
+        var: inc_skip_one
+
+    - name: looped include_tasks skipping every item
+      include_tasks: includes/loop_vars.yml
+      loop: [a, b]
+      when: false
+      register: inc_skip_all
+
+    - debug:
+        var: inc_skip_all
+
+    - name: looped include_tasks over nothing
+      include_tasks: includes/loop_vars.yml
+      loop: []
+      register: inc_empty
+
+    - debug:
+        var: inc_empty
+
+    - name: plain include_tasks
+      include_tasks: includes/loop_vars.yml
+      vars:
+        item: plain
+      register: inc_plain
+
+    - debug:
+        var: inc_plain
+
+    - name: skipped include_tasks
+      include_tasks: includes/loop_vars.yml
+      when: false
+      register: inc_skipped
+
+    - debug:
+        var: inc_skipped
+
+    - name: include_role once
+      include_role:
+        name: looprole
+      register: role_once
+
+    - debug:
+        var: role_once
+
+    - name: looped include_role
+      include_role:
+        name: looprole
+      loop: [x, y]
+      loop_control:
+        loop_var: it
+        index_var: idx
+        extended: true
+      register: role_loop
+
+    - debug:
+        msg: "{{ role_loop }}"
+
+    - name: skipped include_role
+      include_role:
+        name: looprole
+      when: false
+      register: role_skipped
+
+    - debug:
+        var: role_skipped
+
+    - name: registered values template like results
+      debug:
+        msg: "{{ inc_loop.results | map(attribute='item') | list }} {{ inc_skip_one.results | selectattr('skipped', 'defined') | list | length }} {{ role_loop.results | map(attribute='ansible_loop.index') | list }} {{ inc_loop.keys() | list }}"
