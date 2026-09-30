@@ -314,12 +314,14 @@ func (r *Result) ToVars() map[string]any {
 		// A module's stdout/stderr without rc: the action layer still
 		// pre-splits them into lines.
 		for _, s := range [][2]string{{"stdout", r.Stdout}, {"stderr", r.Stderr}} {
-			if s[1] == "" {
-				continue
+			if s[1] != "" {
+				m[s[0]] = s[1]
 			}
-			m[s[0]] = s[1]
-			if _, ok := m[s[0]+"_lines"]; !ok {
-				m[s[0]+"_lines"] = splitLines(s[1])
+			// An explicitly empty one (in Extra) is split too.
+			if v, ok := m[s[0]].(string); ok {
+				if _, ok := m[s[0]+"_lines"]; !ok {
+					m[s[0]+"_lines"] = splitLines(v)
+				}
 			}
 		}
 	}
