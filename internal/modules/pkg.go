@@ -199,7 +199,30 @@ func mkPkg(mgrName string) ModuleFunc {
 
 		res := &agentproto.Result{Extra: map[string]any{}}
 
-		if p.Bool("update_cache") && !aptCacheFresh(mgr.name, int(p.Int("cache_valid_time"))) {
+		wantUpdate := p.Bool("update_cache") || (mgr.name == "apt" && p.Int("cache_valid_time") > 0)
+		if wantUpdate && mgr.name == "apt" {
+			// ansible.builtin.apt: refresh unless the cache is younger than
+			// cache_valid_time; with nothing else to do, changed reports
+			// whether the cache was refreshed.
+			before := aptCacheMtime()
+			updated := false
+			if !aptCacheFresh(mgr.name, int(p.Int("cache_valid_time"))) {
+				if !env.CheckMode {
+					if out, err := mgr.refresh(env, opts.repo); err != nil {
+						return agentproto.Fail("cache update failed: %v: %s", err, tail(out))
+					}
+				}
+				after := aptCacheMtime()
+				updated = env.CheckMode || after != before
+				before = after
+			}
+			res.Extra["cache_updated"] = updated
+			res.Extra["cache_update_time"] = before
+			if len(names) == 0 {
+				res.Changed = updated
+				return res
+			}
+		} else if p.Bool("update_cache") {
 			if !env.CheckMode {
 				if out, err := mgr.refresh(env, opts.repo); err != nil {
 					return agentproto.Fail("cache update failed: %v: %s", err, tail(out))
@@ -424,6 +447,17 @@ func pkgOptions(mgr string, p *args.Parsed, raw map[string]any) (pkgOpts, error)
 
 // aptCacheFresh reports whether apt's cache is younger than validSecs
 // (cache_valid_time), letting update_cache skip the refresh.
+// aptCacheMtime is the apt module's get_cache_mtime as an integer
+// timestamp (0 when there is no cache).
+func aptCacheMtime() int64 {
+	for _, stamp := range []string{"/var/lib/apt/periodic/update-success-stamp", "/var/lib/apt/lists"} {
+		if info, err := os.Stat(stamp); err == nil {
+			return info.ModTime().Unix()
+		}
+	}
+	return 0
+}
+
 func aptCacheFresh(mgr string, validSecs int) bool {
 	if mgr != "apt" || validSecs <= 0 {
 		return false
