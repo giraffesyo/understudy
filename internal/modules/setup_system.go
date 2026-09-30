@@ -5,6 +5,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -74,6 +75,11 @@ func getFQDN(node string) string {
 	}
 	names, err := net.DefaultResolver.LookupAddr(ctx, addrs[0])
 	if err != nil || len(names) == 0 {
+		// musl's gethostbyaddr falls back to the numeric address where
+		// glibc's fails, so there the address itself is the answer.
+		if m, _ := filepath.Glob("/lib/ld-musl-*.so.1"); len(m) > 0 {
+			return addrs[0]
+		}
 		return node
 	}
 	for _, n := range names {

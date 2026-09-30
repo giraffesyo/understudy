@@ -1,0 +1,57 @@
+# ansible.builtin.hostname on each image's auto-detected strategy (Debian
+# family: /etc/hostname, Alpine: /etc/hostname + hostname -F, Rocky without
+# systemd: unsupported) and with explicit `use` strategies.
+- name: hostname
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: check mode reports the change
+      hostname: {name: web01.golden.test}
+      check_mode: true
+      diff: true
+      register: r
+      ignore_errors: true
+
+    - name: set it
+      ansible.builtin.hostname: {name: web01.golden.test}
+      diff: true
+      ignore_errors: true
+
+    - name: again is a no-op
+      hostname: {name: web01.golden.test}
+      ignore_errors: true
+
+    - name: facts follow the name
+      debug:
+        msg: "{{ ansible_hostname | default('unset') }} {{ ansible_nodename | default('unset') }}"
+
+    - name: the file strategy
+      hostname: {name: web02, use: debian}
+      ignore_errors: true
+
+    - name: the redhat strategy
+      hostname: {name: web03, use: redhat}
+      diff: true
+      ignore_errors: true
+
+    - name: the openrc strategy
+      hostname: {name: web04, use: openrc}
+      ignore_errors: true
+
+    - name: the alpine strategy
+      hostname: {name: web05, use: alpine}
+      diff: true
+      ignore_errors: true
+
+    - name: the sles strategy
+      hostname: {name: web06, use: sles}
+      ignore_errors: true
+
+    - name: a bad strategy
+      hostname: {name: web07, use: nope}
+      ignore_errors: true
+
+    - name: files afterwards
+      shell: cat /etc/hostname /etc/sysconfig/network /etc/HOSTNAME 2>/dev/null; true
+      changed_when: false
