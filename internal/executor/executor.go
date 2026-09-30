@@ -1080,6 +1080,7 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 	agg.Extra["results"] = itemResults
 	switch {
 	case len(items) == 0:
+		agg.Extra["skip_reason"] = "No items in the list"
 		agg.Extra["skipped_reason"] = "No items in the list"
 	case anyFailed:
 		agg.Msg = "One or more items failed"
