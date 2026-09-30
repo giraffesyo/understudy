@@ -167,6 +167,14 @@ func aptRepositoryModule(env *RunEnv, raw map[string]any) *agentproto.Result {
 	if err != nil {
 		return agentproto.Fail("%v", err)
 	}
+	if aptBindingsMissing(env) {
+		switch {
+		case env.CheckMode:
+			return agentproto.Fail("python3-apt must be installed to use check mode. If run normally this module can auto-install it.")
+		case !p.Bool("install_python_apt"):
+			return agentproto.Fail("python3-apt is not installed, and install_python_apt is False")
+		}
+	}
 	repo := p.Str("repo")
 	state := p.Str("state")
 	if repo == "" {

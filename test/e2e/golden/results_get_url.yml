@@ -1,0 +1,96 @@
+---
+# Result dicts of get_url against the local fixture server
+# (files/http_fixture.py): downloads to a file or a directory,
+# Content-Disposition names, re-downloads with and without force,
+# checksums, file attributes, backups, check mode and HTTP failures.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    u: http://localhost
+    d: "{{ workdir }}/dl"
+  tasks:
+    - name: clear a previous run's fixture state
+      file: {path: "{{ workdir }}/{{ item }}", state: absent}
+      loop: [http.port, https.port, ftp.port, http.sockpath, dl]
+    - name: a self-signed certificate for the HTTPS listener
+      no_log: true
+      command: >-
+        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj /CN=localhost
+        -addext subjectAltName=DNS:localhost
+        -keyout {{ workdir }}/key.pem -out {{ workdir }}/cert.pem
+    - name: start the fixture server
+      shell: nohup python3 {{ playbook_dir }}/files/http_fixture.py {{ workdir }} >/dev/null 2>&1 &
+    - wait_for: {path: "{{ workdir }}/http.port"}
+      no_log: true
+    - set_fact:
+        sock: "{{ lookup('file', workdir + '/http.sockpath') }}"
+        t: "http://127.0.0.1:{{ lookup('file', workdir + '/http.port') }}"
+      no_log: true
+    - file: {path: "{{ d }}", state: directory}
+
+    - name: download to a file
+      get_url: {url: "{{ t }}/download/a.txt", dest: "{{ d }}/a.txt"}
+    - name: download again (the file exists)
+      get_url: {url: "{{ t }}/download/a.txt", dest: "{{ d }}/a.txt"}
+    - name: force a download of the same content
+      get_url: {url: "{{ t }}/download/a.txt", dest: "{{ d }}/a.txt", force: true}
+    - name: force a download of new content, with a backup
+      get_url: {url: "{{ t }}/download/b.txt", dest: "{{ d }}/a.txt", force: true, backup: true}
+    - name: get_url has no unix_socket
+      get_url: {url: "{{ u }}/download/a.txt", dest: "{{ d }}/a.txt", unix_socket: "{{ sock }}"}
+      ignore_errors: true
+    - name: download into a directory
+      get_url: {url: "{{ t }}/download/c.txt", dest: "{{ d }}"}
+    - name: a Content-Disposition name
+      get_url: {url: "{{ t }}/download/x?disposition", dest: "{{ d }}"}
+    - name: file attributes
+      get_url: {url: "{{ t }}/download/m.txt", dest: "{{ d }}/m.txt", mode: "0600"}
+    - name: the right checksum
+      get_url:
+        url: "{{ t }}/download/s.txt"
+        dest: "{{ d }}/s.txt"
+        checksum: "sha1:{{ 'payload of s.txt\n' | hash('sha1') }}"
+    - name: the right checksum again
+      get_url:
+        url: "{{ t }}/download/s.txt"
+        dest: "{{ d }}/s.txt"
+        checksum: "sha1:{{ 'payload of s.txt\n' | hash('sha1') }}"
+    - name: a wrong checksum
+      get_url: {url: "{{ t }}/download/w.txt", dest: "{{ d }}/w.txt", checksum: "md5:00000000000000000000000000000000"}
+      ignore_errors: true
+    - name: a malformed checksum
+      get_url: {url: "{{ t }}/download/w.txt", dest: "{{ d }}/w.txt", checksum: "nosuchalgo"}
+      ignore_errors: true
+    - name: check mode
+      get_url: {url: "{{ t }}/download/k.txt", dest: "{{ d }}/k.txt"}
+      check_mode: true
+    - name: a 404
+      get_url: {url: "{{ t }}/nope", dest: "{{ d }}/nope.txt"}
+      ignore_errors: true
+    - name: a 500
+      get_url: {url: "{{ t }}/status/500", dest: "{{ d }}/500.txt"}
+      ignore_errors: true
+    - name: a missing destination directory
+      get_url: {url: "{{ t }}/download/z.txt", dest: "{{ d }}/missing/z.txt"}
+      ignore_errors: true
+    - name: a redirect
+      get_url: {url: "{{ t }}/redirect/302", dest: "{{ d }}/r.json"}
+    - name: basic auth
+      get_url: {url: "{{ t }}/basic", dest: "{{ d }}/basic.json", url_username: alice, url_password: s3cret, force_basic_auth: true}
+    - name: a checksum url without the file's line
+      get_url: {url: "{{ t }}/download/v.txt", dest: "{{ d }}/v.txt", checksum: "sha256:{{ t }}/download/sums"}
+      ignore_errors: true
+    - name: headers
+      get_url: {url: "{{ t }}/download/h.txt", dest: "{{ d }}/h.txt", headers: {X-Golden: "1"}}
+    - name: a missing tmp_dest
+      get_url: {url: "{{ t }}/download/h2.txt", dest: "{{ d }}/h2.txt", tmp_dest: "{{ d }}/nope"}
+      ignore_errors: true
+    - name: a read timeout
+      get_url: {url: "{{ t }}/slow", dest: "{{ d }}/slow.txt", timeout: 1}
+      ignore_errors: true
+    - name: a refused connection
+      get_url: {url: "http://127.0.0.1:1/x", dest: "{{ d }}/refused.txt"}
+      ignore_errors: true
+
+    - name: stop the fixture server
+      uri: {url: "{{ u }}/shutdown", unix_socket: "{{ sock }}"}

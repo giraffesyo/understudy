@@ -281,7 +281,13 @@ task's module runs in a child of the understudy binary started through
 the become method (a program embedding the Go API serves as that child
 itself). On a macOS controller, `local` runs `user`, `group` and
 `hostname` with ansible-core's Darwin implementations (`dscl`,
-`dseditgroup`, `scutil`).
+`dseditgroup`, `scutil`). Temporary files follow ansible's rules under
+become: a transfer is staged in the login user's `remote_tmp` (and
+reported there), and a become user that is neither an `admin_users`
+member nor the login user gets a directory in a `system_tmpdirs` dir,
+made readable to it by `_fixup_perms2`'s chain (setfacl, chown,
+`chmod +a`, `common_remote_group`, `allow_world_readable_tmpfiles`)
+with ansible's warnings and errors.
 
 ## Architecture
 
@@ -355,7 +361,13 @@ than silently diverging. Known boundaries:
   modules. understudy identifies that interpreter as ansible would (the
   task's `ansible_python_interpreter`, else `ANSIBLE_PYTHON_INTERPRETER`,
   else discovery's `python3.14` ... `python3.9`, `/usr/bin/python3`
-  order) and reads what it needs off the filesystem: the version from the
+  order, or `ansible_interpreter_python_fallback`, searched in the login
+  user's PATH) and names it as that Python reports `sys.executable`
+  (macOS's `/usr/bin/python3` shim is the developer directory's python3,
+  Homebrew's Pythons their `opt` link) wherever ansible's messages do:
+  `missing_required_lib` errors, `pip`'s `python -m pip` command and
+  virtualenv `-p`, `dnf`'s probed interpreters. It reads what it needs off
+  the filesystem: the version from the
   interpreter's path, installed libraries from the `.dist-info`/
   `.egg-info` metadata in its site directories (venv `pyvenv.cfg` and
   `.pth` files included). The rule: where the target has a Python,
@@ -390,6 +402,13 @@ than silently diverging. Known boundaries:
     is set); where the target has a Python, the backend is available only
     if ansible's would be (python `cryptography` >= 3.3, and `bcrypt` for
     passphrases, else ansible's errors).
+  - Missing package-manager bindings: without python3-apt, `apt` and
+    `apt_repository` fail as ansible's do where they could not install it
+    (check mode, `install_python_apt: false`); understudy does not install
+    python3-apt itself. `dnf` fails without the dnf Python package, and
+    `dnf5` without libdnf5 first runs `dnf install -y python3-libdnf5`,
+    as ansible's modules do. The discovered interpreter is not reported
+    as a `discovered_interpreter_python` fact.
 - **`dnf` results**: the transaction runs through the dnf CLI, and
   `results` lists it as the modules do (`Installed: <nevra>`,
   `Removed: <nevra>`). dnf4's module iterates a set, so for multi-package

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -122,7 +121,7 @@ func unarchiveModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 			user[k] = v
 		}
 	}
-	var stageDir string
+	var stageDir, reportSrc string
 	defer func() {
 		if stageDir != "" {
 			os.RemoveAll(stageDir)
@@ -140,11 +139,12 @@ func unarchiveModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		}
 		user["dest"] = dest
 		if transfer, _ := action["transfer"].(bool); transfer {
-			dir, src, err := stageStream(env.Payload, "source")
+			remoteTmp, _ := action["remote_tmp"].(string)
+			dir, report, src, err := stageStream(env, env.Payload, "source", remoteTmp)
 			if err != nil {
 				return agentproto.Fail("staging the source file: %v", err)
 			}
-			stageDir = dir
+			stageDir, reportSrc = dir, report
 			user["src"] = src
 		}
 	}
@@ -152,35 +152,53 @@ func unarchiveModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	if tmp != "" {
 		os.Remove(tmp)
 	}
+	if actual, _ := user["src"].(string); reportSrc != "" && reportSrc != actual && res != nil {
+		// Written elsewhere (see transferDir): report the staging path,
+		// in the extraction command line too.
+		if res.Extra["src"] == actual {
+			res.Extra["src"] = reportSrc
+		}
+		if er, ok := res.Extra["extract_results"].(map[string]any); ok {
+			if cmd, ok := er["cmd"].([]any); ok {
+				for i, a := range cmd {
+					if a == actual {
+						cmd[i] = reportSrc
+					}
+				}
+			}
+		}
+		res.Msg = strings.ReplaceAll(res.Msg, actual, reportSrc)
+	}
 	addPathInfo(res)
 	return res
 }
 
-// stageStream writes the payload to <tmp>/ansible-tmp-.../<name>.
-func stageStream(r io.Reader, name string) (string, string, error) {
-	dname := fmt.Sprintf("ansible-tmp-%s-%d-%d", pyFloat(float64(time.Now().UnixNano())/1e9), os.Getpid(), rand.Int63n(1<<48))
-	dir := filepath.Join(os.TempDir(), dname)
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		return "", "", err
+// stageStream writes the payload to <tmpdir>/<name> (see transferDir),
+// returning the directory to remove, and the paths the file is reported
+// at and written to.
+func stageStream(env *RunEnv, r io.Reader, name, remoteTmp string) (string, string, string, error) {
+	reportDir, dir, err := transferDir(env, remoteTmp)
+	if err != nil {
+		return "", "", "", err
 	}
 	src := filepath.Join(dir, name)
 	f, err := os.OpenFile(src, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		os.RemoveAll(dir)
-		return "", "", err
+		return "", "", "", err
 	}
 	if r != nil {
 		if _, err := io.Copy(f, r); err != nil {
 			f.Close()
 			os.RemoveAll(dir)
-			return "", "", err
+			return "", "", "", err
 		}
 	}
 	if err := f.Close(); err != nil {
 		os.RemoveAll(dir)
-		return "", "", err
+		return "", "", "", err
 	}
-	return dir, src, nil
+	return dir, filepath.Join(reportDir, name), src, nil
 }
 
 func unarchiveCore(env *RunEnv, rawArgs map[string]any) (*agentproto.Result, string) {

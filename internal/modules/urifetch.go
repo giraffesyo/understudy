@@ -217,13 +217,8 @@ func newURIClient(env *RunEnv, p *args.Parsed) *uriClient {
 func (c *uriClient) fetch(rawURL, method string, data []byte, hasData bool, userHeaders *uriHeaders, lastMod *time.Time) (*uriResponse, *uriInfo) {
 	info := &uriInfo{fields: map[string]any{"url": rawURL, "status": -1}}
 	if c.p.Bool("use_gssapi") {
-		host, _ := os.Hostname()
 		info.fields = map[string]any{}
-		info.fatal = fmt.Sprintf("Failed to import the required Python library (gssapi) on %s's Python %s. "+
-			"This is required for use_gssapi=True. See https://pypi.org/project/gssapi/ for more info. "+
-			"Please read the module documentation and install it in the appropriate location. "+
-			"If the required library is installed, but Ansible is using the wrong Python interpreter, "+
-			"please consult the documentation on ansible_python_interpreter", host, "python3")
+		info.fatal = missingRequiredLib(c.env, "gssapi", "for use_gssapi=True", "https://pypi.org/project/gssapi/")
 		return nil, info
 	}
 

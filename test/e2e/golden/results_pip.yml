@@ -1,0 +1,40 @@
+---
+# pip in check mode (nothing is installed): the module needs packaging in
+# the task's Python (else missing_required_lib names that Python), runs
+# that Python's own pip (python -m pip) when it has one, else pip3, and
+# reports what `pip list` found; virtualenvs and executables it cannot
+# find.
+- hosts: localhost
+  gather_facts: false
+  check_mode: true
+  tasks:
+    - name: a package the task's Python has
+      pip: {name: pip}
+      ignore_errors: true
+    - name: a missing package
+      pip: {name: no-such-package-golden-xyz}
+      ignore_errors: true
+    - name: absent
+      pip: {name: no-such-package-golden-xyz, state: absent}
+      ignore_errors: true
+    - name: latest is always a change
+      pip: {name: pip, state: latest}
+      ignore_errors: true
+    - name: an executable that does not exist
+      pip: {name: foo, executable: no-such-pip}
+      ignore_errors: true
+    - name: a virtualenv to create
+      pip: {name: foo, virtualenv: "{{ workdir }}/venv"}
+      ignore_errors: true
+    - name: version with state=latest
+      pip: {name: foo, version: "1.0", state: latest}
+      ignore_errors: true
+    - name: version with several packages
+      pip: {name: [foo, bar], version: "1.0"}
+      ignore_errors: true
+    - name: name and requirements
+      pip: {name: foo, requirements: r.txt}
+      ignore_errors: true
+    - name: an unknown option
+      pip: {name: foo, bogus: 1}
+      ignore_errors: true

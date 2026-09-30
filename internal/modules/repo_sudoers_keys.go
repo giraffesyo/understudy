@@ -636,7 +636,7 @@ func opensshKeypairModule(env *RunEnv, rawArgs map[string]any) *agentproto.Resul
 		return keypairFail("Cannot find the OpenSSH binary in the PATH")
 	}
 	if backend == "cryptography" && !canCrypto {
-		return keypairFail(missingRequiredLibFor(env, "cryptography >= 3.3"))
+		return keypairFail(missingRequiredLib(env, "cryptography >= 3.3", "", ""))
 	}
 
 	k := &keypairBackend{env: env, p: p, keygen: keygen, typ: p.Str("type"), regenerate: p.Str("regenerate"),

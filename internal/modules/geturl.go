@@ -99,9 +99,9 @@ func (r *getURLRun) fail(msg string, extra map[string]any) *agentproto.Result {
 
 // getURLModule ports ansible.builtin.get_url.
 func getURLModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
-	p, err := getURLSpec.Parse(rawArgs)
-	if err != nil {
-		return agentproto.Fail("%v", err)
+	p, fail := parseModuleArgs(getURLSpec, rawArgs, "get_url")
+	if fail != nil {
+		return fail
 	}
 	r := &getURLRun{env: env, p: p}
 	defer func() {
@@ -416,18 +416,6 @@ func digestFileAlgo(p, algorithm string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// moduleTmpdir is AnsibleModule.tmpdir: a fresh
-// ~/.ansible/tmp/ansible-tmp-<time>-<pid>-<rand> directory.
-func moduleTmpdir() (string, error) {
-	base := pyExpandUser("~/.ansible/tmp")
-	if err := os.MkdirAll(base, 0o700); err != nil {
-		base = os.TempDir()
-	}
-	name := fmt.Sprintf("ansible-tmp-%s-%d-%d", pyFloat(float64(time.Now().UnixNano())/1e9), os.Getpid(), rand.Int63n(1<<48))
-	dir := filepath.Join(base, name)
-	return dir, os.Mkdir(dir, 0o700)
-}
-
 // mkstemp is tempfile.mkstemp(dir=dir): "tmp" plus 8 random characters.
 func mkstemp(dir string) (*os.File, error) {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789_"
@@ -482,7 +470,7 @@ func (r *getURLRun) urlGet(rawURL, dest string, lastMod time.Time, force bool, m
 		}
 	} else {
 		if r.tmpdir == "" {
-			dir, err := moduleTmpdir()
+			_, dir, err := transferDir(r.env, "~/.ansible/tmp")
 			if err != nil {
 				return "", nil, moduleCrash(err)
 			}
@@ -562,7 +550,7 @@ func (r *getURLRun) fetch(rawURL string, lastMod time.Time, force bool, method s
 	challengeAuth := false
 	switch {
 	case p.Bool("use_gssapi"):
-		return nil, nil, &agentproto.Result{Failed: true, Msg: missingRequiredLib("gssapi", "for use_gssapi=True", "https://pypi.org/project/gssapi/")}
+		return nil, nil, &agentproto.Result{Failed: true, Msg: missingRequiredLib(r.env, "gssapi", "for use_gssapi=True", "https://pypi.org/project/gssapi/")}
 	case username != "" && !p.Bool("force_basic_auth"):
 		challengeAuth = true
 	case username != "":
@@ -789,25 +777,6 @@ func opensslCipherName(iana string) string {
 		name = enc
 	}
 	return strings.ReplaceAll(name, "_", "-")
-}
-
-// missingRequiredLib is basic.missing_required_lib().
-func missingRequiredLib(library, reason, url string) string {
-	host, _ := os.Hostname()
-	py, err := lookPath("python3")
-	if err != nil {
-		py = "/usr/bin/python3"
-	}
-	msg := fmt.Sprintf("Failed to import the required Python library (%s) on %s's Python %s.", library, host, py)
-	if reason != "" {
-		msg += " This is required " + reason + "."
-	}
-	if url != "" {
-		msg += " See " + url + " for more info."
-	}
-	return msg + " Please read the module documentation and install it in the appropriate location." +
-		" If the required library is installed, but Ansible is using the wrong Python interpreter," +
-		" please consult the documentation on ansible_python_interpreter"
 }
 
 // pyOSErrorURL renders an OSError for a urlopen error message.

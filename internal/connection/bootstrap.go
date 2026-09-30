@@ -3,34 +3,55 @@ package connection
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/embedded"
 )
 
+// LoginInfo describes the user a connection logs in as, from the
+// bootstrap probe.
+type LoginInfo struct {
+	User, Home string
+	Path       string // the login shell's PATH
+	UID, GID   int    // -1 when unknown
+}
+
 // Bootstrap detects the target platform and ensures the agent binary is
-// present, returning its remote path. Checksum-named paths make version
-// handshakes unnecessary: a new build is a new filename.
-func Bootstrap(ctx context.Context, conn Connection, remoteTmp string) (string, error) {
+// present, returning its remote path and the login user. Checksum-named
+// paths make version handshakes unnecessary: a new build is a new
+// filename.
+func Bootstrap(ctx context.Context, conn Connection, remoteTmp string) (string, LoginInfo, error) {
+	login := LoginInfo{UID: -1, GID: -1}
 	// One probe resolves platform and the concrete home/user (candidate
 	// paths must be literal so quoting is consistent everywhere).
-	res, err := conn.Exec(ctx, `uname -sm && echo "$HOME" && echo "$USER"`, ExecOptions{})
+	res, err := conn.Exec(ctx, `uname -sm && echo "$HOME" && echo "$USER" && echo "$PATH" && id -u && id -g`, ExecOptions{})
 	if err != nil {
-		return "", err
+		return "", login, err
 	}
 	lines := strings.Split(strings.TrimSpace(string(res.Stdout)), "\n")
 	if len(lines) < 3 {
-		return "", fmt.Errorf("unexpected platform-probe output %q", string(res.Stdout))
+		return "", login, fmt.Errorf("unexpected platform-probe output %q", string(res.Stdout))
 	}
 	goos, goarch, err := parseUname(strings.TrimSpace(lines[0]))
 	if err != nil {
-		return "", err
+		return "", login, err
 	}
 	home := strings.TrimSpace(lines[1])
 	user := strings.TrimSpace(lines[2])
+	login.User, login.Home = user, home
+	if len(lines) >= 6 {
+		login.Path = strings.TrimSpace(lines[3])
+		if n, err := strconv.Atoi(strings.TrimSpace(lines[4])); err == nil {
+			login.UID = n
+		}
+		if n, err := strconv.Atoi(strings.TrimSpace(lines[5])); err == nil {
+			login.GID = n
+		}
+	}
 	ag, err := embedded.Agent(goos, goarch)
 	if err != nil {
-		return "", err
+		return "", login, err
 	}
 
 	name := fmt.Sprintf("agent-%s-%s-%s", ag.Sha12, goos, goarch)
@@ -54,10 +75,10 @@ func Bootstrap(ctx context.Context, conn Connection, remoteTmp string) (string, 
 		// integrity (verified at upload time).
 		probe, err := conn.Exec(ctx, fmt.Sprintf(`test -x %s && %s version`, q, q), ExecOptions{})
 		if err != nil {
-			return "", err
+			return "", login, err
 		}
 		if probe.RC == 0 && strings.Contains(string(probe.Stdout), "understudy-agent") {
-			return path, nil
+			return path, login, nil
 		}
 
 		if err := uploadAgent(ctx, conn, ag, dir, path); err != nil {
@@ -68,15 +89,15 @@ func Bootstrap(ctx context.Context, conn Connection, remoteTmp string) (string, 
 		// writes happily).
 		probe, err = conn.Exec(ctx, q+" version", ExecOptions{})
 		if err != nil {
-			return "", err
+			return "", login, err
 		}
 		if probe.RC == 0 && strings.Contains(string(probe.Stdout), "understudy-agent") {
-			return path, nil
+			return path, login, nil
 		}
 		lastErr = fmt.Errorf("agent at %s does not execute (noexec mount?): rc=%d %s",
 			path, probe.RC, strings.TrimSpace(string(probe.Stderr)))
 	}
-	return "", fmt.Errorf("could not install the agent on the target: %v", lastErr)
+	return "", login, fmt.Errorf("could not install the agent on the target: %v", lastErr)
 }
 
 func uploadAgent(ctx context.Context, conn Connection, ag *embedded.AgentBinary, dir, path string) error {

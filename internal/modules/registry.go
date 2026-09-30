@@ -54,6 +54,19 @@ type RunEnv struct {
 	// PythonInterpreter is the task's ansible_python_interpreter ("" for
 	// discovery): output that depends on the target's Python follows it.
 	PythonInterpreter string
+	// PythonFallback is ansible_interpreter_python_fallback, the list
+	// discovery tries (nil: INTERPRETER_PYTHON_FALLBACK's default).
+	PythonFallback []string
+	// DiscoveryPath is the PATH discovery searches: the login user's,
+	// when the module runs as another user ("": this process's).
+	DiscoveryPath string
+	// LoginHome, LoginUID and LoginGID describe the login user when the
+	// module runs as another one (LoginHome "" otherwise).
+	LoginHome          string
+	LoginUID, LoginGID int
+	// StageDir is where an unprivileged become user's transferred files
+	// are reported (see transferDir).
+	StageDir string
 
 	// Ctx is the run's context (nil = never cancelled): a task that
 	// timed out cancels it, and the processes the module started
@@ -168,6 +181,12 @@ func RunContext(ctx context.Context, req *agentproto.TaskRequest, payload io.Rea
 		Background: req.Background,
 
 		PythonInterpreter: req.PythonInterpreter,
+		PythonFallback:    req.PythonFallback,
+		DiscoveryPath:     req.DiscoveryPath,
+		LoginHome:         req.LoginHome,
+		LoginUID:          req.LoginUID,
+		LoginGID:          req.LoginGID,
+		StageDir:          req.StageDir,
 		Ctx:               ctx,
 	}
 	_, copyAction := req.Args[copyActionKey]
