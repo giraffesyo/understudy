@@ -1,0 +1,512 @@
+[
+    [
+        {
+            "chain": "INPUT",
+            "protocol": "tcp",
+            "destination_port": "22",
+            "ctstate": [
+                "NEW",
+                "ESTABLISHED"
+            ],
+            "jump": "ACCEPT",
+            "comment": "ssh"
+        },
+        [
+            "-p",
+            "tcp",
+            "-j",
+            "ACCEPT",
+            "--destination-port",
+            "22",
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "NEW,ESTABLISHED",
+            "-m",
+            "comment",
+            "--comment",
+            "ssh"
+        ],
+        [
+            "/sbin/iptables",
+            "-t",
+            "filter",
+            "-I",
+            "INPUT",
+            "3",
+            "-w",
+            "5",
+            "-p",
+            "tcp",
+            "-j",
+            "ACCEPT",
+            "--destination-port",
+            "22",
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "NEW,ESTABLISHED",
+            "-m",
+            "comment",
+            "--comment",
+            "ssh"
+        ]
+    ],
+    [
+        {
+            "chain": "INPUT",
+            "source": "!10.0.0.0/8",
+            "match": [
+                "tcp",
+                "conntrack"
+            ],
+            "ctstate": [
+                "NEW"
+            ],
+            "tcp_flags": {
+                "flags": [
+                    "ALL"
+                ],
+                "flags_set": [
+                    "ACK",
+                    "SYN"
+                ]
+            },
+            "syn": "negate",
+            "jump": "DROP"
+        },
+        [
+            "!",
+            "-s",
+            "10.0.0.0/8",
+            "-m",
+            "tcp",
+            "-m",
+            "conntrack",
+            "--tcp-flags",
+            "ALL",
+            "ACK,SYN",
+            "-j",
+            "DROP",
+            "!",
+            "--syn",
+            "--ctstate",
+            "NEW"
+        ],
+        [
+            "/sbin/iptables",
+            "-t",
+            "filter",
+            "-I",
+            "INPUT",
+            "3",
+            "-w",
+            "5",
+            "!",
+            "-s",
+            "10.0.0.0/8",
+            "-m",
+            "tcp",
+            "-m",
+            "conntrack",
+            "--tcp-flags",
+            "ALL",
+            "ACK,SYN",
+            "-j",
+            "DROP",
+            "!",
+            "--syn",
+            "--ctstate",
+            "NEW"
+        ]
+    ],
+    [
+        {
+            "chain": "INPUT",
+            "protocol": "tcp",
+            "destination_ports": [
+                "80",
+                "443:445"
+            ],
+            "src_range": "10.0.0.1-10.0.0.9",
+            "limit": "5/second",
+            "limit_burst": "10",
+            "jump": "ACCEPT"
+        },
+        [
+            "-p",
+            "tcp",
+            "-j",
+            "ACCEPT",
+            "-m",
+            "multiport",
+            "--dports",
+            "80,443:445",
+            "-m",
+            "iprange",
+            "--src-range",
+            "10.0.0.1-10.0.0.9",
+            "-m",
+            "limit",
+            "--limit",
+            "5/second",
+            "--limit-burst",
+            "10"
+        ],
+        [
+            "/sbin/iptables",
+            "-t",
+            "filter",
+            "-I",
+            "INPUT",
+            "3",
+            "-w",
+            "5",
+            "-p",
+            "tcp",
+            "-j",
+            "ACCEPT",
+            "-m",
+            "multiport",
+            "--dports",
+            "80,443:445",
+            "-m",
+            "iprange",
+            "--src-range",
+            "10.0.0.1-10.0.0.9",
+            "-m",
+            "limit",
+            "--limit",
+            "5/second",
+            "--limit-burst",
+            "10"
+        ]
+    ],
+    [
+        {
+            "chain": "OUTPUT",
+            "uid_owner": "!1000",
+            "gid_owner": "100",
+            "reject_with": "tcp-reset",
+            "protocol": "tcp"
+        },
+        [
+            "-p",
+            "tcp",
+            "-m",
+            "owner",
+            "!",
+            "--uid-owner",
+            "1000",
+            "--gid-owner",
+            "100",
+            "-j",
+            "REJECT",
+            "--reject-with",
+            "tcp-reset"
+        ],
+        [
+            "/sbin/iptables",
+            "-t",
+            "filter",
+            "-I",
+            "OUTPUT",
+            "3",
+            "-w",
+            "5",
+            "-p",
+            "tcp",
+            "-m",
+            "owner",
+            "!",
+            "--uid-owner",
+            "1000",
+            "--gid-owner",
+            "100",
+            "-j",
+            "REJECT",
+            "--reject-with",
+            "tcp-reset"
+        ]
+    ],
+    [
+        {
+            "chain": "PREROUTING",
+            "table": "nat",
+            "protocol": "tcp",
+            "in_interface": "eth0",
+            "destination_port": "80",
+            "jump": "DNAT",
+            "to_destination": "10.0.0.2:8080"
+        },
+        [
+            "-p",
+            "tcp",
+            "-j",
+            "DNAT",
+            "--to-destination",
+            "10.0.0.2:8080",
+            "-i",
+            "eth0",
+            "--destination-port",
+            "80"
+        ],
+        [
+            "/sbin/iptables",
+            "-t",
+            "nat",
+            "-I",
+            "PREROUTING",
+            "3",
+            "-w",
+            "5",
+            "-p",
+            "tcp",
+            "-j",
+            "DNAT",
+            "--to-destination",
+            "10.0.0.2:8080",
+            "-i",
+            "eth0",
+            "--destination-port",
+            "80"
+        ]
+    ],
+    [
+        {
+            "chain": "POSTROUTING",
+            "table": "mangle",
+            "set_dscp_mark_class": "CS1",
+            "jump": "DSCP",
+            "out_interface": "eth1"
+        },
+        [
+            "-j",
+            "DSCP",
+            "-o",
+            "eth1",
+            "--set-dscp-class",
+            "CS1"
+        ],
+        [
+            "/sbin/iptables",
+            "-t",
+            "mangle",
+            "-I",
+            "POSTROUTING",
+            "3",
+            "-w",
+            "5",
+            "-j",
+            "DSCP",
+            "-o",
+            "eth1",
+            "--set-dscp-class",
+            "CS1"
+        ]
+    ],
+    [
+        {
+            "chain": "INPUT",
+            "match_set": "admins",
+            "match_set_flags": "src",
+            "jump": "ACCEPT",
+            "icmp_type": "echo-request",
+            "ip_version": "ipv6"
+        },
+        [
+            "-j",
+            "ACCEPT",
+            "-m",
+            "set",
+            "--match-set",
+            "admins",
+            "src",
+            "--icmpv6-type",
+            "echo-request"
+        ],
+        [
+            "/sbin/iptables",
+            "-t",
+            "filter",
+            "-I",
+            "INPUT",
+            "3",
+            "-w",
+            "5",
+            "-j",
+            "ACCEPT",
+            "-m",
+            "set",
+            "--match-set",
+            "admins",
+            "src",
+            "--icmpv6-type",
+            "echo-request"
+        ]
+    ],
+    [
+        {
+            "chain": "INPUT",
+            "match": [
+                "set"
+            ],
+            "match_set": "admins",
+            "match_set_flags": "src,dst",
+            "fragment": "!",
+            "set_counters": "1 2",
+            "log_prefix": "x ",
+            "log_level": "4",
+            "jump": "LOG"
+        },
+        [
+            "-m",
+            "set",
+            "-j",
+            "LOG",
+            "--log-prefix",
+            "x ",
+            "--log-level",
+            "4",
+            "!",
+            "-f",
+            "",
+            "-c",
+            "1 2",
+            "--match-set",
+            "admins",
+            "src,dst"
+        ],
+        [
+            "/sbin/iptables",
+            "-t",
+            "filter",
+            "-I",
+            "INPUT",
+            "3",
+            "-w",
+            "5",
+            "-m",
+            "set",
+            "-j",
+            "LOG",
+            "--log-prefix",
+            "x ",
+            "--log-level",
+            "4",
+            "!",
+            "-f",
+            "",
+            "-c",
+            "1 2",
+            "--match-set",
+            "admins",
+            "src,dst"
+        ]
+    ],
+    [
+        {
+            "chain": "FORWARD",
+            "jump": "TEE",
+            "gateway": "10.0.0.1",
+            "goto": "other",
+            "to_source": "1.2.3.4",
+            "to_ports": "8080",
+            "dst_range": "1.1.1.1-1.1.1.2",
+            "match": [
+                "state"
+            ],
+            "ctstate": [
+                "RELATED"
+            ],
+            "icmp_type": "x",
+            "ip_version": "both"
+        },
+        [
+            "-m",
+            "state",
+            "-j",
+            "TEE",
+            "--gateway",
+            "10.0.0.1",
+            "--to-source",
+            "1.2.3.4",
+            "-g",
+            "other",
+            "--to-ports",
+            "8080",
+            "--state",
+            "RELATED",
+            "-m",
+            "iprange",
+            "--dst-range",
+            "1.1.1.1-1.1.1.2",
+            "--icmp-type --icmpv6-type",
+            "x"
+        ],
+        [
+            "/sbin/iptables",
+            "-t",
+            "filter",
+            "-I",
+            "FORWARD",
+            "3",
+            "-w",
+            "5",
+            "-m",
+            "state",
+            "-j",
+            "TEE",
+            "--gateway",
+            "10.0.0.1",
+            "--to-source",
+            "1.2.3.4",
+            "-g",
+            "other",
+            "--to-ports",
+            "8080",
+            "--state",
+            "RELATED",
+            "-m",
+            "iprange",
+            "--dst-range",
+            "1.1.1.1-1.1.1.2",
+            "--icmp-type --icmpv6-type",
+            "x"
+        ]
+    ],
+    [
+        {
+            "chain": "INPUT",
+            "set_dscp_mark": "10",
+            "jump": "ACCEPT",
+            "syn": "match"
+        },
+        [
+            "-j",
+            "ACCEPT",
+            "--set-dscp",
+            "10",
+            "-j",
+            "DSCP",
+            "--syn"
+        ],
+        [
+            "/sbin/iptables",
+            "-t",
+            "filter",
+            "-I",
+            "INPUT",
+            "3",
+            "-w",
+            "5",
+            "-j",
+            "ACCEPT",
+            "--set-dscp",
+            "10",
+            "-j",
+            "DSCP",
+            "--syn"
+        ]
+    ]
+]

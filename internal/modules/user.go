@@ -707,16 +707,6 @@ func symDiff(a, b []string) []string {
 	return out
 }
 
-func setMinus(a, b []string) []string {
-	var out []string
-	for _, x := range a {
-		if !containsString(b, x) && !containsString(out, x) {
-			out = append(out, x)
-		}
-	}
-	return out
-}
-
 // --- BusyBox --------------------------------------------------------------
 
 // bbPassword is BusyBox._build_password_string.

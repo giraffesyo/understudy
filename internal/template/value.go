@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -127,12 +129,52 @@ func pyRepr(v any) string {
 	case Deprecated:
 		return pyRepr(t.Value)
 	case string:
-		return "'" + strings.ReplaceAll(t, "'", "\\'") + "'"
+		return pyStrRepr(t)
 	case yaml.UnsafeString:
 		return pyRepr(string(t))
 	default:
 		return toStr(v)
 	}
+}
+
+// pyStrRepr is Python's repr() of a str: single quotes unless the text
+// holds a single quote and no double quote, backslash escapes for the
+// quote, backslash and control characters, printable text kept as is.
+func pyStrRepr(s string) string {
+	quote := byte('\'')
+	if strings.IndexByte(s, '\'') >= 0 && strings.IndexByte(s, '"') < 0 {
+		quote = '"'
+	}
+	var b strings.Builder
+	b.WriteByte(quote)
+	for _, r := range s {
+		switch {
+		case r == rune(quote) || r == '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case r >= 0x80 && r != utf8.RuneError && !unicode.IsPrint(r):
+			switch {
+			case r <= 0xff:
+				fmt.Fprintf(&b, `\x%02x`, r)
+			case r <= 0xffff:
+				fmt.Fprintf(&b, `\u%04x`, r)
+			default:
+				fmt.Fprintf(&b, `\U%08x`, r)
+			}
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte(quote)
+	return b.String()
 }
 
 func pyFloatStr(f float64) string {
