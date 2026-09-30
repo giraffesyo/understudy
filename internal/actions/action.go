@@ -29,6 +29,7 @@ type Context struct {
 	SrcDir       string // role root when the task came from a role ("" otherwise)
 	TaskDir      string // directory of the file the task was defined in
 	Verbosity    int
+	RemoteTmp    string // the shell's remote_tmp ("~/.ansible/tmp" by default)
 
 	// RunModule executes a module on the target (in-process or via agent).
 	RunModule func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error)

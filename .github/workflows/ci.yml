@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main, canary]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The golden suite byte-compares against this ansible-core. It tracks the
+  # LATEST ansible-core release: bump it when a new one ships (and
+  # ANSIBLE_VERSION to the community package release that requires it; the
+  # corpus uses a few community.general plugins).
+  ANSIBLE_CORE_VERSION: "2.21.4"
+  ANSIBLE_VERSION: "14.4.0"
+
+jobs:
+  lint:
+    name: gofmt / vet / depcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+      - name: depcheck (agent imports stay minimal)
+        run: make depcheck
+      - name: build agents (embedded by the control binary)
+        run: make agents
+      - name: go vet
+        run: go vet ./...
+
+  test:
+    name: unit + local e2e (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make build
+      - run: make test
+
+  cross:
+    name: cross-compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64
+        run: make cross
+
+  golden:
+    name: golden (vs ansible-playbook)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: install ansible-core ${{ env.ANSIBLE_CORE_VERSION }}
+        # passlib: password_hash falls back to it for algorithms libxcrypt
+        # lacks, as on a typical controller.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "ansible-core==${ANSIBLE_CORE_VERSION}" "ansible==${ANSIBLE_VERSION}" passlib
+          ansible-playbook --version
+      - run: make build
+      - name: golden suite
+        # The harness runs ansible-playbook on pipes (it refuses non-blocking
+        # stdio) with an explicit interpreter, so interpreter discovery (a
+        # Python-only artifact) stays out of the compared output.
+        run: |
+          export ANSIBLE_PYTHON_INTERPRETER="$(command -v python3)"
+          go test -count=1 -tags golden -timeout 60m ./test/e2e/
+
+  e2e:
+    name: e2e (Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make build
+      - name: SSH + systemd container suites
+        run: go test -count=1 -tags e2e -timeout 45m ./test/e2e/

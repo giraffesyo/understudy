@@ -151,7 +151,8 @@ func copyAction(env *RunEnv, user map[string]any, a map[string]any) *agentproto.
 		if env.CheckMode {
 			return &agentproto.Result{Changed: true, Diff: diffs}
 		}
-		tmpDir, tmpSrc, err := stagePayload(payload, filepath.Ext(destFile))
+		remoteTmp, _ := a["remote_tmp"].(string)
+		tmpDir, tmpSrc, err := stagePayload(payload, pySplitExt(destFile), remoteTmp)
 		if err != nil {
 			return agentproto.Fail("staging the source file: %v", err)
 		}
@@ -263,10 +264,19 @@ func pyToText(b []byte) string {
 }
 
 // stagePayload writes the transferred content where Ansible's transfer
-// would: <tmp>/ansible-tmp-<time>-<pid>-<random>/.source<ext>.
-func stagePayload(content []byte, ext string) (string, string, error) {
+// would: <remote_tmp>/ansible-tmp-<time>-<pid>-<random>/.source<ext>, with
+// remote_tmp ("~/.ansible/tmp" by default) created 0700 as the shell
+// plugin's mkdir does. An unusable remote_tmp falls back to the system
+// temp directory.
+func stagePayload(content []byte, ext, remoteTmp string) (string, string, error) {
 	name := fmt.Sprintf("ansible-tmp-%s-%d-%d", pyFloat(float64(time.Now().UnixNano())/1e9), os.Getpid(), rand.Int63n(1<<48))
-	dir := filepath.Join(os.TempDir(), name)
+	base := os.TempDir()
+	if remoteTmp != "" {
+		if rt := pyExpandUser(remoteTmp); os.MkdirAll(rt, 0o700) == nil {
+			base = rt
+		}
+	}
+	dir := filepath.Join(base, name)
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return "", "", err
 	}
@@ -309,6 +319,17 @@ func digestFile(path string, h interface {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// pySplitExt is os.path.splitext's extension: from the last dot of the base
+// name, ignoring leading dots (".hidden" has none).
+func pySplitExt(p string) string {
+	base := p[strings.LastIndexByte(p, '/')+1:]
+	dot := strings.LastIndexByte(base, '.')
+	if dot <= 0 || strings.Trim(base[:dot], ".") == "" {
+		return ""
+	}
+	return base[dot:]
 }
 
 // pyExpandUser is os.path.expanduser.

@@ -139,10 +139,24 @@ func pyFloatStr(f float64) string {
 	if math.IsNaN(f) {
 		return "nan"
 	}
-	if f == math.Trunc(f) && math.Abs(f) < 1e16 {
-		return strconv.FormatFloat(f, 'f', 1, 64) // 2.0 not 2
+	return pyFloatRepr(f)
+}
+
+// pyFloatRepr is Python's repr(float) for finite values: the shortest
+// round-tripping digits, positional unless the decimal exponent is below
+// -4 or at least 16 (1790738388.92, 2.0, 1e+16, 1.5e-05). Go's 'g' verb
+// switches to exponent form much earlier (1.79073838892e+09).
+func pyFloatRepr(f float64) string {
+	e := strconv.FormatFloat(f, 'e', -1, 64)
+	exp, _ := strconv.Atoi(e[strings.LastIndexByte(e, 'e')+1:])
+	if exp < -4 || exp >= 16 {
+		return e
 	}
-	return strconv.FormatFloat(f, 'g', -1, 64)
+	s := strconv.FormatFloat(f, 'f', -1, 64)
+	if !strings.Contains(s, ".") {
+		s += ".0" // 2.0 not 2
+	}
+	return s
 }
 
 func sortedKeys(m map[string]any) []string {

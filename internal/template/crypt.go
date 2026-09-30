@@ -5,7 +5,11 @@ import (
 	"crypto/sha512"
 	"fmt"
 	"hash"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
+	"sync"
 )
 
 // cryptAlphabet is the base64 variant used by the crypt(3) SHA schemes.
@@ -167,12 +171,55 @@ func cryptEncode(c []byte, use512 bool) string {
 	return string(b)
 }
 
+// cryptGensalt reports whether ansible-core on this controller hashes
+// through libxcrypt's crypt_gensalt (its CryptFacade finds libxcrypt:
+// glibc Linux, or Homebrew's libxcrypt on macOS) rather than passlib or a
+// plain crypt(3) (macOS without libxcrypt, musl).
+var cryptGensalt = sync.OnceValue(func() bool {
+	switch runtime.GOOS {
+	case "linux":
+		musl, _ := filepath.Glob("/lib/ld-musl-*")
+		return len(musl) == 0
+	case "darwin":
+		for _, p := range []string{"/opt/homebrew/opt/libxcrypt/lib/libcrypt.dylib",
+			"/usr/local/opt/libxcrypt/lib/libcrypt.dylib"} {
+			if _, err := os.Stat(p); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+})
+
+// cryptSalt is the salt Ansible actually hashes with for a given one. Through
+// crypt_gensalt the given salt is not used verbatim: it is the "random
+// bytes" input, which libxcrypt's gensalt_sha_rn encodes 3 bytes to 4 salt
+// characters (at most 16), so "abcdefghijklmnop" becomes "V7qMYJaNbVKOeh4P".
+func cryptSalt(salt string) (string, error) {
+	if !cryptGensalt() {
+		return salt, nil
+	}
+	if len(salt) < 3 {
+		return "", fmt.Errorf("crypt_gensalt failed: unable to generate salt")
+	}
+	var b []byte
+	for used := 0; used+3 <= len(salt) && used*4/3 < 16; used += 3 {
+		v := uint32(salt[used]) | uint32(salt[used+1])<<8 | uint32(salt[used+2])<<16
+		b = append(b, cryptAlphabet[v&63], cryptAlphabet[v>>6&63], cryptAlphabet[v>>12&63], cryptAlphabet[v>>18&63])
+	}
+	return string(b), nil
+}
+
 // CryptHash hashes a password with the glibc crypt scheme Ansible's
 // vars_prompt encrypt: and password_hash use ("sha512_crypt" or
 // "sha256_crypt").
 func CryptHash(scheme, password, salt string, rounds int) (string, error) {
 	if rounds == 0 {
 		rounds = shaCryptRounds
+	}
+	salt, err := cryptSalt(salt)
+	if err != nil {
+		return "", err
 	}
 	switch scheme {
 	case "sha512_crypt":
