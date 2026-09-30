@@ -280,13 +280,22 @@ func splitLines(s string) []any {
 	if s == "" {
 		return []any{}
 	}
+	// str.splitlines: \r\n, \r, \v, \f, \x1c-\x1e, \x85 and the Unicode
+	// line and paragraph separators end lines too.
 	var out []any
 	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			out = append(out, s[start:i])
-			start = i + 1
+	for i, r := range s {
+		switch r {
+		case '\n', '\r', '\v', '\f', 0x1c, 0x1d, 0x1e, 0x85, 0x2028, 0x2029:
+		default:
+			continue
 		}
+		if r == '\n' && i > 0 && s[i-1] == '\r' {
+			start = i + 1
+			continue
+		}
+		out = append(out, s[start:i])
+		start = i + len(string(r))
 	}
 	if start < len(s) {
 		out = append(out, s[start:])

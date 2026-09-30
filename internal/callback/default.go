@@ -397,7 +397,8 @@ func (d *Default) taskError(task *playbook.Task, res *agentproto.Result) {
 		fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n", task.Src.File, task.Src.Line, task.Src.Col)
 		b.WriteString(d.excerpt(task.Src.File, task.Src.Line, task.Src.Col))
 	}
-	block := b.String()
+	// Display.display turns Windows newlines into Unix ones.
+	block := strings.ReplaceAll(b.String(), "\r\n", "\n")
 	if d.errors == nil {
 		d.errors = map[string]bool{}
 	}
@@ -438,7 +439,8 @@ func (d *Default) taskErrorChain(task *playbook.Task, ec *agentproto.ErrorChain)
 	default:
 		b.WriteString(ec.Inner)
 	}
-	block := b.String()
+	// Display.display turns Windows newlines into Unix ones.
+	block := strings.ReplaceAll(b.String(), "\r\n", "\n")
 	if d.errors == nil {
 		d.errors = map[string]bool{}
 	}
