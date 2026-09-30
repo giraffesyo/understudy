@@ -47,6 +47,19 @@ standard library.
 
 ## Install
 
+Prebuilt binaries for Linux and macOS (amd64 and arm64) are attached to each
+[GitHub release](https://github.com/giraffesyo/understudy/releases), with a
+`checksums.txt` of their SHA-256 sums:
+
+```sh
+v=v0.1.0 os=linux arch=amd64    # or darwin / arm64
+curl -fsSLO https://github.com/giraffesyo/understudy/releases/download/$v/understudy_${v}_${os}_${arch}.tar.gz
+tar xzf understudy_${v}_${os}_${arch}.tar.gz
+sudo install understudy_${v}_${os}_${arch}/understudy /usr/local/bin/
+```
+
+Or build from source (Go, see `go.mod` for the version):
+
 ```sh
 git clone https://github.com/giraffesyo/understudy
 cd understudy
@@ -55,7 +68,8 @@ make build          # cross-compiles the agents, then embeds + builds the CLI
 ```
 
 `make build` also creates `ansible` and `ansible-playbook` symlinks — the
-binary dispatches on its own name, so those work as drop-in replacements.
+binary dispatches on its own name, so symlinks with those names (to a
+release binary too) work as drop-in replacements.
 
 ## Quick start
 
@@ -280,12 +294,50 @@ than silently diverging. Known boundaries:
 make build        # agents + control binary
 make test         # unit + local end-to-end tests
 make test-e2e     # SSH/container end-to-end tests (requires Docker)
+make test-golden  # differential tests vs. ansible-playbook (see below)
+make cross        # build-check the control binary for every release platform
 ```
 
 The two-stage build cross-compiles the agents first (`CGO_ENABLED=0`,
 stripped), embeds them, then builds the control binary. A dependency check
-enforces that the agent imports only the module and protocol packages, so it
-stays small.
+(`make depcheck`) enforces that the agent imports only the module and
+protocol packages, so it stays small.
+
+The golden suite runs every `test/e2e/golden/*.yml` through the installed
+`ansible-playbook` and through understudy, comparing per-task statuses and
+recaps, and stdout byte for byte at the default verbosity and at `-v`. It
+needs the `ansible` package (the corpus uses a few `community.general`
+plugins) and `passlib`, e.g. `pip install ansible passlib`, with the
+matching `ansible-core` release. Set `ANSIBLE_PYTHON_INTERPRETER` to that
+Python (CI does), or the output picks up interpreter-discovery warnings.
+
+CI (`.github/workflows/ci.yml`) runs gofmt, `go vet`, `make depcheck`, the
+unit suite on Linux and macOS, the cross-compile check, the golden suite
+against the latest ansible-core (pinned in one place: `ANSIBLE_CORE_VERSION`
+in the workflow), and the Docker end-to-end suite.
+
+### Releases
+
+`understudy version` reports the version stamped at build time with
+`-ldflags -X github.com/giraffesyo/understudy/internal/cli.version=...`.
+`make build` stamps `git describe` output; builds without the Makefile fall
+back to the module version `go install` records.
+
+```sh
+make release VERSION=v1.2.3   # dist/understudy_v1.2.3_<os>_<arch>.tar.gz + dist/checksums.txt
+```
+
+builds stripped, static tarballs (binary, LICENSE, README) for linux and
+darwin on amd64 and arm64. To publish one, push a tag:
+
+```sh
+git tag -a v1.2.3 -m v1.2.3 && git push origin v1.2.3
+```
+
+The release workflow (`.github/workflows/release.yml`) tests, runs
+`make release` with the tag as the version, and creates the GitHub release
+with the tarballs and checksums (a tag with a `-`, such as `v1.3.0-rc.1`, is
+marked as a prerelease).
 
 ## License
 
