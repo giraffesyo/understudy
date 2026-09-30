@@ -14,6 +14,7 @@
 package e2e
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
@@ -64,7 +65,9 @@ func lgImage(t *testing.T, distro string) string {
 	b.once.Do(func() {
 		dir := t.TempDir()
 		os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(lgImages[distro]), 0o644)
-		b.tag = "understudy-lg-" + distro
+		// Content-addressed, like dockerBuild's tags.
+		sum := sha256.Sum256([]byte(lgImages[distro]))
+		b.tag = fmt.Sprintf("understudy-lg-%s:%x", distro, sum[:8])
 		if out, err := exec.Command("docker", "build", "-q", "-t", b.tag, dir).CombinedOutput(); err != nil {
 			b.err = fmt.Errorf("docker build %s: %v\n%s", distro, err, out)
 		}
@@ -75,35 +78,25 @@ func lgImage(t *testing.T, distro string) string {
 	return b.tag
 }
 
-// lgBoot starts a fresh container and returns its ssh port.
-func lgBoot(t *testing.T, image, name, pub string) string {
+// lgBoot starts a fresh container and returns its name and ssh port.
+func lgBoot(t *testing.T, image, base, pub string) (name, port string) {
 	t.Helper()
-	exec.Command("docker", "rm", "-f", name).Run()
-	if out, err := exec.Command("docker", "run", "-d", "--name", name, "--privileged",
-		"--hostname", "golden.example.com", "-p", "127.0.0.1:0:22", image).CombinedOutput(); err != nil {
-		t.Fatalf("docker run: %v\n%s", err, out)
-	}
-	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	name = dockerRun(t, base, "--privileged", "--hostname", "golden.example.com", "-p", "127.0.0.1:0:22", image)
 	install := fmt.Sprintf("set -e; h=$(getent passwd %[1]s | cut -d: -f6); mkdir -p $h/.ssh; "+
 		"printf '%%s\\n' %[2]q > $h/.ssh/authorized_keys; chown -R %[1]s $h/.ssh; "+
 		"chmod 700 $h/.ssh; chmod 600 $h/.ssh/authorized_keys", lgUser, pub)
 	if out, err := exec.Command("docker", "exec", name, "sh", "-c", install).CombinedOutput(); err != nil {
 		t.Fatalf("install key: %v\n%s", err, out)
 	}
-	portOut, err := exec.Command("docker", "port", name, "22").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	line := strings.SplitN(strings.TrimSpace(string(portOut)), "\n", 2)[0]
-	port := line[strings.LastIndexByte(line, ':')+1:]
+	port = dockerPort(t, name, "22")
 	for i := 0; i < 60; i++ {
 		if out, _ := exec.Command("ssh-keyscan", "-p", port, "127.0.0.1").Output(); len(out) > 0 {
-			return port
+			return name, port
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	t.Fatalf("sshd in %s never came up", name)
-	return ""
+	return "", ""
 }
 
 var lgDistros = regexp.MustCompile(`^#\s*distros:\s*(.*)`)
@@ -143,8 +136,7 @@ func TestLinuxGoldenOutput(t *testing.T) {
 				abs, _ := filepath.Abs(pb)
 				var lastStderr string
 				run := func(tool string, bin string, pre ...string) string {
-					name := fmt.Sprintf("understudy-lg-%s-%s-%d", distro, tool, os.Getpid())
-					port := lgBoot(t, image, name, strings.TrimSpace(string(pub)))
+					_, port := lgBoot(t, image, "understudy-lg-"+distro+"-"+tool, strings.TrimSpace(string(pub)))
 					dir := t.TempDir()
 					inv := filepath.Join(dir, "hosts")
 					os.WriteFile(inv, []byte(fmt.Sprintf(

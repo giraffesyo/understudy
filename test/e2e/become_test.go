@@ -19,32 +19,12 @@ import (
 const rootPass = "r00tpass"
 
 // startBecomeContainer builds and runs an sshd image, returning the port.
-func startBecomeContainer(t *testing.T, name, dockerfile string) string {
+func startBecomeContainer(t *testing.T, base, dockerfile string) string {
 	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not installed")
-	}
-	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skip("docker daemon not running")
-	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("docker", "build", "-q", "-t", name+"-img", dir).CombinedOutput(); err != nil {
-		t.Fatalf("docker build: %v\n%s", err, out)
-	}
-	exec.Command("docker", "rm", "-f", name).Run()
-	if out, err := exec.Command("docker", "run", "-d", "--name", name, "-p", "0:22", name+"-img").CombinedOutput(); err != nil {
-		t.Fatalf("docker run: %v\n%s", err, out)
-	}
-	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
-	out, err := exec.Command("docker", "port", name, "22").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
-	port := line[strings.LastIndexByte(line, ':')+1:]
+	dockerAvailable(t)
+	image := dockerBuild(t, base+"-img", dockerfile, nil)
+	name := dockerRun(t, base, "-p", "127.0.0.1:0:22", image)
+	port := dockerPort(t, name, "22")
 	for i := 0; i < 30; i++ {
 		if exec.Command("docker", "exec", name, "pgrep", "sshd").Run() == nil {
 			time.Sleep(500 * time.Millisecond)
