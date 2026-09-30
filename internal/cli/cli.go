@@ -782,6 +782,9 @@ func adhocCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "understudy adhoc: a host pattern is required")
 		return 1
 	}
+	if cfg, err := config.Load(); err == nil {
+		configureYAML(cfg)
+	}
 	module := p.module
 	if module == "" {
 		module = "command"
