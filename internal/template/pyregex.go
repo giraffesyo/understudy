@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 // Python regex compatibility layer. Go's regexp is RE2; Python's re is not.
@@ -138,7 +140,21 @@ func registerRegexFilters(e *Engine) {
 		if err != nil {
 			return nil, err
 		}
-		return re.ReplaceAllString(s, pyReplTranslate(repl)), nil
+		count := -1
+		if c, ok := kwargs["count"]; ok {
+			if n, isInt := asInt(c); isInt && n > 0 {
+				count = int(n)
+			}
+		}
+		tmpl := pyReplTranslate(repl)
+		var b []byte
+		last := 0
+		for _, m := range pyre.FindAllSubmatchIndex(re, s, count) {
+			b = append(b, s[last:m[0]]...)
+			b = re.ExpandString(b, tmpl, s, m)
+			last = m[1]
+		}
+		return string(append(b, s[last:]...)), nil
 	}
 
 	f["regex_search"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
@@ -199,9 +215,14 @@ func registerRegexFilters(e *Engine) {
 		if err != nil {
 			return nil, err
 		}
-		matches := re.FindAllStringSubmatch(s, -1)
 		out := []any{}
-		for _, m := range matches {
+		for _, idx := range pyre.FindAllSubmatchIndex(re, s, -1) {
+			m := make([]string, len(idx)/2)
+			for i := range m {
+				if idx[2*i] >= 0 {
+					m[i] = s[idx[2*i]:idx[2*i+1]]
+				}
+			}
 			switch {
 			case len(m) == 1:
 				out = append(out, m[0])
