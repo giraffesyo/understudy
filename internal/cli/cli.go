@@ -811,6 +811,10 @@ func playbookCmd(args []string) int {
 		if errors.As(err, &ye) {
 			return 4 // a parser error, as at load
 		}
+		var ce interface{ ExitCode() int }
+		if errors.As(err, &ce) {
+			return ce.ExitCode()
+		}
 		return 1
 	}
 	return code

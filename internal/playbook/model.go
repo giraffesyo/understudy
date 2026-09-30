@@ -99,6 +99,8 @@ type Task struct {
 	LoopVar        string         // default "item"
 	IndexVar       string         // loop_control.index_var (0-based); "" = none
 	LoopLabel      any            // loop_control.label (raw template); nil = show the item
+	LoopExtended   any            // loop_control.extended as written (nil = unset)
+	LoopAllItems   any            // loop_control.extended_allitems as written (nil = true)
 	Async          int            // async timeout seconds (0 = synchronous)
 	Poll           int            // poll interval; -1 = unset, 0 = fire-and-forget
 	CheckMode      *bool          // per-task check_mode override (nil = inherit run)
@@ -133,6 +135,7 @@ type Task struct {
 	LoadNotes      []string       // -vv lines loading it printed (plugin redirects, static imports)
 	ArgPos         map[string]Pos // source position of each map-form module arg value
 	ArgsPos        Pos            // the module's value (k=v or free-form string args share it)
+	ActionPos      Pos            // the module's key (or action:/local_action:)
 	KeywordPos     map[string]Pos // source position of each task keyword's value (when, ...)
 	WhenPos        map[string]Pos // source position of each when: condition, by its text
 
@@ -143,6 +146,12 @@ type Task struct {
 	// Orig is the parsed task a per-host resolved copy was made from (nil
 	// on parsed tasks); Identity() is stable across copies.
 	Orig *Task
+
+	// On include_tasks/include_role: Apply is the include's apply:
+	// keywords, and Parents what its enclosing blocks and role pass down
+	// (both inherited by the included tasks; nil = none).
+	Apply, Parents *Task
+	ApplyErr       error // apply: failed to load as a block (raised at run time)
 
 	literalKW map[string]bool // keywords set to literal values (parse time)
 }
@@ -167,6 +176,11 @@ func (t *Task) GetName() string {
 		return t.RoleName + " : " + name
 	}
 	return name
+}
+
+// IsDynamicInclude reports an include_tasks or include_role task.
+func (t *Task) IsDynamicInclude() bool {
+	return t.Module == "include_tasks" || t.Module == "include_role"
 }
 
 // Identity returns the parsed task this one was derived from.

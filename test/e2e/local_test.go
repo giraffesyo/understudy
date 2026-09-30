@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1020,5 +1022,61 @@ func TestParallelBlockOptIn(t *testing.T) {
 	}
 	if st := stats["localhost"]; st == nil || st.OK != 5 || st.Changed != 2 {
 		t.Errorf("stats = %+v", st)
+	}
+}
+
+// TestTimedOutCommandIsKilled: a task that times out is abandoned, and
+// the process its in-process module started is killed with it rather
+// than left running (so its later side effects never happen).
+func TestTimedOutCommandIsKilled(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	marker := filepath.Join(dir, "marker")
+	start := time.Now()
+	code, out, stats := run(t, `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: exec'd child
+      shell: echo $$ > `+pidFile+` && exec sleep 30
+      timeout: 1
+      ignore_errors: true
+      register: r
+    - name: a later step of the shell script
+      shell: sleep 2 && touch `+marker+`
+      timeout: 1
+      ignore_errors: true
+    - assert:
+        that: r.timedout.period == 1
+`, executor.Options{})
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s", code, out)
+	}
+	if st := stats["localhost"]; st == nil || st.Ignored != 2 {
+		t.Errorf("stats = %+v\n%s", st, out)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("run took %v", d)
+	}
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("the command never started: %v\n%s", err, out)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("the timed-out command (pid %d) is still running", pid)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// The second script's shell was killed before its touch could run.
+	time.Sleep(2500 * time.Millisecond)
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("the timed-out shell script kept running and created its marker")
 	}
 }

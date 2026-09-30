@@ -39,7 +39,7 @@ const (
 // the keys it hides for var= output (_hide_in_debug).
 var (
 	debugAllowedKeys = map[string]bool{"msg": true, "exception": true, "warnings": true, "deprecations": true}
-	debugHiddenKeys  = []string{"changed", "failed", "skipped", "invocation", "skip_reason", "ansible_loop_var", "ansible_index_var"}
+	debugHiddenKeys  = []string{"changed", "failed", "skipped", "invocation", "skip_reason", "ansible_loop_var", "ansible_index_var", "ansible_loop"}
 )
 
 // Default is the standard output callback.

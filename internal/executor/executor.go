@@ -610,7 +610,7 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 		}
 		// --step asks about each task some host is about to run (meta
 		// tasks are not asked about; an import_role is not a task).
-		if r.Opts.Step && task.Module != "import_role" && !r.stepTask(task) {
+		if r.Opts.Step && task.Module != "import_role" && !r.stepTask(task, false) {
 			continue
 		}
 		if task.Module == "include_tasks" || task.Module == "include_role" {
@@ -688,15 +688,9 @@ func (r *Runner) runImportRole(ctx context.Context, play *playbook.Play, task *p
 	}
 	r.adoptBlocks(task, tasks)
 	for _, t := range tasks {
-		if len(task.Vars) > 0 {
-			merged := maps.Clone(task.Vars)
-			maps.Copy(merged, t.Vars)
-			t.Vars = merged
-		}
-		t.Tags = append(append([]string{}, task.Tags...), t.Tags...)
-		if len(task.When) > 0 {
-			t.When = append(append([]string{}, task.When...), t.When...)
-		}
+		// A static import is its tasks' parent: every inheritable
+		// keyword on it (and on its enclosing blocks) applies.
+		playbook.Inherit(t, task)
 	}
 	return r.runTaskList(ctx, play, tasks, playHosts, active, depth+1)
 }
@@ -1039,6 +1033,14 @@ func (r *Runner) flushHandlers(ctx context.Context, play *playbook.Play, playHos
 		if len(active) == 0 {
 			continue
 		}
+		if r.Opts.Step && !r.stepTask(handler, true) {
+			// A handler skipped at the step prompt did not run: its hosts
+			// stay notified for the next flush.
+			r.mu.Lock()
+			r.notified[key] = hosts
+			r.mu.Unlock()
+			continue
+		}
 		r.runTaskAcrossHosts(ctx, play, handler, active, playHosts, true)
 	}
 	return nil
@@ -1259,8 +1261,12 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 		return r.runOnce(ctx, play, task, host, base, nil), nil, task
 	}
 
+	lc, err := newLoopControl(task, base, items)
+	if err != nil {
+		return agentproto.Fail("%v", err), nil, task
+	}
+
 	// Loop: aggregate per-item results Ansible-style.
-	agg := &agentproto.Result{Extra: map[string]any{}}
 	var itemResults []any
 	anyChanged, anyFailed, allSkipped := false, false, true
 	for i, item := range items {
@@ -1274,54 +1280,43 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 		if len(override) > 0 {
 			itemCtx = itemCtx.WithOverlay(override)
 		}
-		overlay := map[string]any{task.LoopVar: vars.Final{V: item}}
-		if task.IndexVar != "" {
-			overlay[task.IndexVar] = int64(i)
-		}
-		itemCtx = itemCtx.WithOverlay(overlay)
+		itemCtx = itemCtx.WithOverlay(lc.vars(i))
 		res := r.runOnce(ctx, play, task, host, itemCtx, item)
 		// Per-item results carry the loop variable(s), as Ansible's do.
 		if res.Extra == nil {
 			res.Extra = map[string]any{}
 		}
-		res.Extra["ansible_loop_var"] = task.LoopVar
-		res.Extra[task.LoopVar] = item
-		if task.IndexVar != "" {
-			res.Extra["ansible_index_var"] = task.IndexVar
-			res.Extra[task.IndexVar] = int64(i)
-		}
-		label := item
-		if task.LoopLabel != nil {
-			if l, err := itemCtx.TemplateValue(task.LoopLabel); err == nil {
-				label = l
-			}
-		}
-		r.Callback.HostResult(host, task, shown(task, res), false, label)
+		lc.annotate(res.Extra, i)
+		r.Callback.HostResult(host, task, shown(task, res), false, lc.label(itemCtx, i))
 		m := orderedResult(task, task.Module, res.ToVars())
 		itemResults = append(itemResults, m)
 		anyChanged = anyChanged || res.Changed
 		anyFailed = anyFailed || res.Failed
 		allSkipped = allSkipped && res.Skipped
 	}
-	agg.Changed = anyChanged
-	agg.Failed = anyFailed
-	agg.Skipped = allSkipped
 	if itemResults == nil {
 		itemResults = []any{}
 	}
-	agg.Extra["results"] = itemResults
+	return loopResult(itemResults, anyChanged, anyFailed, allSkipped), itemResults, task
+}
+
+// loopResult is a loop's aggregate result (build_loop_result): the
+// per-item results under "results".
+func loopResult(itemResults []any, changed, failed, allSkipped bool) *agentproto.Result {
+	agg := &agentproto.Result{Changed: changed, Failed: failed, Skipped: allSkipped,
+		Extra: map[string]any{"results": itemResults}}
 	switch {
-	case len(items) == 0:
+	case len(itemResults) == 0:
 		agg.Extra["skip_reason"] = "No items in the list"
 		agg.Extra["skipped_reason"] = deprecate(deprecatedSkippedReason, "No items in the list")
-	case anyFailed:
+	case failed:
 		agg.Msg = "One or more items failed"
 	case allSkipped:
 		agg.Msg = "All items skipped"
 	default:
 		agg.Msg = "All items completed"
 	}
-	return agg, itemResults, task
+	return agg
 }
 
 // resolveLoop templates the loop value. Returns isLoop=false when absent.
@@ -1397,7 +1392,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		}
 		v, err := argsCtx.At(argPos(task, k)).Sourced().TemplateValue(raw)
 		if err != nil {
-			return agentproto.Fail("error templating argument %q: %v", k, err)
+			return argTemplateError(task, k, argPos(task, k), err)
 		}
 		if _, isOmit := v.(template.Omit); isOmit {
 			continue
@@ -1408,9 +1403,12 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 	if freeForm != "" {
 		v, err := vctx.At(task.ArgsPos).TemplateString(freeForm)
 		if err != nil {
-			return agentproto.Fail("error templating command: %v", err)
+			return argTemplateError(task, "_raw_params", task.ArgsPos, err)
 		}
-		freeForm = fmt.Sprintf("%v", v)
+		freeForm = ""
+		if v != nil { // a template with no output is None
+			freeForm = fmt.Sprintf("%v", v)
+		}
 	}
 
 	actx, target, err := r.actionContext(ctx, host, task, play, vctx)
@@ -2064,7 +2062,7 @@ func (r *Runner) runModule(ctx context.Context, host, target string, kw connecti
 			req.Args = m
 		}
 		if become == nil {
-			res := modules.Run(req, payload)
+			res := modules.RunContext(ctx, req, payload)
 			res.Origin = moduleOrigin(res)
 			return res, nil
 		}
@@ -2520,9 +2518,9 @@ func (r *Runner) startAt(name string) bool {
 	return true
 }
 
-// stepTask implements --step: it asks whether to run the task, reporting
-// whether it should run.
-func (r *Runner) stepTask(task *playbook.Task) bool {
+// stepTask implements --step: it asks whether to run the task (or
+// handler), reporting whether it should run.
+func (r *Runner) stepTask(task *playbook.Task, handler bool) bool {
 	if !r.stepContinue {
 		// StrategyBase._take_step: the prompt names the task as its repr
 		// does (the untemplated name, else the action), then the prompt
@@ -2534,7 +2532,11 @@ func (r *Runner) stepTask(task *playbook.Task) bool {
 		if task.RoleName != "" {
 			stepName = task.RoleName + " : " + stepName
 		}
-		msg := "Perform task: TASK: " + stepName + " (N)o/(y)es/(c)ontinue: "
+		kind := "TASK: "
+		if handler {
+			kind = "HANDLER: " // Handler.__repr__
+		}
+		msg := "Perform task: " + kind + stepName + " (N)o/(y)es/(c)ontinue: "
 		fmt.Fprint(os.Stdout, msg)
 		answer, err := r.debugIn().ReadString('\n')
 		if err != nil && answer == "" {

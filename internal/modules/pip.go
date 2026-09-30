@@ -360,7 +360,7 @@ func runCapture(env *RunEnv, dir string, argv ...string) (string, string, int) {
 	if err != nil {
 		return "", err.Error(), 127
 	}
-	c := exec.Command(path, argv[1:]...)
+	c := env.Command(path, argv[1:]...)
 	c.Dir = dir
 	applyEnv(c, env)
 	var stdout, stderr bytes.Buffer

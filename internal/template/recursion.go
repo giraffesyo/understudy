@@ -28,34 +28,34 @@ func (e *RecursionError) Error() string {
 // a recursive value reports it.
 const errMaxRecursion = "maximum recursion depth exceeded"
 
-// containerID identifies a list (its backing array and length) or a map.
-type containerID struct {
+// cycleID identifies a list (its backing array and length) or a map.
+type cycleID struct {
 	ptr uintptr
 	n   int
 }
 
-func containerOf(v any) (containerID, bool) {
+func containerOf(v any) (cycleID, bool) {
 	switch t := v.(type) {
 	case []any:
 		if len(t) == 0 {
-			return containerID{}, false
+			return cycleID{}, false
 		}
-		return containerID{reflect.ValueOf(t).Pointer(), len(t)}, true
+		return cycleID{reflect.ValueOf(t).Pointer(), len(t)}, true
 	case map[string]any:
-		return containerID{reflect.ValueOf(t).Pointer(), -1}, true
+		return cycleID{reflect.ValueOf(t).Pointer(), -1}, true
 	case *yaml.OMap:
-		return containerID{reflect.ValueOf(t).Pointer(), -2}, true
+		return cycleID{reflect.ValueOf(t).Pointer(), -2}, true
 	}
-	return containerID{}, false
+	return cycleID{}, false
 }
 
 // HasCycle reports whether v contains itself: a list or dict found again
 // inside its own items.
 func HasCycle(v any) bool {
-	return hasCycle(v, map[containerID]bool{})
+	return hasCycle(v, map[cycleID]bool{})
 }
 
-func hasCycle(v any, active map[containerID]bool) bool {
+func hasCycle(v any, active map[cycleID]bool) bool {
 	id, ok := containerOf(v)
 	if !ok {
 		if d, isDep := v.(Deprecated); isDep {

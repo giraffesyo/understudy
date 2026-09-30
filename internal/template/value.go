@@ -62,7 +62,7 @@ func toStr(v any) string { return toStrIn(v, nil) }
 
 // toStrIn is toStr inside the containers of active: one met again shows
 // as Python's repr shows a recursive list or dict ("[...]", "{...}").
-func toStrIn(v any, active map[containerID]bool) string {
+func toStrIn(v any, active map[cycleID]bool) string {
 	if id, ok := containerOf(v); ok {
 		if active[id] {
 			if _, isList := v.([]any); isList {
@@ -71,7 +71,7 @@ func toStrIn(v any, active map[containerID]bool) string {
 			return "{...}"
 		}
 		if active == nil {
-			active = map[containerID]bool{}
+			active = map[cycleID]bool{}
 		}
 		active[id] = true
 		defer delete(active, id)
@@ -143,7 +143,7 @@ func toStrIn(v any, active map[containerID]bool) string {
 // pyRepr renders a value like Python repr(): strings get quotes.
 func pyRepr(v any) string { return pyReprIn(v, nil) }
 
-func pyReprIn(v any, active map[containerID]bool) string {
+func pyReprIn(v any, active map[cycleID]bool) string {
 	switch t := v.(type) {
 	case Deprecated:
 		return pyReprIn(t.Value, active)
@@ -338,7 +338,10 @@ func arith(op tokKind, a, b any) (any, error) {
 	af, aNum := asFloat(a)
 	bf, bNum := asFloat(b)
 	if !aNum || !bNum {
-		return nil, fmt.Errorf("unsupported operand type(s) for %s: %s and %s", opName(op), typeName(a), typeName(b))
+		if at := typeName(a); op == tokAdd && (at == "str" || at == "list") {
+			return nil, fmt.Errorf("can only concatenate %s (not \"%s\") to %s", at, typeName(b), at)
+		}
+		return nil, fmt.Errorf("unsupported operand type(s) for %s: '%s' and '%s'", opName(op), typeName(a), typeName(b))
 	}
 
 	if aInt && bInt {
@@ -712,7 +715,7 @@ func iterate(v any) ([]any, error) {
 	case *rangeValue:
 		return t.materialize(), nil
 	}
-	return nil, fmt.Errorf("%s object is not iterable", typeName(v))
+	return nil, fmt.Errorf("'%s' object is not iterable", typeName(v))
 }
 
 // rangeValue is the lazy result of range(): iterable and indexable without

@@ -51,7 +51,7 @@ func normalizeNewlines(s, nl string) string {
 }
 
 func (l *lexer) errf(format string, args ...any) error {
-	return &TemplateError{Pos: l.tplPos, Msg: sprintf(format, args...), Src: l.src, Off: l.pos}
+	return &TemplateError{Pos: l.tplPos, Msg: sprintf(format, args...), Src: l.src, Off: l.pos, Syntax: true}
 }
 
 func (l *lexer) run() error {

@@ -134,13 +134,13 @@ func walkDeprecated(v any, visit func(Deprecated), strip bool) (out any, changed
 
 // walkDeprecatedIn is walkDeprecated inside the containers of active (a
 // container met again, in a recursive value, is not walked twice).
-func walkDeprecatedIn(v any, visit func(Deprecated), strip bool, active map[containerID]bool) (out any, changed bool) {
+func walkDeprecatedIn(v any, visit func(Deprecated), strip bool, active map[cycleID]bool) (out any, changed bool) {
 	if id, ok := containerOf(v); ok {
 		if active[id] {
 			return v, false
 		}
 		if active == nil {
-			active = map[containerID]bool{}
+			active = map[cycleID]bool{}
 		}
 		active[id] = true
 		defer delete(active, id)

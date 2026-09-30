@@ -1,0 +1,13 @@
+# An include's apply: loads as a block when the include runs: a keyword
+# a block does not take is a parser error then, ending the run (exit 4)
+# after the include's banner.
+- hosts: a:b
+  gather_facts: false
+  tasks:
+    - debug: msg=before
+    - include_tasks:
+        file: includes/one.yml
+        apply:
+          tags: [x]
+          register: nope
+    - debug: msg=never

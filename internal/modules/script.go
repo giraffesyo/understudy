@@ -56,11 +56,11 @@ func scriptModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	scriptArgs, _ := argString(rawArgs, "_args")
 	if executable, ok := argString(rawArgs, "executable"); ok && executable != "" {
 		argv := append([]string{tmp.Name()}, strings.Fields(scriptArgs)...)
-		cmd = exec.Command(executable, argv...)
+		cmd = env.Command(executable, argv...)
 	} else if scriptArgs != "" {
-		cmd = exec.Command("/bin/sh", "-c", tmp.Name()+" "+scriptArgs)
+		cmd = env.Command("/bin/sh", "-c", tmp.Name()+" "+scriptArgs)
 	} else {
-		cmd = exec.Command(tmp.Name())
+		cmd = env.Command(tmp.Name())
 	}
 	if chdir, ok := argString(rawArgs, "chdir"); ok && chdir != "" {
 		cmd.Dir = chdir

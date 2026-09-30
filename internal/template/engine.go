@@ -1,6 +1,7 @@
 package template
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -114,10 +115,58 @@ func (e *Engine) NewEvalCtx(vars VarGetter, pos Position) *EvalCtx {
 // TemplateError is a template syntax or evaluation error, pointing at both
 // the document position and the offending spot in the template string.
 type TemplateError struct {
-	Pos Position
-	Msg string
-	Src string
-	Off int
+	Pos    Position
+	Msg    string
+	Src    string
+	Off    int
+	Syntax bool // a lexer/parser error (else raised while rendering)
+}
+
+// Cause is the error as ansible-core words a template failure's cause:
+// "'x' is undefined", "object of type 'dict' has no attribute 'y'",
+// "Syntax error in template: ..." or "Error rendering template: ...".
+// ok is false for an error that is not a template error.
+func Cause(err error) (msg string, ok bool) {
+	var ue *UndefinedError
+	if errors.As(err, &ue) {
+		return undefinedCause(ue.Name), true
+	}
+	var te *TemplateError
+	if errors.As(err, &te) {
+		if te.Syntax {
+			return "Syntax error in template: " + te.Msg, true
+		}
+		return "Error rendering template: " + te.Msg, true
+	}
+	return "", false
+}
+
+// undefinedCause words an undefined name as Jinja's undefined error:
+// an attribute or index missing on a defined value ("<type> object.attr"
+// or "<type> object[i]") names the value's type, anything else the
+// undefined variable.
+func undefinedCause(name string) string {
+	if i := strings.Index(name, " object"); i > 0 && !strings.ContainsAny(name[:i], ".[ ") {
+		typ, rest := name[:i], name[i+len(" object"):]
+		switch {
+		case strings.HasPrefix(rest, "."):
+			attr := rest[1:]
+			if j := strings.IndexAny(attr, ".["); j >= 0 {
+				attr = attr[:j]
+			}
+			return fmt.Sprintf("object of type '%s' has no attribute '%s'", typ, attr)
+		case strings.HasPrefix(rest, "["):
+			idx := rest[1:]
+			if j := strings.Index(idx, "]"); j >= 0 {
+				idx = idx[:j]
+			}
+			return fmt.Sprintf("object of type '%s' has no attribute %s", typ, idx)
+		}
+	}
+	if j := strings.IndexAny(name, ".["); j > 0 {
+		name = name[:j]
+	}
+	return fmt.Sprintf("'%s' is undefined", name)
 }
 
 func (e *TemplateError) Error() string {
@@ -150,6 +199,8 @@ type EvalCtx struct {
 	blockLevel int
 
 	lastDeprecated *Deprecated // the deprecated value access() read last
+
+	own *ownership // what the render may mutate in place (nil: nothing)
 }
 
 func (ec *EvalCtx) Engine() *Engine    { return ec.engine }
@@ -165,7 +216,7 @@ func (ec *EvalCtx) errf(off int, format string, args ...any) error {
 func (ec *EvalCtx) lookupName(name string) (any, bool) {
 	for s := ec; s != nil; s = s.parent {
 		if v, ok := s.locals[name]; ok {
-			return v, true
+			return ec.own.resolve(v), true
 		}
 	}
 	if name == "super" && ec.blockName != "" {
@@ -174,10 +225,10 @@ func (ec *EvalCtx) lookupName(name string) (any, bool) {
 	if ec.vars != nil {
 		if tg, ok := ec.vars.(TaggedGetter); ok {
 			if v, ok := tg.GetTagged(name); ok {
-				return ec.access(v), true
+				return ec.own.variable(name, ec.access(v)), true
 			}
 		} else if v, ok := ec.vars.Get(name); ok {
-			return ec.access(v), true
+			return ec.own.variable(name, ec.access(v)), true
 		}
 	}
 	if v, ok := ec.engine.Globals[name]; ok {
@@ -203,7 +254,7 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 	if err != nil {
 		return nil, err
 	}
-	ec := &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: pos, src: src}
+	ec := &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: pos, src: src, own: newOwnership(src)}
 
 	// Native-types rule: exactly one output expression and nothing that
 	// renders text. {% set %} nodes are allowed before it — they only bind
@@ -213,6 +264,9 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 	if single != nil {
 		for _, s := range sets {
 			v, err := ec.eval(s.val)
+			if err != nil && len(s.names) == 0 {
+				v, err = captureSetError(s.val, err)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -225,18 +279,27 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 			return nil, err
 		}
 		if u, ok := v.(Undefined); ok {
-			return nil, &UndefinedError{Pos: pos, Name: u.Name}
+			return nil, u.useError(pos)
 		}
+		v = ec.own.settle(v)
 		if HasCycle(v) {
 			return nil, &RecursionError{In: "template"}
 		}
 		return ec.finalize(v), nil
 	}
 
+	// Otherwise native Jinja concatenates the output chunks: none is
+	// None, a single {{ }} value (inside if/for blocks too) stays native.
 	var b strings.Builder
-	out := &renderOutput{b: &b, pos: pos, src: src}
+	out := &renderOutput{b: &b, pos: pos, src: src, native: &nativeChunks{}}
 	if err := ec.execTemplate(nodes, out); err != nil {
 		return nil, err
+	}
+	switch {
+	case out.native.n == 0:
+		return nil, nil
+	case out.native.n == 1 && out.native.isValue:
+		return out.native.first, nil
 	}
 	return b.String(), nil
 }
@@ -260,7 +323,7 @@ func (e *Engine) RenderFile(src string, vars VarGetter, pos Position, searchPath
 	if err != nil {
 		return "", err
 	}
-	ec := &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: pos, src: src, searchPath: searchPath}
+	ec := &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: pos, src: src, searchPath: searchPath, own: newOwnership(src)}
 	var b strings.Builder
 	out := &renderOutput{b: &b, pos: pos, src: src}
 	if err := ec.execTemplate(nodes, out); err != nil {
@@ -329,13 +392,13 @@ func (e *Engine) evalExpression(src string, vars VarGetter, pos Position) (any, 
 	if _, err := p.expect(tokVarEnd); err != nil {
 		return nil, nil, err
 	}
-	ec := &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: pos, src: src}
+	ec := &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: pos, src: src, own: newOwnership(src)}
 	v, err := ec.eval(expr)
 	if err != nil {
 		return nil, nil, err
 	}
 	if u, ok := v.(Undefined); ok {
-		return nil, nil, &UndefinedError{Pos: pos, Name: u.Name}
+		return nil, nil, u.useError(pos)
 	}
 	return v, ec, nil
 }

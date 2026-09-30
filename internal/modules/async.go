@@ -2,6 +2,7 @@ package modules
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -124,8 +125,10 @@ func RunAsyncJob(jid string, timeout int) int {
 // detached job kills its process group (as async_wrapper does), while an
 // in-process one just stops waiting.
 func runJob(jobFile string, req *agentproto.TaskRequest, payload []byte, timeout int, detached bool) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // past the limit, the module's processes are killed
 	done := make(chan *agentproto.Result, 1)
-	go func() { done <- Run(req, bytes.NewReader(payload)) }()
+	go func() { done <- RunContext(ctx, req, bytes.NewReader(payload)) }()
 	var limit <-chan time.Time
 	if timeout > 0 {
 		limit = time.After(time.Duration(timeout) * time.Second)

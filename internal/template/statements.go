@@ -345,19 +345,46 @@ type renderOutput struct {
 	b   fmtBuilder
 	pos Position
 	src string
+
+	// native, when set, counts the output chunks (non-empty text and
+	// {{ }} values) for the native-types rule and keeps the first.
+	native *nativeChunks
+}
+
+// nativeChunks is what native Jinja's concat sees (None values are
+// dropped): no chunk renders None, a lone {{ }} value is returned as is.
+type nativeChunks struct {
+	n       int
+	first   any
+	isValue bool
+}
+
+func (c *nativeChunks) add(v any, isValue bool) {
+	if c.n == 0 {
+		c.first, c.isValue = v, isValue
+	}
+	c.n++
 }
 
 type fmtBuilder interface {
 	WriteString(s string) (int, error)
 }
 
-func (o *renderOutput) writeText(s string) { o.b.WriteString(s) }
+func (o *renderOutput) writeText(s string) {
+	if o.native != nil && s != "" {
+		o.native.add(s, false)
+	}
+	o.b.WriteString(s)
+}
 
 // writeValue emits a {{ }} result. Like Ansible's finalize hook, None
 // renders as the empty string (inside expressions it is still "None").
 func (o *renderOutput) writeValue(v any) {
 	if v == nil {
-		return
+		return // no chunk: native concat drops None
+	}
+	if o.native != nil {
+		o.native.add(v, true)
 	}
 	o.b.WriteString(toStr(v))
 }
@@ -374,13 +401,13 @@ func (ec *EvalCtx) execNodes(nodes []tmplNode, out *renderOutput) error {
 				return err
 			}
 			if u, ok := v.(Undefined); ok {
-				return &UndefinedError{Pos: ec.pos, Name: u.Name}
+				return u.useError(ec.pos)
 			}
 			if _, ok := v.(Omit); ok {
 				return &TemplateError{Pos: out.pos, Src: out.src,
 					Msg: "'omit' can only be used as the entire value of a module argument"}
 			}
-			v, _ = walkDeprecated(v, ec.deprecated, true)
+			v, _ = walkDeprecated(ec.own.settle(v), ec.deprecated, true)
 			out.writeValue(v)
 		case *ifNode:
 			if err := ec.execIf(t, out); err != nil {
@@ -392,6 +419,9 @@ func (ec *EvalCtx) execNodes(nodes []tmplNode, out *renderOutput) error {
 			}
 		case *setNode:
 			v, err := ec.eval(t.val)
+			if err != nil && len(t.names) == 0 {
+				v, err = captureSetError(t.val, err)
+			}
 			if err != nil {
 				return err
 			}
@@ -418,7 +448,7 @@ func (ec *EvalCtx) execIf(node *ifNode, out *renderOutput) error {
 			return err
 		}
 		if u, ok := cond.(Undefined); ok {
-			return &UndefinedError{Pos: ec.pos, Name: u.Name}
+			return u.useError(ec.pos)
 		}
 		if truthy(cond) {
 			return ec.execNodes(br.body, out)
@@ -443,11 +473,18 @@ func (ec *EvalCtx) execFor(node *forNode, out *renderOutput) error {
 // not leak out (Jinja semantics; namespace() objects are the escape hatch).
 func (ec *EvalCtx) runLoop(node *forNode, iterVal any, depth int, out *renderOutput) error {
 	if u, ok := iterVal.(Undefined); ok {
-		return &UndefinedError{Pos: ec.pos, Name: u.Name}
+		return u.useError(ec.pos)
 	}
 	items, err := iterate(iterVal)
 	if err != nil {
 		return fmt.Errorf("%s (in for loop)", err)
+	}
+	if ec.own.owns(iterVal) {
+		// The loop variable is the list's own item: a change made
+		// through it shows in the list.
+		for i, item := range items {
+			items[i] = ec.ownedChild(iterVal, i, item)
+		}
 	}
 	// Mapping iteration yields key/value pairs for tuple unpacking.
 	if m, isMap := anyToMap(iterVal); isMap && len(node.loopVars) == 2 {

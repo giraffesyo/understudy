@@ -61,7 +61,7 @@ func (p *parser) describe(t token) string {
 }
 
 func (p *parser) errf(format string, args ...any) error {
-	return &TemplateError{Pos: p.tplPos, Msg: sprintf(format, args...), Src: p.src, Off: p.peek().off}
+	return &TemplateError{Pos: p.tplPos, Msg: sprintf(format, args...), Src: p.src, Off: p.peek().off, Syntax: true}
 }
 
 func (p *parser) parseExpression() (Expr, error) {

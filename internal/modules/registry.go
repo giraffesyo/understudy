@@ -5,6 +5,7 @@
 package modules
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"maps"
@@ -66,6 +67,26 @@ type RunEnv struct {
 	// StageDir is where an unprivileged become user's transferred files
 	// are reported (see transferDir).
 	StageDir string
+
+	// Ctx is the run's context (nil = never cancelled): a task that
+	// timed out cancels it, and the processes the module started
+	// through Command are killed.
+	Ctx context.Context
+}
+
+// Context is the run's context.
+func (env *RunEnv) Context() context.Context {
+	if env == nil || env.Ctx == nil {
+		return context.Background()
+	}
+	return env.Ctx
+}
+
+// Command is exec.Command bound to the run's context: when the run is
+// cancelled (its task timed out and was abandoned, as a worker is
+// terminated) the process is killed rather than left running.
+func (env *RunEnv) Command(name string, args ...string) *exec.Cmd {
+	return exec.CommandContext(env.Context(), name, args...)
 }
 
 // Environ is a shell-out's environment under the task's environment
@@ -131,7 +152,13 @@ func Exists(name string) bool {
 
 // Run dispatches a request to its module, converting panics into failed
 // results so a module bug cannot take down the agent mid-frame.
-func Run(req *agentproto.TaskRequest, payload io.Reader) (res *agentproto.Result) {
+func Run(req *agentproto.TaskRequest, payload io.Reader) *agentproto.Result {
+	return RunContext(context.Background(), req, payload)
+}
+
+// RunContext is Run under a context: cancelling it kills the processes
+// the module runs.
+func RunContext(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (res *agentproto.Result) {
 	fn, ok := registry[req.Module]
 	if !ok {
 		return agentproto.Fail("unknown module %q", req.Module)
@@ -160,6 +187,7 @@ func Run(req *agentproto.TaskRequest, payload io.Reader) (res *agentproto.Result
 		LoginUID:          req.LoginUID,
 		LoginGID:          req.LoginGID,
 		StageDir:          req.StageDir,
+		Ctx:               ctx,
 	}
 	_, copyAction := req.Args[copyActionKey]
 	args := req.Args

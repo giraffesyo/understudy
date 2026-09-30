@@ -722,7 +722,7 @@ func runOut(env *RunEnv, name string, argv ...string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cmd := exec.Command(path, argv...)
+	cmd := env.Command(path, argv...)
 	applyEnv(cmd, env)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -733,7 +733,7 @@ func runOut(env *RunEnv, name string, argv ...string) (string, error) {
 
 // runAptGet wraps apt-get with the noninteractive frontend.
 func runAptGet(env *RunEnv, argv ...string) (string, error) {
-	cmd := exec.Command("apt-get", argv...)
+	cmd := env.Command("apt-get", argv...)
 	applyEnv(cmd, env)
 	if cmd.Env == nil {
 		cmd.Env = append(cmd.Env, environWith("DEBIAN_FRONTEND", "noninteractive")...)
