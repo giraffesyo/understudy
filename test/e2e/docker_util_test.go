@@ -93,7 +93,8 @@ func dockerPort(t *testing.T, name, port string) string {
 	t.Helper()
 	out, err := exec.Command("docker", "port", name, port).Output()
 	if err != nil {
-		t.Fatalf("docker port %s %s: %v", name, port, err)
+		state, _ := exec.Command("docker", "inspect", "-f", "{{.State.Status}} {{.State.ExitCode}} {{.State.Error}}", name).CombinedOutput()
+		t.Fatalf("docker port %s %s: %v (container: %s)", name, port, err, strings.TrimSpace(string(state)))
 	}
 	line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
 	return line[strings.LastIndexByte(line, ':')+1:]
