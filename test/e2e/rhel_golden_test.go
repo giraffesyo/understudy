@@ -144,7 +144,8 @@ func TestRHELGoldenDifferential(t *testing.T) {
 				"systemctl disable --now chronyd 2>/dev/null; " +
 				"echo 0 > /proc/sys/net/ipv4/ip_forward 2>/dev/null; " +
 				"sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf 2>/dev/null; " +
-				"dnf -y remove zip chrony 2>/dev/null; true"
+				"dnf -y remove zip chrony 2>/dev/null; " +
+				"umount /etc/hostname 2>/dev/null; hostnamectl set-hostname rhelgolden.example 2>/dev/null; true"
 			exec.Command("docker", "exec", "understudy-rhelgolden", "sh", "-c", resetCmd).Run()
 			aOut := runTool(t, ansible, []string{"-i", invA, pb}, env, 1)
 

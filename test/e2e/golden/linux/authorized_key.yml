@@ -1,0 +1,61 @@
+# ansible.posix.authorized_key as root for another account: the default
+# ~/.ssh/authorized_keys path, .ssh creation and ownership (manage_dir),
+# and lookups of unknown users.
+- name: authorized_key
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    k1: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl one@host"
+    k2: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDk2 two@host"
+  tasks:
+    - name: an account without .ssh
+      user: {name: akuser}
+
+    - name: check mode resolves the default path
+      authorized_key: {user: akuser, key: "{{ k1 }}"}
+      check_mode: true
+      diff: true
+
+    - name: add a key
+      ansible.posix.authorized_key: {user: akuser, key: "{{ k1 }}"}
+      diff: true
+
+    - name: ownership and modes
+      shell: stat -c '%U %G %a %n' /home/akuser/.ssh /home/akuser/.ssh/authorized_keys
+      changed_when: false
+
+    - name: loosen them
+      shell: chmod 755 /home/akuser/.ssh && chown root /home/akuser/.ssh
+      changed_when: false
+
+    - name: a second key re-applies the directory's owner and mode
+      authorized_key: {user: akuser, key: "{{ k2 }}", key_options: no-pty}
+      diff: true
+
+    - name: ownership and modes again
+      shell: stat -c '%U %G %a %n' /home/akuser/.ssh /home/akuser/.ssh/authorized_keys
+      changed_when: false
+
+    - name: without manage_dir the directory is left alone
+      shell: chmod 755 /home/akuser/.ssh
+      changed_when: false
+
+    - authorized_key: {user: akuser, key: "{{ k1 }}", state: absent, manage_dir: false}
+      diff: true
+
+    - shell: stat -c '%U %G %a %n' /home/akuser/.ssh /home/akuser/.ssh/authorized_keys
+      changed_when: false
+
+    - name: exclusive
+      authorized_key: {user: akuser, key: "{{ k1 }}", exclusive: true}
+      diff: true
+
+    - name: unknown user
+      authorized_key: {user: nosuchuser, key: "{{ k1 }}"}
+      ignore_errors: true
+
+    - name: unknown user in check mode
+      authorized_key: {user: nosuchuser, key: "{{ k1 }}"}
+      check_mode: true
+      ignore_errors: true
