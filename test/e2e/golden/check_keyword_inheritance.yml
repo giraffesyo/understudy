@@ -1,0 +1,37 @@
+# Run under --check: play/block check_mode: false override the command
+# line, and blocks around include_tasks and import_tasks entries pass
+# check_mode and diff down to the included tasks.
+- name: play check_mode false beats --check
+  hosts: all
+  gather_facts: false
+  check_mode: false
+  tasks:
+    - copy: {content: "a\n", dest: "{{ workdir }}/a.txt"}
+    - name: block back to check mode
+      check_mode: true
+      block:
+        - copy: {content: "b\n", dest: "{{ workdir }}/b.txt"}
+    - name: include inside a check_mode/diff block
+      check_mode: true
+      diff: true
+      block:
+        - include_tasks: includes/write_file.yml
+          vars: {content: c, fname: c.txt}
+    - name: import with diff
+      import_tasks: includes/write_file.yml
+      vars: {content: d, fname: d.txt}
+      diff: true
+    - stat: {path: "{{ workdir }}/{{ item }}"}
+      loop: [a.txt, b.txt, c.txt, d.txt]
+      register: st
+    - debug: {msg: "{{ st.results | map(attribute='stat.exists') | list }}"}
+
+- name: block check_mode false under --check
+  hosts: all
+  gather_facts: false
+  tasks:
+    - check_mode: false
+      diff: true
+      block:
+        - copy: {content: "e\n", dest: "{{ workdir }}/e.txt"}
+    - copy: {content: "f\n", dest: "{{ workdir }}/f.txt"}

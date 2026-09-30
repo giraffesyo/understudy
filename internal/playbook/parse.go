@@ -39,6 +39,8 @@ var playKeywords = map[string]bool{
 	"max_fail_percentage": true, "any_errors_fatal": true, "roles": true,
 	"force_handlers": true, "vars_prompt": true,
 	"gather_subset": true, "gather_timeout": true, "fact_path": true,
+	"check_mode": true, "diff": true, "become_flags": true, "become_exe": true,
+	"debugger": true,
 }
 
 // Deferred play keys that must fail loudly rather than be ignored.
@@ -124,6 +126,16 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 		switch key {
 		case "name":
 			play.Name, _ = val.Str()
+		case "check_mode", "diff":
+			b, err := decodeBool(val, file, key)
+			if err != nil {
+				return nil, err
+			}
+			if key == "check_mode" {
+				play.CheckMode = &b
+			} else {
+				play.Diff = &b
+			}
 		case "hosts":
 			v, err := val.Decode()
 			if err != nil {
@@ -162,18 +174,16 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 				return nil, err
 			}
 			play.GatherFacts = &b
-		case "become":
-			b, err := decodeBool(val, file, "become")
+		case "become", "become_user", "become_method", "become_flags", "become_exe":
+			if err := parseBecomeKey(&play.Become, key, val, file); err != nil {
+				return nil, err
+			}
+		case "debugger":
+			d, err := parseDebugger(val, file)
 			if err != nil {
 				return nil, err
 			}
-			play.Become.Become = &b
-		case "become_user":
-			play.Become.BecomeUser, _ = val.Str()
-		case "become_method":
-			if s, _ := val.Str(); s != "" && s != "sudo" {
-				return nil, errAt(file, val, "become_method %q is not supported (only sudo)", s)
-			}
+			play.Debugger = d
 		case "tasks", "pre_tasks", "post_tasks", "handlers":
 			tasks, err := parseTaskList(val, file, key == "handlers")
 			if err != nil {
@@ -238,11 +248,13 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 		case "strategy":
 			s, _ := val.Str()
 			switch s {
-			case "linear", "free", "host_pinned":
+			case "linear", "free", "host_pinned", "debug":
 				play.Strategy = s
+			case "ansible.builtin.linear", "ansible.builtin.free", "ansible.builtin.host_pinned", "ansible.builtin.debug":
+				play.Strategy = strings.TrimPrefix(s, "ansible.builtin.")
 			case "":
 			default:
-				return nil, errAt(file, val, "strategy %q is not supported (linear, free, host_pinned)", s)
+				return nil, errAt(file, val, "strategy %q is not supported (linear, free, host_pinned, debug)", s)
 			}
 		case "remote_user":
 			play.RemoteUser, _ = val.Str()
@@ -373,19 +385,26 @@ func parseImportTasks(item, pathNode *yaml.Node, file string, handlers bool, bc 
 			inh.Vars, err = decodeMap(val, file, "vars")
 		case "tags":
 			inh.Tags = decodeStringList(val)
-		case "become":
-			var b bool
-			if b, err = decodeBool(val, file, "become"); err == nil {
-				inh.Become.Become = &b
-			}
-		case "become_user":
-			inh.Become.BecomeUser, _ = val.Str()
+		case "become", "become_user", "become_method", "become_flags", "become_exe":
+			err = parseBecomeKey(&inh.Become, key, val, file)
+		case "debugger":
+			inh.Debugger, err = parseDebugger(val, file)
 		case "environment":
 			inh.Environment, err = decodeMap(val, file, "environment")
 		case "no_log":
 			inh.NoLog, err = decodeBool(val, file, "no_log")
 		case "delegate_to":
 			inh.Delegate, _ = val.Str()
+		case "check_mode":
+			var b bool
+			if b, err = decodeBool(val, file, "check_mode"); err == nil {
+				inh.CheckMode = &b
+			}
+		case "diff":
+			var b bool
+			if b, err = decodeBool(val, file, "diff"); err == nil {
+				inh.Diff = &b
+			}
 		case "any_errors_fatal":
 			var b bool
 			if b, err = decodeBool(val, file, "any_errors_fatal"); err == nil {
@@ -459,6 +478,16 @@ func parseRoleRefs(node *yaml.Node, file string) ([]*RoleRef, error) {
 				for k, v := range m {
 					ref.Params[k] = v
 				}
+			case "check_mode", "diff":
+				b, err := decodeBool(val, file, key)
+				if err != nil {
+					return nil, err
+				}
+				if key == "check_mode" {
+					ref.CheckMode = &b
+				} else {
+					ref.Diff = &b
+				}
 			case "become", "become_user", "delegate_to":
 				return nil, errAt(file, val, "role keyword %q is not supported yet", key)
 			default:
@@ -485,8 +514,8 @@ func parseRoleRefs(node *yaml.Node, file string) ([]*RoleRef, error) {
 var blockKeywords = map[string]bool{
 	"block": true, "rescue": true, "always": true, "name": true,
 	"when": true, "become": true, "become_user": true, "become_method": true,
-	"vars": true, "tags": true, "environment": true, "no_log": true,
-	"ignore_errors": true, "check_mode": true, "delegate_to": true, "any_errors_fatal": true,
+	"become_flags": true, "become_exe": true, "debugger": true, "vars": true, "tags": true, "environment": true, "no_log": true,
+	"ignore_errors": true, "check_mode": true, "diff": true, "delegate_to": true, "any_errors_fatal": true,
 }
 
 // parseBlock flattens a block/rescue/always entry: block-level keywords are
@@ -508,13 +537,10 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 		switch key {
 		case "when":
 			inh.When = decodeExprList(val)
-		case "become":
-			var b bool
-			if b, err = decodeBool(val, file, "become"); err == nil {
-				inh.Become.Become = &b
-			}
-		case "become_user":
-			inh.Become.BecomeUser, _ = val.Str()
+		case "become", "become_user", "become_method", "become_flags", "become_exe":
+			err = parseBecomeKey(&inh.Become, key, val, file)
+		case "debugger":
+			inh.Debugger, err = parseDebugger(val, file)
 		case "vars":
 			inh.Vars, err = decodeMap(val, file, "vars")
 		case "tags":
@@ -527,6 +553,16 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 			inh.IgnoreErrors, err = decodeBool(val, file, "ignore_errors")
 		case "delegate_to":
 			inh.Delegate, _ = val.Str()
+		case "check_mode":
+			var b bool
+			if b, err = decodeBool(val, file, "check_mode"); err == nil {
+				inh.CheckMode = &b
+			}
+		case "diff":
+			var b bool
+			if b, err = decodeBool(val, file, "diff"); err == nil {
+				inh.Diff = &b
+			}
 		}
 		if err != nil {
 			return nil, err
@@ -580,6 +616,18 @@ func applyBlockInheritance(t *Task, inh *Task) {
 	if t.Become.BecomeUser == "" {
 		t.Become.BecomeUser = inh.Become.BecomeUser
 	}
+	if t.Become.Method == "" {
+		t.Become.Method = inh.Become.Method
+	}
+	if t.Become.Flags == nil {
+		t.Become.Flags = inh.Become.Flags
+	}
+	if t.Become.Exe == "" {
+		t.Become.Exe = inh.Become.Exe
+	}
+	if t.Debugger == "" {
+		t.Debugger = inh.Debugger
+	}
 	if len(inh.Vars) > 0 {
 		merged := make(map[string]any, len(inh.Vars)+len(t.Vars))
 		for k, v := range inh.Vars {
@@ -610,6 +658,14 @@ func applyBlockInheritance(t *Task, inh *Task) {
 	}
 	if t.AnyErrorsFatal == nil {
 		t.AnyErrorsFatal = inh.AnyErrorsFatal
+	}
+	// check_mode/diff: the nearest explicit setting (task, then the
+	// innermost block) wins.
+	if t.CheckMode == nil {
+		t.CheckMode = inh.CheckMode
+	}
+	if t.Diff == nil {
+		t.Diff = inh.Diff
 	}
 	t.RunOnce = t.RunOnce || inh.RunOnce
 }
@@ -743,9 +799,6 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			task.ChangedWhen = decodeExprList(val)
 		case "until":
 			task.Until, _ = val.Str()
-			if task.Retries == 0 {
-				task.Retries = 3
-			}
 			if task.Delay == 0 {
 				task.Delay = 5
 			}
@@ -755,24 +808,23 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 				return nil, err
 			}
 			task.Retries = int(n)
+			task.RetriesSet = true
 		case "delay":
 			n, err := decodeInt(val, file, "delay")
 			if err != nil {
 				return nil, err
 			}
 			task.Delay = int(n)
-		case "become":
-			b, err := decodeBool(val, file, "become")
+		case "become", "become_user", "become_method", "become_flags", "become_exe":
+			if err := parseBecomeKey(&task.Become, key, val, file); err != nil {
+				return nil, err
+			}
+		case "debugger":
+			d, err := parseDebugger(val, file)
 			if err != nil {
 				return nil, err
 			}
-			task.Become.Become = &b
-		case "become_user":
-			task.Become.BecomeUser, _ = val.Str()
-		case "become_method":
-			if s, _ := val.Str(); s != "" && s != "sudo" {
-				return nil, errAt(file, val, "become_method %q is not supported (only sudo)", s)
-			}
+			task.Debugger = d
 		case "vars":
 			m, err := decodeMap(val, file, "vars")
 			if err != nil {
@@ -837,7 +889,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			}
 			task.Diff = &b
 		case "throttle", "timeout", "ignore_unreachable", "collections",
-			"module_defaults", "debugger", "become_flags", "become_exe", "port":
+			"module_defaults", "port":
 			// Accepted: no effect on execution outcome here.
 		case "async":
 			// Async with poll > 0 runs synchronously (same outcome; the
@@ -923,6 +975,13 @@ func parseModuleArgs(task *Task, node *yaml.Node, file string) error {
 	}
 	if m, ok := yaml.PlainMap(v); ok {
 		task.Args = m
+		if node.Kind == yaml.MappingNode {
+			task.ArgPos = map[string]Pos{}
+			for i := 0; i+1 < len(node.Content); i += 2 {
+				val := node.Content[i+1]
+				task.ArgPos[node.Content[i].Value] = Pos{File: file, Line: val.Line, Col: val.Column}
+			}
+		}
 		return nil
 	}
 	switch t := v.(type) {
@@ -1171,4 +1230,65 @@ func truthyVar(v any) bool {
 		}
 	}
 	return false
+}
+
+// BecomeMethods are the supported become plugins (by normalized name).
+var BecomeMethods = []string{"sudo", "su", "doas"}
+
+// NormalizeBecomeMethod maps a become_method value to a supported plugin
+// name ("community.general.doas" is doas), or "" when unsupported.
+func NormalizeBecomeMethod(s string) string {
+	switch s {
+	case "sudo", "ansible.builtin.sudo", "ansible.legacy.sudo":
+		return "sudo"
+	case "su", "ansible.builtin.su", "ansible.legacy.su":
+		return "su"
+	case "doas", "community.general.doas":
+		return "doas"
+	}
+	return ""
+}
+
+// parseBecomeKey decodes one become keyword into bf.
+func parseBecomeKey(bf *BecomeFields, key string, val *yaml.Node, file string) error {
+	switch key {
+	case "become":
+		b, err := decodeBool(val, file, "become")
+		if err != nil {
+			return err
+		}
+		bf.Become = &b
+	case "become_user":
+		bf.BecomeUser, _ = val.Str()
+	case "become_method":
+		s, _ := val.Str()
+		if s == "" {
+			return nil
+		}
+		if strings.Contains(s, "{{") {
+			bf.Method = s // resolved per host at run time
+			return nil
+		}
+		m := NormalizeBecomeMethod(s)
+		if m == "" {
+			return errAt(file, val, "become_method %q is not supported (supported: sudo, su, doas)", s)
+		}
+		bf.Method = m
+	case "become_flags":
+		s, _ := val.Str()
+		bf.Flags = &s
+	case "become_exe":
+		bf.Exe, _ = val.Str()
+	}
+	return nil
+}
+
+// parseDebugger validates the debugger keyword.
+func parseDebugger(val *yaml.Node, file string) (string, error) {
+	s, _ := val.Str()
+	switch s {
+	case "", "always", "never", "on_failed", "on_unreachable", "on_skipped":
+		return s, nil
+	}
+	return "", errAt(file, val, "debugger must be one of always, never, on_failed, on_unreachable or on_skipped, got %q", s)
 }

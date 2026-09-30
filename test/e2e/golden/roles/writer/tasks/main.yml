@@ -1,0 +1,2 @@
+- name: role write
+  copy: {content: "role\n", dest: "{{ workdir }}/role.txt"}

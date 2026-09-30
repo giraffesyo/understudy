@@ -9,6 +9,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
 	"github.com/giraffesyo/understudy/internal/modules/fsutil"
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 func init() {
@@ -315,7 +316,7 @@ func pySubn(re *regexp.Regexp, repl, s string) (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	matches := re.FindAllStringSubmatchIndex(s, -1)
+	matches := pyre.FindAllSubmatchIndex(re, s, -1)
 	if len(matches) == 0 {
 		return s, 0, nil
 	}

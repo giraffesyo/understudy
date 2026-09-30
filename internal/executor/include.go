@@ -194,6 +194,13 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 				t.Vars = merged
 			}
 			t.Tags = append(append([]string{}, task.Tags...), t.Tags...)
+			// The include is the included tasks' parent for check_mode/diff.
+			if t.CheckMode == nil {
+				t.CheckMode = task.CheckMode
+			}
+			if t.Diff == nil {
+				t.Diff = task.Diff
+			}
 		}
 		if err := r.runTaskList(ctx, play, tasks, playHosts, u.hosts, depth+1); err != nil {
 			return err

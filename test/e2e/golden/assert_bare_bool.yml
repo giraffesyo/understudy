@@ -1,0 +1,35 @@
+# assert with non-string 'that' entries: bare booleans are conditionals
+# as-is, whole-template strings resolve (to a list of conditionals, or
+# evaluate as a conditional), and non-bool scalars are broken conditionals.
+- hosts: all
+  gather_facts: false
+  vars:
+    f_var: false
+    t_var: true
+    checks: ["1 == 1", "2 == 3"]
+  tasks:
+    - assert: {that: false}
+      ignore_errors: true
+    - assert: {that: true}
+    - assert: {that: "{{ f_var }}"}
+      ignore_errors: true
+    - assert: {that: "{{ t_var }}"}
+    - assert: {that: [true, false]}
+      ignore_errors: true
+    - assert: {that: [false], fail_msg: nope}
+      ignore_errors: true
+    - assert: {that: 0}
+      ignore_errors: true
+    - assert: {that: "f_var"}
+      ignore_errors: true
+    - assert: {that: ["t_var", "{{ f_var }}"]}
+      ignore_errors: true
+    - assert: {that: "{{ checks }}"}
+      ignore_errors: true
+    - assert: {that: [true], quiet: true}
+    - name: when with a whole-template conditional
+      debug: {msg: ran}
+      when: "{{ t_var }}"
+    - name: when with a whole-template false conditional
+      debug: {msg: ran}
+      when: "{{ f_var }}"

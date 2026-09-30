@@ -1,0 +1,89 @@
+# until/retries: attempts counting, exhausted results (failed module vs a
+# result that only failed the until test), retries without until, and
+# changed_when/failed_when applied before until on every attempt.
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: exhausted on a failing command
+      command: "false"
+      register: r
+      until: r.rc == 0
+      retries: 2
+      delay: 0
+      ignore_errors: true
+    - debug: {var: r.attempts}
+    - debug: {var: r.failed}
+
+    - name: exhausted on an ok result
+      command: "true"
+      register: r_ok
+      until: false
+      retries: 1
+      delay: 0
+      ignore_errors: true
+    - debug: {var: r_ok}
+
+    - name: debug until exhausted
+      debug: {msg: "hello"}
+      register: r_dbg
+      until: r_dbg.msg == "nope"
+      retries: 2
+      delay: 0
+      ignore_errors: true
+    - debug: {var: r_dbg}
+
+    - name: succeeds first time
+      command: "true"
+      register: r_first
+      until: r_first.rc == 0
+      retries: 3
+      delay: 0
+    - debug: {var: r_first.attempts}
+
+    - name: counter file for eventual success
+      copy: {dest: "{{ workdir }}/count", content: ""}
+
+    - name: succeeds on the third attempt
+      shell: echo x >> {{ workdir }}/count; wc -l < {{ workdir }}/count
+      register: r_third
+      until: r_third.stdout | int >= 3
+      retries: 5
+      delay: 0
+    - debug: {var: r_third.attempts}
+
+    - name: retries without until retry while failing
+      command: "false"
+      register: r_nountil
+      retries: 2
+      delay: 0
+      ignore_errors: true
+    - debug: {var: r_nountil.attempts}
+
+    - name: retries 0 with until
+      command: "false"
+      register: r_zero
+      until: r_zero.rc == 0
+      retries: 0
+      delay: 0
+      ignore_errors: true
+    - debug: {var: r_zero.attempts | default('unset')}
+
+    - name: failed_when participates in until
+      command: "false"
+      register: r_fw
+      failed_when: false
+      changed_when: r_fw.attempts | default(0) > 1
+      until: r_fw.attempts | default(0) >= 2
+      retries: 3
+      delay: 0
+    - debug: {var: r_fw.attempts}
+
+    - name: until in a loop
+      command: "echo {{ item }}"
+      register: r_loop
+      until: r_loop.stdout == "a"
+      retries: 1
+      delay: 0
+      loop: [a, b]
+      ignore_errors: true
+    - debug: {msg: "{{ r_loop.results | map(attribute='attempts') | list }}"}

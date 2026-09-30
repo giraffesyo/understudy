@@ -33,7 +33,7 @@ func (c *AgentClient) Run(ctx context.Context, req *agentproto.TaskRequest, payl
 	}
 	if res.RC != 0 {
 		// Nonzero agent exit = infrastructure error, not a module failure.
-		if become != nil && IsSudoPasswordError(res.Stderr) {
+		if become != nil && become.method() == "sudo" && IsSudoPasswordError(res.Stderr) {
 			return nil, fmt.Errorf("Missing sudo password (configure NOPASSWD or use --ask-become-pass)")
 		}
 		return nil, fmt.Errorf("agent exited with rc=%d: %s", res.RC, strings.TrimSpace(string(res.Stderr)))

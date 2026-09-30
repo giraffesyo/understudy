@@ -18,7 +18,7 @@ import (
 )
 
 const rhelDockerfile = `FROM rockylinux:9
-RUN dnf -y install openssh-server sudo systemd iptables && \
+RUN dnf -y install openssh-server sudo systemd iptables procps-ng && \
     dnf clean all && ssh-keygen -A && \
     useradd -m ` + testUser + ` && echo '` + testUser + `:` + testPass + `' | chpasswd && \
     echo '` + testUser + ` ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/` + testUser + ` && \
