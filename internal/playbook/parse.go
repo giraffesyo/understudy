@@ -483,7 +483,7 @@ func parseImportTasks(item, pathNode *yaml.Node, file string, handlers bool, bc 
 		var err error
 		switch key {
 		case "when":
-			inh.When = decodeExprList(val)
+			inh.When, inh.WhenPos = decodeExprList(val), exprPositions(val, file)
 		case "vars":
 			inh.Vars, err = decodeMap(val, file, "vars")
 		case "tags":
@@ -651,7 +651,7 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 		var err error
 		switch key {
 		case "when":
-			inh.When = decodeExprList(val)
+			inh.When, inh.WhenPos = decodeExprList(val), exprPositions(val, file)
 		case "become":
 			var b, ok bool
 			if b, ok, err = decodeBoolKW(&inh, val, file, "become"); err == nil && ok {
@@ -740,6 +740,14 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 func applyBlockInheritance(t *Task, inh *Task) {
 	if len(inh.When) > 0 {
 		t.When = append(append([]string{}, inh.When...), t.When...)
+		for k, p := range inh.WhenPos {
+			if _, own := t.WhenPos[k]; !own {
+				if t.WhenPos == nil {
+					t.WhenPos = map[string]Pos{}
+				}
+				t.WhenPos[k] = p
+			}
+		}
 	}
 	if t.Become.Become == nil {
 		t.Become.Become = inh.Become.Become
@@ -897,6 +905,12 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 
 	for _, key := range keys {
 		val := node.MapGet(key)
+		if (taskKeywords[key] || strings.HasPrefix(key, "with_")) && val != nil {
+			if task.KeywordPos == nil {
+				task.KeywordPos = map[string]Pos{}
+			}
+			task.KeywordPos[key] = Pos{File: file, Line: val.Line, Col: val.Column}
+		}
 		switch key {
 		case "name":
 			task.Name, _ = val.Str()
@@ -912,7 +926,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 				task.Args[k] = v
 			}
 		case "when":
-			task.When = decodeExprList(val)
+			task.When, task.WhenPos = decodeExprList(val), exprPositions(val, file)
 		case "loop", "with_list":
 			v, err := val.Decode()
 			if err != nil {
@@ -1160,6 +1174,9 @@ func parseModuleArgs(task *Task, node *yaml.Node, file string) error {
 	v, err := node.Decode()
 	if err != nil {
 		return err
+	}
+	if node != nil {
+		task.ArgsPos = Pos{File: file, Line: node.Line, Col: node.Column}
 	}
 	if m, ok := yaml.PlainMap(v); ok {
 		task.Args = m
@@ -1420,6 +1437,22 @@ func decodeExprList(node *yaml.Node) []string {
 		return out
 	}
 	return []string{exprString(node)}
+}
+
+// exprPositions maps each condition of a when: value (one expression or
+// a list of them) to where it was written.
+func exprPositions(node *yaml.Node, file string) map[string]Pos {
+	items, ok := node.Seq()
+	if !ok {
+		items = []*yaml.Node{node}
+	}
+	out := make(map[string]Pos, len(items))
+	for _, it := range items {
+		if _, seen := out[exprString(it)]; !seen {
+			out[exprString(it)] = Pos{File: file, Line: it.Line, Col: it.Column}
+		}
+	}
+	return out
 }
 
 func exprString(node *yaml.Node) string {

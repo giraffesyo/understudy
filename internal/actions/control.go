@@ -33,7 +33,7 @@ func runDebug(_ context.Context, actx *Context, args map[string]any, _ string) *
 	}
 	if varName, ok := args["var"].(string); ok {
 		// debug var= evaluates the NAME as an expression against host vars.
-		val, err := actx.Vars.EvalExpr(varName)
+		val, err := actx.Vars.At(actx.ArgPos["var"]).EvalExpr(varName)
 		if err != nil {
 			if ue, isUndef := err.(*template.UndefinedError); isUndef {
 				// ansible-core 2.19+ renders the template error in place.
@@ -100,7 +100,11 @@ func runAssert(_ context.Context, actx *Context, args map[string]any, _ string) 
 			ok = t
 		case string:
 			var err error
-			ok, err = actx.Vars.EvalWhen([]string{t})
+			vctx := actx.Vars
+			if !isList {
+				vctx = vctx.At(actx.ArgPos["that"])
+			}
+			ok, err = vctx.EvalWhen([]string{t})
 			if err != nil {
 				return agentproto.Fail("assert: error evaluating %q: %v", t, err)
 			}

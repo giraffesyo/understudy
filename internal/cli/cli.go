@@ -25,6 +25,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/executor"
 	"github.com/giraffesyo/understudy/internal/inventory"
 	"github.com/giraffesyo/understudy/internal/playbook"
+	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/vault"
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -359,6 +360,9 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		Inventory:     p.inventory,
 		Tags:          splitCSV(p.tags),
 		SkipTags:      splitCSV(p.skipTags),
+
+		NoDeprecationWarnings: !cfg.DeprecationWarnings,
+		InjectFactsSet:        cfg.InjectFactsSet,
 	}
 	if cfg.Source != "" {
 		if abs, err := filepath.Abs(cfg.Source); err == nil {
@@ -931,7 +935,7 @@ func printError(err error) {
 	if errors.As(err, &oe) {
 		if file, line, col := oe.Origin(); line > 0 {
 			fmt.Fprintf(os.Stderr, "[ERROR]: %s\nOrigin: %s:%d:%d\n\n%s\n", oe.Message(), file, line, col,
-				callback.SourceExcerpt(file, line, col))
+				template.SourceExcerpt(file, line, col))
 			return
 		}
 		fmt.Fprintf(os.Stderr, "[ERROR]: %s\n", oe.Message())

@@ -124,6 +124,9 @@ type Task struct {
 	RoleName       string     // owning role (for "role : task" banners); "" = play task
 	Src            Pos
 	ArgPos         map[string]Pos // source position of each map-form module arg value
+	ArgsPos        Pos            // the module's value (k=v or free-form string args share it)
+	KeywordPos     map[string]Pos // source position of each task keyword's value (when, ...)
+	WhenPos        map[string]Pos // source position of each when: condition, by its text
 
 	// KeywordTemplates holds keywords given as templates ("{{ x }}"),
 	// resolved per host at run time: no_log, ignore_errors, become,
