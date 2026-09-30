@@ -258,10 +258,10 @@ system-administration surface:
 | Packages    | `package`, `apt`, `yum`, `dnf`, `apk`, `pip`, `package_facts` |
 | Repos/keys  | `apt_repository`, `deb822_repository`, `yum_repository`, `rpm_key` |
 | Services    | `service`, `systemd`, `service_facts` |
-| Users       | `user`, `group` |
+| Users       | `user`, `group`, `authorized_key` |
 | Storage     | `mount`, `parted`, `filesystem` |
 | Network/sec | `firewalld`, `iptables`, `selinux`, `sysctl`, `modprobe` |
-| Config      | `sudoers`, `openssh_keypair`, `timezone`, `getent` |
+| Config      | `sudoers`, `openssh_keypair`, `timezone`, `hostname`, `alternatives`, `getent` |
 | Databases   | `mysql_db`, `mysql_user` |
 | Facts/util  | `setup`, `ping`, `debug`, `set_fact`, `assert`, `fail`, `meta`, `include_vars`, `validate_argument_spec` |
 
@@ -352,6 +352,10 @@ needs the `ansible` package (the corpus uses a few `community.general`
 plugins) and `passlib`, e.g. `pip install ansible passlib`, with the
 matching `ansible-core` release. Set `ANSIBLE_PYTHON_INTERPRETER` to that
 Python (CI does), or the output picks up interpreter-discovery warnings.
+With Docker available, `test/e2e/golden/linux/*.yml` (modules that need
+root: `user`, `hostname`, `alternatives`) also run at `-v` against fresh
+Ubuntu, Alpine and Rocky Linux containers, one per tool, and must match
+byte for byte.
 
 CI (`.github/workflows/ci.yml`) runs gofmt, `go vet`, `make depcheck`, the
 unit suite on Linux and macOS, the cross-compile check, the golden suite

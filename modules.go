@@ -237,10 +237,44 @@ type User struct {
 	System     bool
 	Remove     bool
 	Password   string
+	// UpdatePassword is "always" (the default) or "on_create".
+	UpdatePassword string   `ans:"update_password"`
+	PasswordLock   *bool    `ans:"password_lock"`
+	Expires        *float64 // epoch seconds; negative removes the expiry
+	MoveHome       bool     `ans:"move_home"`
+	GenerateSSHKey bool     `ans:"generate_ssh_key"`
+	SSHKeyType     string   `ans:"ssh_key_type"`
+	SSHKeyBits     int64    `ans:"ssh_key_bits"`
+	SSHKeyFile     string   `ans:"ssh_key_file"`
+	SSHKeyComment  string   `ans:"ssh_key_comment"`
 }
 
 func (u User) ModuleName() string         { return "user" }
 func (u User) ModuleArgs() map[string]any { return argsOf(u) }
+
+// AuthorizedKey manages keys in a user's authorized_keys file.
+type AuthorizedKey struct {
+	User       string
+	Key        string
+	State      string
+	Path       string
+	KeyOptions string `ans:"key_options"`
+	Exclusive  bool
+	Comment    string
+	ManageDir  *bool `ans:"manage_dir"`
+}
+
+func (a AuthorizedKey) ModuleName() string         { return "ansible.posix.authorized_key" }
+func (a AuthorizedKey) ModuleArgs() map[string]any { return argsOf(a) }
+
+// Hostname sets the system hostname.
+type Hostname struct {
+	Name string
+	Use  string
+}
+
+func (h Hostname) ModuleName() string         { return "hostname" }
+func (h Hostname) ModuleArgs() map[string]any { return argsOf(h) }
 
 // ---- Control-side ----
 
