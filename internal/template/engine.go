@@ -12,6 +12,36 @@ type Options struct {
 	TrimBlocks          bool // Ansible default: true
 	LstripBlocks        bool // Ansible default: false
 	KeepTrailingNewline bool // Ansible default: true
+
+	// Delimiters (the template module's *_start_string/*_end_string);
+	// empty means Jinja's default.
+	BlockStart, BlockEnd       string
+	VariableStart, VariableEnd string
+	CommentStart, CommentEnd   string
+
+	// NewlineSequence, when set, is Jinja's newline_sequence: newlines in
+	// template text are normalized to it (and trailing newlines a file
+	// render restores use it).
+	NewlineSequence string
+}
+
+// delims returns the six delimiters with defaults filled in.
+func (o Options) delims() (blockStart, blockEnd, varStart, varEnd, commentStart, commentEnd string) {
+	pick := func(v, def string) string {
+		if v == "" {
+			return def
+		}
+		return v
+	}
+	return pick(o.BlockStart, "{%"), pick(o.BlockEnd, "%}"), pick(o.VariableStart, "{{"),
+		pick(o.VariableEnd, "}}"), pick(o.CommentStart, "{#"), pick(o.CommentEnd, "#}")
+}
+
+// exprOpts are the options for lexing a bare expression wrapped in the
+// default "{{ }}".
+func (o Options) exprOpts() Options {
+	o.BlockStart, o.BlockEnd, o.VariableStart, o.VariableEnd, o.CommentStart, o.CommentEnd = "", "", "", "", "", ""
+	return o
 }
 
 // DefaultOptions returns Ansible's Templar defaults.
@@ -194,6 +224,14 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 	return b.String(), nil
 }
 
+// WithOptions returns a copy of the engine rendering with opts (the
+// template module's Jinja environment overrides); registries are shared.
+func (e *Engine) WithOptions(opts Options) *Engine {
+	c := *e
+	c.Opts = opts
+	return &c
+}
+
 // RenderFile renders a template file's content: always text, with
 // include/import/extends resolved against searchPath (Ansible's template
 // search path: the template's own directory, then role and playbook
@@ -212,8 +250,12 @@ func (e *Engine) RenderFile(src string, vars VarGetter, pos Position, searchPath
 		return "", err
 	}
 	res := b.String()
+	nl := "\n"
+	if e.Opts.NewlineSequence != "" {
+		nl = e.Opts.NewlineSequence
+	}
 	if want, have := trailingNewlines(src), trailingNewlines(res); want > have {
-		res += strings.Repeat("\n", want-have)
+		res += strings.Repeat(nl, want-have)
 	}
 	return res, nil
 }
@@ -243,7 +285,7 @@ func (e *Engine) RenderString(src string, vars VarGetter, pos Position) (string,
 func (e *Engine) EvalExpression(src string, vars VarGetter, pos Position) (any, error) {
 	// The spaces matter: "{{-" would otherwise read as a whitespace-control
 	// marker and eat a leading minus sign.
-	toks, err := lex("{{ "+src+" }}", e.Opts, pos)
+	toks, err := lex("{{ "+src+" }}", e.Opts.exprOpts(), pos)
 	if err != nil {
 		return nil, err
 	}

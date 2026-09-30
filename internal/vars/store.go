@@ -389,6 +389,17 @@ func (c *Context) RenderFile(src string, pos template.Position, searchPath ...st
 	return c.store.engine.RenderFile(src, c, pos, searchPath)
 }
 
+// RenderFileWith is RenderFile with Jinja environment overrides (the
+// template module's delimiters, trim_blocks, lstrip_blocks and
+// newline_sequence).
+func (c *Context) RenderFileWith(src string, pos template.Position, opts template.Options, searchPath ...string) (out string, err error) {
+	defer capturePanic(&err)
+	if len(searchPath) == 0 {
+		searchPath = []string{filepath.Dir(pos.File)}
+	}
+	return c.store.engine.WithOptions(opts).RenderFile(src, c, pos, searchPath)
+}
+
 // EvalWhen evaluates a when: clause list (implicit AND).
 func (c *Context) EvalWhen(exprs []string) (ok bool, err error) {
 	defer capturePanic(&err)
