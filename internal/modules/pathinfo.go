@@ -21,6 +21,7 @@ var pathInfoModules = map[string]bool{
 	"copy": true, "ansible.builtin.copy": true,
 	"tempfile": true, "ansible.builtin.tempfile": true,
 	"get_url": true, "ansible.builtin.get_url": true,
+	"wait_for": true, "ansible.builtin.wait_for": true,
 }
 
 // addPathInfo is AnsibleModule.add_path_info: when the result names an
