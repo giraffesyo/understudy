@@ -283,8 +283,9 @@ itself).
 
 understudy splits cleanly into two planes:
 
-- **Language plane** — `internal/yaml` (a hand-written, PyYAML-compatible
-  parser with source positions), `internal/template` (the Jinja2-compatible
+- **Language plane** — `internal/yaml` (a port of libyaml, the parser
+  ansible-core loads YAML with: same errors and positions, PyYAML-compatible
+  construction, source positions), `internal/template` (the Jinja2-compatible
   engine), and `internal/vars` (layered precedence with lazy, use-time
   resolution).
 - **Execution plane** — `internal/inventory`, `internal/playbook`,
@@ -336,8 +337,9 @@ than silently diverging. Known boundaries:
 - **`dig` lookup**: covers A, AAAA, CNAME, MX, NS, TXT, PTR and SRV (not
   yet byte-compared: Ansible's needs dnspython).
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
-  strings; regular expressions use Go's RE2 (lookaround and backreferences
-  in *patterns* are rejected with a clear error rather than mis-matched),
+  strings; a recursive YAML alias is a load error; regular expressions use
+  Go's RE2 (lookaround and backreferences in *patterns* are rejected with a
+  clear error rather than mis-matched),
   iterated with Python's `re.sub`/`findall` match rules.
 
 ## Building & testing
