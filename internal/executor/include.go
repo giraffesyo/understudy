@@ -145,6 +145,14 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 		r.mu.Lock()
 		r.stats[host].OK += included
 		r.mu.Unlock()
+		if task.Register != "" && !isLoop {
+			// An include's result holds only the flags (its file and args
+			// are not result fields).
+			reg := yaml.NewOMap()
+			reg.Set("changed", false)
+			reg.Set("failed", false)
+			r.Store.SetHostFact(host, task.Register, reg)
+		}
 	}
 
 	// Load the included files first: one that fails to parse ends the run
