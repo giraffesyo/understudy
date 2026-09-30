@@ -141,6 +141,7 @@ func TestLinuxGoldenOutput(t *testing.T) {
 			t.Run(filepath.Base(pb)+"/"+distro, func(t *testing.T) {
 				image := lgImage(t, distro)
 				abs, _ := filepath.Abs(pb)
+				var lastStderr string
 				run := func(tool string, bin string, pre ...string) string {
 					name := fmt.Sprintf("understudy-lg-%s-%s-%d", distro, tool, os.Getpid())
 					port := lgBoot(t, image, name, strings.TrimSpace(string(pub)))
@@ -153,12 +154,15 @@ func TestLinuxGoldenOutput(t *testing.T) {
 					args := append(append(pre, "-v", "-f", "1", "-i", inv, "-e", "distro="+distro), abs)
 					cmd := exec.Command(bin, args...)
 					cmd.Env = append(os.Environ(), env...)
+					var stderr strings.Builder
+					cmd.Stderr = &stderr
 					out, _ := cmd.Output()
+					lastStderr = stderr.String()
 					return normalizeVerbose(normalizeOutput(string(out), dir))
 				}
 				want := run("ansible", ansible)
 				if !strings.Contains(want, "PLAY RECAP") || strings.Contains(want, "UNREACHABLE!") {
-					t.Fatalf("ansible-playbook did not run the play:\n%s", want)
+					t.Fatalf("ansible-playbook did not run the play:\n%s\n%s", want, lastStderr)
 				}
 				got := run("understudy", understudy, "playbook")
 				if os.Getenv("UNDERSTUDY_GOLDEN_LOG") != "" {

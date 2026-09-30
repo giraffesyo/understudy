@@ -1,0 +1,199 @@
+# ansible.builtin.user on useradd/usermod systems (Ubuntu, Rocky) and on
+# BusyBox (Alpine): create/modify/remove, passwords (hash comparison,
+# update_password, password_lock), expiry, password aging, groups, homes,
+# ssh keys (a fixed key pair keeps fingerprints deterministic) and the
+# argument errors.
+- name: user
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    hash1: "$6$goldensalt$NFQ2dsXZx7fWV95uKyI/gIg0WIva2JS3t0K/bzB6jUfgdy6GXdJfr8Kqgy9zboyvjtP3Y3BpbkmTqfkpU2L0U."
+    hash2: "$6$goldensalt$Gb0jfaZBabfx5epykXpkxiRd0D7bOqsXU/X2iM6RqbAl7Nrt2NPHOLqC9CD2upD7qgFUqNf9Ybf7Ofjy9wFwn."
+    privkey: |
+      -----BEGIN OPENSSH PRIVATE KEY-----
+      b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+      QyNTUxOQAAACATFgBJS5OXwVcaxoEXHOxrExGY+UfQauRP2Y4PRre7BAAAAJBYJDONWCQz
+      jQAAAAtzc2gtZWQyNTUxOQAAACATFgBJS5OXwVcaxoEXHOxrExGY+UfQauRP2Y4PRre7BA
+      AAAEBnGs3MlH7FSRw9kRJ7ruz60+XjiGFa1/ed1PZULu+OFRMWAElLk5fBVxrGgRcc7GsT
+      EZj5R9Bq5E/Zjg9Gt7sEAAAAC2dvbGRlbkB0ZXN0AQI=
+      -----END OPENSSH PRIVATE KEY-----
+    pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBMWAElLk5fBVxrGgRcc7GsTEZj5R9Bq5E/Zjg9Gt7sE golden@test"
+  tasks:
+    - name: groups to use
+      shell: |
+        for g in ugold1 ugold2 ugold3; do
+          groupadd $g 2>/dev/null || addgroup $g
+        done
+      changed_when: false
+
+    - name: create in check mode
+      user: {name: alice, comment: Alice}
+      check_mode: true
+
+    - name: create
+      user:
+        name: alice
+        uid: 2001
+        comment: Alice Liddell
+        shell: /bin/sh
+        groups: [ugold1, ugold2]
+        password: "{{ hash1 }}"
+        expires: 1893456000
+      register: created
+
+    - name: create again is a no-op
+      user:
+        name: alice
+        uid: 2001
+        comment: Alice Liddell
+        shell: /bin/sh
+        groups: ugold1,ugold2
+        password: "{{ hash1 }}"
+        expires: 1893456000
+
+    - name: another password on_create only
+      user: {name: alice, password: "{{ hash2 }}", update_password: on_create}
+
+    - name: another password always
+      ansible.builtin.user: {name: alice, password: "{{ hash2 }}"}
+
+    - name: lock
+      user: {name: alice, password_lock: true}
+
+    - name: lock again
+      user: {name: alice, password_lock: true}
+
+    - name: lock with a new password in one go
+      user: {name: alice, password: "{{ hash1 }}", password_lock: true}
+
+    - name: unlock
+      user: {name: alice, password_lock: false}
+
+    - name: unhashed password warns
+      user: {name: alice, password: plaintext}
+      check_mode: true
+
+    - name: expiry moves
+      user: {name: alice, expires: 1924992000}
+      ignore_errors: true
+
+    - name: expiry removed
+      user: {name: alice, expires: -1}
+      ignore_errors: true
+
+    - name: expiry removed again
+      user: {name: alice, expires: -1}
+      ignore_errors: true
+
+    - name: password aging
+      user: {name: alice, password_expire_min: 1, password_expire_max: 90, password_expire_warn: 7}
+      ignore_errors: true
+
+    - name: password aging again
+      user: {name: alice, password_expire_min: 1, password_expire_max: 90, password_expire_warn: 7}
+      ignore_errors: true
+
+    - name: shadow afterwards
+      shell: "grep '^alice:' /etc/shadow | cut -d: -f2,4-8"
+      changed_when: false
+
+    - name: exact groups
+      user: {name: alice, groups: [ugold3]}
+
+    - name: appended groups
+      user: {name: alice, groups: [ugold1], append: true}
+
+    - name: appended groups again
+      user: {name: alice, groups: [ugold3, ugold1], append: true}
+
+    - name: no supplementary groups
+      user: {name: alice, groups: ""}
+
+    - name: primary group
+      user: {name: alice, group: ugold2}
+
+    - name: unknown primary group
+      user: {name: alice, group: nosuchgroup}
+      ignore_errors: true
+
+    - name: unknown supplementary group
+      user: {name: alice, groups: [nosuchgroup]}
+      ignore_errors: true
+
+    - name: append without groups
+      user: {name: alice, append: true}
+      ignore_errors: true
+
+    - name: umask with local
+      user: {name: alice, local: true, umask: "022"}
+      ignore_errors: true
+
+    - name: seuser without selinux warns
+      user: {name: alice, seuser: user_u}
+
+    - name: comment and shell change
+      user: {name: alice, comment: Alice L., shell: /bin/bash}
+      ignore_errors: true
+
+    - name: move the home
+      user: {name: alice, home: /home/alice2, move_home: true}
+
+    - name: home is there
+      shell: test -d /home/alice2 && echo moved
+      changed_when: false
+
+    - name: fixed ssh key
+      shell: |
+        mkdir -p /home/alice2/.ssh
+        printf '%s' '{{ privkey }}' > /home/alice2/.ssh/id_ed25519
+        printf '%s\n' '{{ pubkey }}' > /home/alice2/.ssh/id_ed25519.pub
+        chmod 600 /home/alice2/.ssh/id_ed25519
+      changed_when: false
+
+    - name: existing key is kept
+      user: {name: alice, generate_ssh_key: true, ssh_key_type: ed25519}
+
+    - name: a key in check mode
+      user: {name: alice, generate_ssh_key: true, ssh_key_file: .ssh/other_rsa}
+      check_mode: true
+
+    - name: a new key (not shown, it is random)
+      user: {name: alice, generate_ssh_key: true, ssh_key_file: .ssh/new_rsa, ssh_key_bits: 1024, ssh_key_comment: golden}
+      no_log: true
+
+    - name: the new key exists
+      shell: test -s /home/alice2/.ssh/new_rsa && test -s /home/alice2/.ssh/new_rsa.pub && stat -c '%U %a' /home/alice2/.ssh/new_rsa
+      changed_when: false
+
+    - name: a system user without a home
+      user: {name: svcgold, system: true, create_home: false, shell: /sbin/nologin}
+
+    - name: a user whose home needs parents
+      user: {name: bob, home: /srv/golden/homes/bob, uid: 2002}
+
+    - name: bob's home
+      shell: stat -c '%U %G %a' /srv/golden/homes/bob
+      changed_when: false
+
+    - name: a duplicate uid needs non_unique
+      user: {name: carol, uid: 2002}
+      ignore_errors: true
+
+    - name: a duplicate uid with non_unique
+      user: {name: carol, uid: 2002, non_unique: true}
+      ignore_errors: true
+
+    - name: remove in check mode
+      user: {name: bob, state: absent}
+      check_mode: true
+
+    - name: remove with its home
+      user: {name: bob, state: absent, remove: true}
+
+    - name: remove again
+      user: {name: bob, state: absent}
+
+    - name: bad state
+      user: {name: bob, state: gone}
+      ignore_errors: true

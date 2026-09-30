@@ -191,7 +191,12 @@ func (r *Result) UnmarshalJSON(data []byte) error {
 	if v, ok := take(originKey); ok {
 		r.Origin, _ = v.(string)
 	}
-	if v, ok := take("rc"); ok {
+	_, hasOut := m["stdout"]
+	_, hasErr := m["stderr"]
+	// rc without stdout/stderr (fail_json(rc=...)) is a plain result key,
+	// not a command result that grows stdout_lines.
+	if v, ok := m["rc"]; ok && (hasOut || hasErr) {
+		delete(m, "rc")
 		switch n := v.(type) {
 		case int64:
 			r.RC = IntPtr(int(n))
@@ -246,6 +251,18 @@ func (r *Result) ToVars() map[string]any {
 		m["stderr"] = r.Stderr
 		m["stdout_lines"] = splitLines(r.Stdout)
 		m["stderr_lines"] = splitLines(r.Stderr)
+	} else {
+		// A module's stdout/stderr without rc: the action layer still
+		// pre-splits them into lines.
+		for _, s := range [][2]string{{"stdout", r.Stdout}, {"stderr", r.Stderr}} {
+			if s[1] == "" {
+				continue
+			}
+			m[s[0]] = s[1]
+			if _, ok := m[s[0]+"_lines"]; !ok {
+				m[s[0]+"_lines"] = splitLines(s[1])
+			}
+		}
 	}
 	if len(r.AnsibleFacts) > 0 {
 		m["ansible_facts"] = r.AnsibleFacts
