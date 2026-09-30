@@ -27,6 +27,7 @@ var pkgSpec = args.Spec{
 	"cache_valid_time":   {Type: "int"},
 	"install_recommends": {Type: "bool"},
 	"autoremove":         {Type: "bool", Default: false},
+	"dpkg_options":       {Default: "force-confdef,force-confold"},
 
 	// dnf/yum options (Ansible's dnf and yum modules).
 	"enablerepo":        {Type: "list"},
@@ -56,7 +57,7 @@ var (
 	rpmOnlyOpts = []string{"enablerepo", "disablerepo", "use_backend", "disable_gpg_check", "exclude",
 		"skip_broken", "allowerasing", "nobest", "conf_file", "releasever", "installroot",
 		"disable_excludes", "security", "bugfix", "download_only"}
-	aptOnlyOpts = []string{"cache_valid_time", "install_recommends"}
+	aptOnlyOpts = []string{"cache_valid_time", "install_recommends", "dpkg_options"}
 )
 
 // pkgManager abstracts one package manager's query and mutate commands.
@@ -431,6 +432,15 @@ func pkgOptions(mgr string, p *args.Parsed, raw map[string]any) (pkgOpts, error)
 		return o, nil
 	}
 	if mgr == "apt" {
+		// expand_dpkg_options: every install/remove passes the dpkg
+		// options (default force-confdef,force-confold), so a conffile a
+		// role templated before installing never prompts.
+		for _, opt := range strings.Split(p.Str("dpkg_options"), ",") {
+			if opt = strings.TrimSpace(opt); opt != "" {
+				o.install = append(o.install, "-o", "Dpkg::Options::=--"+opt)
+				o.remove = append(o.remove, "-o", "Dpkg::Options::=--"+opt)
+			}
+		}
 		if _, set := raw["install_recommends"]; set {
 			if p.Bool("install_recommends") {
 				o.install = append(o.install, "--install-recommends")
