@@ -418,7 +418,10 @@ than silently diverging. Known boundaries:
   strings; a recursive YAML alias is a load error; regular expressions use
   Go's RE2 (lookaround and backreferences in *patterns* are rejected with a
   clear error rather than mis-matched),
-  iterated with Python's `re.sub`/`findall` match rules.
+  iterated with Python's `re.sub`/`findall` match rules; a task that hits
+  its `timeout` has the process its module started killed (ansible-core
+  leaves it running, even after the playbook exits) — output is identical,
+  only the orphaned work is stopped.
 
 ## Building & testing
 
