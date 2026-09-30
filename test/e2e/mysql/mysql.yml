@@ -1,0 +1,192 @@
+# community.mysql differential corpus (test/e2e/mysql_test.go): run by
+# ansible-playbook and by understudy against the same SSH target, which
+# hosts MariaDB (unix socket, root via unix_socket auth) and reaches a
+# MySQL 8.0 server (TCP, caching_sha2_password root) as "mysql8".
+- hosts: all
+  gather_facts: false
+  vars:
+    maria: &maria
+      login_unix_socket: /run/mysqld/mysqld.sock
+    my8: &my8
+      login_host: mysql8
+      login_user: root
+      login_password: rootpw
+  tasks:
+    # --- mysql_db ---------------------------------------------------------
+    - name: create databases over the socket as root
+      become: true
+      community.mysql.mysql_db:
+        name: [e2e_app, e2e_other]
+        encoding: utf8mb4
+        collation: utf8mb4_bin
+        <<: *maria
+      register: r
+    - debug: var=r
+    - name: create again
+      become: true
+      mysql_db: {name: [e2e_app, e2e_other], <<: *maria}
+    - name: check mode absent
+      become: true
+      ansible.mysql.mysql_db: {name: [e2e_other, e2e_nope], state: absent, <<: *maria}
+      check_mode: true
+    - name: seed a table
+      become: true
+      mysql_query:
+        login_db: e2e_app
+        query:
+          - CREATE TABLE t (id INT PRIMARY KEY, name VARCHAR(40), price DECIMAL(6,2), made DATETIME, note TEXT NULL)
+          - INSERT INTO t VALUES (1, 'widget', 9.50, '2024-01-02 03:04:05', NULL), (2, 'it''s', 0.25, '2023-12-31 23:59:59', 'x')
+        <<: *maria
+      register: r
+    - debug: var=r.rowcount
+    - name: dump compressed
+      become: true
+      mysql_db: {name: e2e_app, state: dump, target: /tmp/e2e_app.sql.gz, <<: *maria}
+      register: r
+    - debug: var=r.executed_commands
+    - name: import into another database
+      become: true
+      mysql_db: {name: e2e_other, state: import, target: /tmp/e2e_app.sql.gz, <<: *maria}
+    - name: dump plain with extra options
+      become: true
+      mysql_db: {name: [e2e_app, e2e_other], state: dump, target: /tmp/e2e_both.sql, single_transaction: true, quick: false, ignore_tables: [e2e_app.nope], <<: *maria}
+      register: r
+    - debug: var=r.executed_commands
+    - name: dump a missing database
+      become: true
+      mysql_db: {name: e2e_missing, state: dump, target: /tmp/x.sql, <<: *maria}
+      ignore_errors: true
+
+    # --- mysql_query ------------------------------------------------------
+    - name: select with named args
+      become: true
+      mysql_query:
+        login_db: e2e_other
+        query: SELECT id, name, price, made, note FROM t WHERE price < %(max)s ORDER BY id
+        named_args: {max: 100}
+        <<: *maria
+      register: r
+    - debug: var=r.query_result
+    - name: update in a transaction
+      become: true
+      mysql_query:
+        login_db: e2e_other
+        query: [UPDATE t SET name = %s WHERE id = %s, DELETE FROM t WHERE name = %s AND id = %s AND id > 50]
+        positional_args: ["new's", 2]
+        single_transaction: true
+        <<: *maria
+      register: r
+    - debug: {msg: "{{ r.changed }} {{ r.rowcount }} {{ r.executed_queries }}"}
+    - name: syntax error
+      become: true
+      mysql_query: {query: SELEC 1, <<: *maria}
+      ignore_errors: true
+
+    # --- mysql_user (MariaDB) --------------------------------------------
+    - name: user with privileges
+      become: true
+      mysql_user:
+        name: e2e_bob
+        host: "%"
+        password: s3cret
+        priv: "e2e_app.*:SELECT,INSERT/e2e_other.t:SELECT"
+        <<: *maria
+      register: r
+    - debug: var=r
+    - name: same user again
+      become: true
+      mysql_user: {name: e2e_bob, host: "%", password: s3cret, priv: "e2e_app.*:SELECT,INSERT/e2e_other.t:SELECT", <<: *maria}
+    - name: replace privileges
+      become: true
+      mysql_user: {name: e2e_bob, host: "%", priv: "e2e_app.*:ALL,GRANT", <<: *maria}
+      register: r
+    - debug: var=r.msg
+    - name: append a column privilege
+      become: true
+      mysql_user: {name: e2e_bob, host: "%", priv: "e2e_other.t:SELECT (name, id)", append_privs: true, <<: *maria}
+    - name: tls, limits and lock
+      become: true
+      mysql_user:
+        name: e2e_bob
+        host: "%"
+        tls_requires: {x509: }
+        resource_limits: {MAX_QUERIES_PER_HOUR: 5}
+        locked: true
+        <<: *maria
+      register: r
+    - debug: var=r
+    - name: password change is reported
+      become: true
+      mysql_user: {name: e2e_bob, host: "%", password: changed, update_password: always, <<: *maria}
+      register: r
+    - debug: var=r
+    - name: on_create keeps the password
+      become: true
+      mysql_user: {name: e2e_bob, host: "%", password: ignored, update_password: on_create, <<: *maria}
+    - name: users_info
+      become: true
+      mysql_info: {filter: [users_info, databases], return_empty_dbs: true, <<: *maria}
+      register: r
+    - debug: {var: "r.users_info | selectattr('name', 'eq', 'e2e_bob') | list"}
+    - debug: var=r.databases.e2e_other
+    - name: remove the user
+      become: true
+      mysql_user: {name: e2e_bob, host_all: true, state: absent, <<: *maria}
+      register: r
+    - debug: var=r
+
+    # --- MySQL 8.0 over TCP ----------------------------------------------
+    - name: mysql8 user with native password
+      mysql_user: {name: e2e_carol, password: pw1, priv: "*.*:PROCESS/mysql.*:SELECT", <<: *my8}
+      register: r
+    - debug: var=r
+    - name: mysql8 attributes
+      mysql_user: {name: e2e_carol, attributes: {team: db}, <<: *my8}
+      register: r
+    - debug: var=r
+    - name: mysql8 wrong password
+      mysql_user: {name: e2e_carol, login_host: mysql8, login_user: root, login_password: nope}
+      ignore_errors: true
+    - name: mysql8 variables
+      mysql_variables: {variable: max_connections, value: 222, <<: *my8}
+      register: r
+    - debug: var=r
+    - mysql_variables: {variable: max_connections, value: 222, <<: *my8}
+    - mysql_variables: {variable: max_connections, value: 151, <<: *my8}
+    - name: mysql8 read variable
+      mysql_variables: {variable: sql_mode, <<: *my8}
+      register: r
+    - debug: var=r
+    - name: mysql8 info
+      mysql_info: {filter: [version, engines], <<: *my8}
+      register: r
+    - debug: {msg: "{{ r.version.major }} {{ r.engines.InnoDB.Support }} {{ r.server_engine }}"}
+    - name: verified TLS with the server's CA
+      mysql_query:
+        query: SELECT @@version_comment IS NOT NULL AS ok
+        ca_cert: /etc/mysql8-ca.pem
+        check_hostname: false
+        <<: *my8
+      register: r
+    - debug: var=r.query_result
+    - name: credentials from ~/.my.cnf
+      copy:
+        dest: ~/.my.cnf
+        mode: "0600"
+        content: |
+          [client]
+          user = root
+          password = "rootpw"
+    - name: create through the default config file
+      mysql_db: {name: e2e_cfg, login_host: mysql8}
+      register: r
+    - debug: var=r
+    - mysql_db: {name: e2e_cfg, login_host: mysql8, state: absent}
+    - file: {path: ~/.my.cnf, state: absent}
+    - name: missing default config file
+      mysql_db: {name: e2e_cfg, login_host: mysql8}
+      ignore_errors: true
+    - mysql_user: {name: e2e_carol, state: absent, <<: *my8}
+    - name: cleanup databases
+      become: true
+      mysql_db: {name: [e2e_app, e2e_other], state: absent, <<: *maria}
