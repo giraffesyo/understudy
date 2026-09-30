@@ -113,7 +113,7 @@ func uriModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	// dict_headers keeps the user's order (a plain map here: sorted).
 	headers := newURIHeaders()
 	for _, k := range sortedMapKeys(p.Dict("headers")) {
-		headers.set(k, pyStrValue(p.Dict("headers")[k]))
+		headers.set(k, uriPyStr(p.Dict("headers")[k]))
 	}
 
 	if !uriMethodRe.MatchString(method) {
@@ -130,7 +130,7 @@ func uriModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		case []byte:
 			data, hasData = t, true
 		default:
-			data, hasData = []byte(pyStrValue(t)), true
+			data, hasData = []byte(uriPyStr(t)), true
 		}
 	}
 	switch bodyFormat {
@@ -138,7 +138,7 @@ func uriModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		if s, ok := body.(string); ok {
 			setBody(s)
 		} else {
-			setBody(pyJSONDumps(body))
+			setBody(uriJSONDumps(body))
 		}
 		if !headers.has("content-type") {
 			headers.set("Content-Type", "application/json")
@@ -388,14 +388,6 @@ func uriNoLog(res *agentproto.Result, secret string) *agentproto.Result {
 // the controller adds stdout_lines.
 func uriSkipped(msg string) *agentproto.Result {
 	return &agentproto.Result{Extra: map[string]any{"stdout": msg, "stdout_lines": anyList(pySplitLines(msg))}}
-}
-
-func copyArgs(m map[string]any) map[string]any {
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
 }
 
 func uriJSONCandidate(s string) bool { return s == "json" || s == "javascript" }

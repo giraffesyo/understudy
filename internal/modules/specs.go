@@ -20,17 +20,16 @@ func init() {
 		&gitSpec:         {"git", "ansible.builtin.git"},
 		&fileSpec:        {"file", "ansible.builtin.file"},
 		&mountSpec:       {"mount", "ansible.posix.mount"},
-		&mysqlDBSpec:     {"mysql_db", "community.mysql.mysql_db"},
-		&mysqlUserSpec:   {"mysql_user", "community.mysql.mysql_user"},
 		&tempfileSpec:    {"tempfile", "ansible.builtin.tempfile"},
 		&findSpec:        {"find", "ansible.builtin.find"},
 		&modprobeSpec:    {"modprobe", "community.general.modprobe"},
 		&lineinfileSpec:  {"lineinfile", "ansible.builtin.lineinfile"},
 		&pkgSpec: {"package", "ansible.builtin.package", "apt", "ansible.builtin.apt",
-			"dnf", "ansible.builtin.dnf", "yum", "ansible.builtin.yum", "apk", "community.general.apk"},
-		&pipSpec: {"pip", "ansible.builtin.pip"},
-		&serviceSpec: {"service", "systemd", "systemd_service", "ansible.builtin.service",
-			"ansible.builtin.systemd", "ansible.builtin.systemd_service"},
+			"dnf", "ansible.builtin.dnf", "yum", "ansible.builtin.yum"},
+		&apkSpec:        {"apk", "community.general.apk"},
+		&pipSpec:        {"pip", "ansible.builtin.pip"},
+		&serviceSpec:    {"service", "ansible.builtin.service"},
+		&systemdSpec:    {"systemd", "systemd_service", "ansible.builtin.systemd", "ansible.builtin.systemd_service"},
 		&yumRepoSpec:    {"yum_repository", "ansible.builtin.yum_repository"},
 		&sudoersSpec:    {"sudoers", "community.general.sudoers"},
 		&keypairSpec:    {"openssh_keypair", "community.crypto.openssh_keypair"},
@@ -46,6 +45,14 @@ func init() {
 	} {
 		for _, n := range names {
 			specs[n] = *spec
+		}
+	}
+	for name, spec := range map[string]args.Spec{
+		"mysql_db": mysqlDBSpec, "mysql_user": mysqlUserSpec, "mysql_query": mysqlQuerySpec,
+		"mysql_variables": mysqlVariablesSpec, "mysql_info": mysqlInfoSpec,
+	} {
+		for _, n := range []string{name, "community.mysql." + name, "ansible.mysql." + name} {
+			specs[n] = spec
 		}
 	}
 }

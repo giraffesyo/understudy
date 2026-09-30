@@ -2,6 +2,9 @@ package modules
 
 import (
 	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
@@ -13,63 +16,273 @@ func init() {
 }
 
 var modprobeSpec = args.Spec{
-	"name":   {Required: true},
-	"state":  {Default: "present", Choices: []string{"present", "absent"}},
-	"params": {},
+	"name":       {Required: true},
+	"state":      {Default: "present", Choices: []string{"absent", "present"}},
+	"params":     {Default: ""},
+	"persistent": {Default: "disabled", Choices: []string{"disabled", "present", "absent"}},
 }
 
-// modprobeModule loads/unloads kernel modules, checking /proc/modules.
+// Where modprobe persists modules and their options (overridable in
+// tests).
+var (
+	modulesLoadLocation     = "/etc/modules-load.d"
+	parametersFilesLocation = "/etc/modprobe.d"
+	procModulesPath         = "/proc/modules"
+)
+
+// modprobe is community.general.modprobe's Modprobe class.
+type modprobe struct {
+	env        *RunEnv
+	bin        string
+	name       string
+	params     string
+	state      string
+	changed    bool
+	warnings   []any
+	reModule   *regexp.Regexp
+	reParams   *regexp.Regexp
+	reParamVal *regexp.Regexp
+}
+
+func (m *modprobe) result() map[string]any {
+	return map[string]any{"name": m.name, "params": m.params, "state": m.state}
+}
+
+func (m *modprobe) fail(msg string, extra map[string]any) *agentproto.Result {
+	r := agentproto.Fail("%s", msg)
+	r.Changed = m.changed
+	r.Extra = m.result()
+	for k, v := range extra {
+		r.Extra[k] = v
+	}
+	if len(m.warnings) > 0 {
+		r.Extra["warnings"] = m.warnings
+	}
+	return r
+}
+
+func (m *modprobe) run(argv []string) (int, string, string) {
+	return runCommand(m.env, argv, cmdOpts{Env: map[string]string{"LANGUAGE": "C", "LC_ALL": "C"}})
+}
+
+// modprobeModule ports community.general.modprobe.
 func modprobeModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	p, err := modprobeSpec.Parse(rawArgs)
 	if err != nil {
 		return agentproto.Fail("%v", err)
 	}
-	name := p.Str("name")
-	loaded := moduleLoaded(name)
-	res := &agentproto.Result{Extra: map[string]any{"name": name}}
+	bin, err := getBinPath("modprobe")
+	if err != nil {
+		return agentproto.Fail("%v", err)
+	}
+	m := &modprobe{env: env, bin: bin, name: p.Str("name"), params: p.Str("params"), state: p.Str("state")}
+	compile := func(pat string) *regexp.Regexp {
+		re, err := regexp.Compile(pat)
+		if err != nil {
+			re = regexp.MustCompile(strings.Replace(pat, m.name, regexp.QuoteMeta(m.name), 1))
+		}
+		return re
+	}
+	m.reModule = compile(`^ *` + m.name + ` *(?:[#;].*)?\n?\z`)
+	m.reParams = compile(`^options ` + m.name + ` \w+=\S+ *(?:[#;].*)?\n?\z`)
+	m.reParamVal = compile(`^options ` + m.name + ` (\w+=\S+) *(?:[#;].*)?\n?\z`)
 
-	if p.Str("state") == "present" {
-		if loaded {
-			return res
-		}
-		res.Changed = true
-		if env.CheckMode {
-			return res
-		}
-		argv := []string{name}
-		if params := p.Str("params"); params != "" {
-			argv = append(argv, strings.Fields(params)...)
-		}
-		if out, err := runOut(env, "modprobe", argv...); err != nil {
-			return agentproto.Fail("modprobe %s failed: %v: %s", name, err, tail(out))
-		}
-		return res
+	loaded, fail := m.moduleLoaded()
+	if fail != nil {
+		return fail
 	}
-	// absent
-	if !loaded {
-		return res
+	check := env.CheckMode
+	extra, _ := shlexSplit(m.params)
+	if m.state == "present" && !loaded {
+		argv := []string{bin}
+		if check {
+			argv = append(argv, "-n")
+		}
+		argv = append(append(argv, m.name), extra...)
+		rc, out, errOut := m.run(argv)
+		if rc != 0 {
+			return m.fail(errOut, map[string]any{"rc": int64(rc), "stdout": out, "stderr": errOut})
+		}
+		now, fail := m.moduleLoaded()
+		if fail != nil {
+			return fail
+		}
+		if check || now {
+			m.changed = true
+		} else {
+			rc, _, errOut := m.run(append([]string{bin, "-n", "--first-time", m.name}, extra...))
+			if rc != 0 {
+				m.warnings = append(m.warnings, errOut)
+			}
+		}
+	} else if m.state == "absent" && loaded {
+		argv := []string{bin, "-r", m.name}
+		if check {
+			argv = append(argv, "-n")
+		}
+		rc, out, errOut := m.run(argv)
+		if rc != 0 {
+			return m.fail(errOut, map[string]any{"rc": int64(rc), "stdout": out, "stderr": errOut})
+		}
+		m.changed = true
 	}
-	res.Changed = true
-	if env.CheckMode {
-		return res
+
+	switch p.Str("persistent") {
+	case "present":
+		if !(m.loadedPersistently() && m.paramsIsSet()) {
+			if !m.loadedPersistently() {
+				if !check {
+					os.WriteFile(filepath.Join(modulesLoadLocation, m.name+".conf"), []byte(m.name+"\n"), 0o644)
+				}
+				m.changed = true
+			}
+			if !m.paramsIsSet() {
+				m.commentOut(m.modprobeFiles(), m.reParams, check)
+				if !check {
+					var lines []string
+					for _, prm := range strings.Fields(m.params) {
+						lines = append(lines, "options "+m.name+" "+prm)
+					}
+					os.WriteFile(filepath.Join(parametersFilesLocation, m.name+".conf"), []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+				}
+				m.changed = true
+			}
+		}
+	case "absent":
+		if m.loadedPersistently() || len(m.permanentParams()) > 0 {
+			if m.loadedPersistently() {
+				m.commentOut(m.modulesFiles(), m.reModule, check)
+				m.changed = true
+			}
+			if len(m.permanentParams()) > 0 {
+				m.commentOut(m.modprobeFiles(), m.reParams, check)
+				m.changed = true
+			}
+		}
 	}
-	if out, err := runOut(env, "modprobe", "-r", name); err != nil {
-		return agentproto.Fail("modprobe -r %s failed: %v: %s", name, err, tail(out))
+	res := &agentproto.Result{Changed: m.changed, Extra: m.result()}
+	if len(m.warnings) > 0 {
+		res.Extra["warnings"] = m.warnings
 	}
 	return res
 }
 
-func moduleLoaded(name string) bool {
-	data, err := os.ReadFile("/proc/modules")
+// moduleLoaded checks /proc/modules, then the kernel's modules.builtin.
+func (m *modprobe) moduleLoaded() (bool, *agentproto.Result) {
+	data, err := os.ReadFile(procModulesPath)
 	if err != nil {
-		return false
+		return false, m.fail(pyStrOSError(err, procModulesPath), nil)
 	}
-	normalized := strings.ReplaceAll(name, "-", "_")
-	for _, line := range strings.Split(string(data), "\n") {
-		if mod, _, ok := strings.Cut(line, " "); ok &&
-			strings.ReplaceAll(mod, "-", "_") == normalized {
-			return true
+	prefix := strings.ReplaceAll(m.name, "-", "_") + " "
+	for _, line := range strings.SplitAfter(string(data), "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return true, nil
+		}
+	}
+	// platform.release(): the kernel release uname reports.
+	rel, _ := os.ReadFile("/proc/sys/kernel/osrelease")
+	release := strings.TrimSpace(string(rel))
+	builtin := filepath.Join("/lib/modules/", release, "modules.builtin")
+	data, err = os.ReadFile(builtin)
+	if err != nil {
+		return false, m.fail(pyStrOSError(err, builtin), nil)
+	}
+	for _, line := range strings.SplitAfter(string(data), "\n") {
+		if strings.HasSuffix(strings.TrimRight(line, " \t\r\n\f\v"), "/"+m.name+".ko") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func listFiles(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		p := filepath.Join(dir, e.Name())
+		if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (m *modprobe) modulesFiles() []string  { return listFiles(modulesLoadLocation) }
+func (m *modprobe) modprobeFiles() []string { return listFiles(parametersFilesLocation) }
+
+func readLinesKeepNL(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range strings.SplitAfter(string(data), "\n") {
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func (m *modprobe) loadedPersistently() bool {
+	for _, f := range m.modulesFiles() {
+		for _, line := range readLinesKeepNL(f) {
+			if m.reModule.MatchString(line) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func (m *modprobe) permanentParams() map[string]bool {
+	out := map[string]bool{}
+	for _, f := range m.modprobeFiles() {
+		for _, line := range readLinesKeepNL(f) {
+			if sm := m.reParamVal.FindStringSubmatch(line); sm != nil {
+				out[sm[1]] = true
+			}
+		}
+	}
+	return out
+}
+
+func (m *modprobe) paramsIsSet() bool {
+	want := map[string]bool{}
+	for _, f := range strings.Fields(m.params) {
+		want[f] = true
+	}
+	have := m.permanentParams()
+	if len(want) != len(have) {
+		return false
+	}
+	for k := range want {
+		if !have[k] {
+			return false
+		}
+	}
+	return true
+}
+
+// commentOut prefixes matching lines with '#' (disable_old_params /
+// disable_module_permanent), rewriting the file as the module does: the
+// kept lines joined with "\n".
+func (m *modprobe) commentOut(files []string, re *regexp.Regexp, check bool) {
+	sort.Strings(files)
+	for _, f := range files {
+		lines := readLinesKeepNL(f)
+		changed := false
+		for i, line := range lines {
+			if re.MatchString(line) {
+				lines[i] = "#" + line
+				changed = true
+			}
+		}
+		if !check && changed {
+			os.WriteFile(f, []byte(strings.Join(lines, "\n")), 0o644)
+		}
+	}
 }

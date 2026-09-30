@@ -18,8 +18,8 @@ import (
 // json.dumps, urllib.parse.urlencode and module_utils.urls'
 // prepare_multipart (an email.mime multipart rendered with the HTTP policy).
 
-// pyStrValue is str(v) for a JSON-shaped value.
-func pyStrValue(v any) string {
+// uriPyStr is str(v) for a JSON-shaped value.
+func uriPyStr(v any) string {
 	switch t := v.(type) {
 	case nil:
 		return "None"
@@ -65,7 +65,7 @@ func pyReprValue(v any) string {
 		}
 		return "{" + strings.Join(parts, ", ") + "}"
 	}
-	return pyStrValue(v)
+	return uriPyStr(v)
 }
 
 // pyFloatRepr is repr(float): positional between 1e-4 and 1e16,
@@ -85,10 +85,10 @@ func pyFloatRepr(f float64) string {
 	return strconv.FormatFloat(f, 'e', -1, 64)
 }
 
-// pyJSONDumps is json.dumps(v) with its default separators and
+// uriJSONDumps is json.dumps(v) with its default separators and
 // ensure_ascii. Plain maps are ordered by key (the controller pre-renders
 // bodies whose insertion order matters).
-func pyJSONDumps(v any) string {
+func uriJSONDumps(v any) string {
 	var b strings.Builder
 	var write func(v any)
 	write = func(v any) {
@@ -246,7 +246,7 @@ func uriFormURLEncoded(body any) (any, error) {
 	}
 	var out []string
 	for _, p := range pairs {
-		key := pyStrValue(p[0])
+		key := uriPyStr(p[0])
 		var values []any
 		switch v := p[1].(type) {
 		case []any:
@@ -267,7 +267,7 @@ func uriFormURLEncoded(body any) (any, error) {
 			if v == nil {
 				continue
 			}
-			out = append(out, pyQuotePlus(key)+"="+pyQuotePlus(pyStrValue(v)))
+			out = append(out, pyQuotePlus(key)+"="+pyQuotePlus(uriPyStr(v)))
 		}
 	}
 	return strings.Join(out, "&"), nil
@@ -456,14 +456,14 @@ func prepareMultipart(fields any) (string, []byte, error) {
 			mainType, subType, content, hasContent = "text", "plain", v, v != ""
 		case map[string]any:
 			if f, ok := v["filename"]; ok && f != nil {
-				filename = pyStrValue(f)
+				filename = uriPyStr(f)
 				hasFile = filename != ""
 			}
-			if e, ok := v["multipart_encoding"]; ok && e != nil && pyStrValue(e) != "" {
-				encoding = pyStrValue(e)
+			if e, ok := v["multipart_encoding"]; ok && e != nil && uriPyStr(e) != "" {
+				encoding = uriPyStr(e)
 			}
 			if c, ok := v["content"]; ok && c != nil {
-				content = pyStrValue(c)
+				content = uriPyStr(c)
 				hasContent = content != ""
 			}
 			if b64, ok := v[multipartFileKey].(string); ok {
@@ -475,7 +475,7 @@ func prepareMultipart(fields any) (string, []byte, error) {
 			}
 			mime := ""
 			if mt, ok := v["mime_type"]; ok && mt != nil {
-				mime = pyStrValue(mt)
+				mime = uriPyStr(mt)
 			}
 			if mime == "" {
 				mime = pyGuessType(filename)
