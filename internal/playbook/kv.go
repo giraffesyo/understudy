@@ -29,25 +29,23 @@ func splitFreeForm(s, module string) (string, map[string]any) {
 	}
 	words := splitWords(s)
 	kv := map[string]any{}
-	// Only LEADING k=v words with known option names are options (Ansible
-	// parses them anywhere, but trailing ones like `echo a=b` must stay in
-	// the command; leading is the documented style and unambiguous).
-	i := 0
-	for ; i < len(words); i++ {
-		eq := strings.IndexByte(words[i], '=')
-		if eq <= 0 || !knownFreeFormOption(words[i][:eq]) {
-			break
+	// Like parse_kv(check_raw=True): k=v words whose key is a known option
+	// (creates=, chdir=, ...) are options wherever they appear
+	// (`iptables -F creates=/etc/x`); anything else (`echo a=b`) stays in
+	// the command.
+	var rest []string
+	for _, w := range words {
+		eq := strings.IndexByte(w, '=')
+		if eq > 0 && knownFreeFormOption(w[:eq]) {
+			kv[w[:eq]] = unquote(w[eq+1:])
+			continue
 		}
-		kv[words[i][:eq]] = unquote(words[i][eq+1:])
-	}
-	rest := strings.Join(words[i:], " ")
-	if i == 0 {
-		rest = strings.TrimSpace(s) // preserve original spacing when no options
+		rest = append(rest, w)
 	}
 	if len(kv) == 0 {
-		return rest, nil
+		return strings.TrimSpace(s), nil // preserve original spacing
 	}
-	return rest, kv
+	return strings.Join(rest, " "), kv
 }
 
 func knownFreeFormOption(key string) bool {
