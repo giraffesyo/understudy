@@ -2,7 +2,6 @@ package agentproto
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -11,11 +10,7 @@ import (
 // WriteFrame writes the request header line and, if req.PayloadLen > 0,
 // copies exactly that many bytes from payload.
 func WriteFrame(w io.Writer, req *TaskRequest, payload io.Reader) error {
-	wire := *req
-	if req.Args != nil {
-		wire.Args = wireFloats(req.Args).(map[string]any)
-	}
-	header, err := json.Marshal(&wire)
+	header, err := marshalRequest(req)
 	if err != nil {
 		return err
 	}
@@ -46,31 +41,26 @@ func ReadFrame(r io.Reader) (*TaskRequest, io.Reader, error) {
 	if err != nil && line == "" {
 		return nil, nil, fmt.Errorf("reading task header: %w", err)
 	}
-	var req TaskRequest
 	// Numbers keep their integer type (as on the in-process path, where
 	// YAML ints arrive as int64): plain decoding turned `mode: 0644` into
 	// float64 on the agent, which mode parsing rejected.
-	dec := json.NewDecoder(strings.NewReader(line))
-	dec.UseNumber()
-	if err := dec.Decode(&req); err != nil {
+	req, err := unmarshalRequest(line)
+	if err != nil {
 		return nil, nil, fmt.Errorf(
 			"task header is not valid JSON (a become/sudo prompt may have corrupted stdin): %w", err)
-	}
-	if req.Args != nil {
-		req.Args = numbers(req.Args).(map[string]any)
 	}
 	if req.Proto != ProtoVersion {
 		return nil, nil, fmt.Errorf("protocol version mismatch: control speaks %d, agent speaks %d", req.Proto, ProtoVersion)
 	}
-	return &req, io.LimitReader(br, req.PayloadLen), nil
+	return req, io.LimitReader(br, req.PayloadLen), nil
 }
 
 // WriteResult emits the sentinel line and the result JSON to w.
 func WriteResult(w io.Writer, res *Result) error {
-	data, err := json.Marshal(res)
+	data, err := res.marshalWire()
 	if err != nil {
 		// A result that cannot marshal must still produce a frame.
-		data, _ = json.Marshal(Fail("result serialization failed: %v", err))
+		data, _ = Fail("result serialization failed: %v", err).marshalWire()
 	}
 	_, err = fmt.Fprintf(w, "\n%s\n%s\n", ResultSentinel, data)
 	return err
@@ -87,8 +77,7 @@ func ParseResult(stdout []byte) (*Result, error) {
 	rest := s[idx+len(ResultSentinel):]
 	rest = strings.TrimLeft(rest, "\r\n")
 	var res Result
-	dec := json.NewDecoder(strings.NewReader(rest))
-	if err := dec.Decode(&res); err != nil {
+	if err := res.unmarshalWire([]byte(rest)); err != nil {
 		return nil, fmt.Errorf("malformed agent result JSON: %w (output: %s)", err, excerpt(rest))
 	}
 	return &res, nil

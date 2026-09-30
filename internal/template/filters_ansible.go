@@ -534,12 +534,9 @@ func registerAnsibleFilters(e *Engine) {
 		if !ok {
 			return nil, fmt.Errorf("from_json requires a string")
 		}
-		// Objects keep their key order, as Python's json.loads builds dicts.
-		out, err := omap.UnmarshalJSON([]byte(s))
-		if err != nil {
-			return nil, err
-		}
-		return normalizeJSON(out), nil
+		// Objects keep their key order and numbers their type, as
+		// Python's json.loads builds them.
+		return omap.UnmarshalJSON([]byte(s))
 	}
 	f["to_yaml"] = mkToYAML(2)
 	f["to_nice_yaml"] = mkToYAML(4)
@@ -1545,34 +1542,6 @@ func jsonSanitize(v any) any {
 			out[k] = jsonSanitize(val)
 		}
 		return out
-	}
-	return v
-}
-
-// normalizeJSON converts json.Unmarshal output (float64 numbers) to the
-// engine's int64-preferring value model.
-func normalizeJSON(v any) any {
-	switch t := v.(type) {
-	case float64:
-		if t == float64(int64(t)) {
-			return int64(t)
-		}
-		return t
-	case []any:
-		for i, item := range t {
-			t[i] = normalizeJSON(item)
-		}
-		return t
-	case map[string]any:
-		for k, val := range t {
-			t[k] = normalizeJSON(val)
-		}
-		return t
-	case *yaml.OMap:
-		for _, k := range t.Keys() {
-			t.Set(k, normalizeJSON(t.Get(k)))
-		}
-		return t
 	}
 	return v
 }
