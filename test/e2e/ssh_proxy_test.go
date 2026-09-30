@@ -16,29 +16,23 @@ import (
 // docker network through a bastion (ProxyJump from ansible_ssh_common_args),
 // and reaches the bastion itself through a ProxyCommand.
 func TestSSHProxyJumpAndCommand(t *testing.T) {
-	bastionPort := startContainer(t) // builds understudy-ssh-test, runs understudy-e2e
-	for _, c := range [][]string{
-		{"network", "rm", "understudy-jump"},
-		{"rm", "-f", "understudy-inner"},
-	} {
-		exec.Command("docker", c...).Run()
-	}
-	if out, err := exec.Command("docker", "network", "create", "understudy-jump").CombinedOutput(); err != nil {
+	bastion, bastionPort := startSSHContainer(t)
+	image := dockerBuild(t, "understudy-ssh-test", sshDockerfile, nil)
+	network := dockerName("understudy-jump")
+	if out, err := exec.Command("docker", "network", "create", "--label", "understudy-test="+dockerRunID, network).CombinedOutput(); err != nil {
 		t.Fatalf("network: %v\n%s", err, out)
 	}
 	t.Cleanup(func() {
-		exec.Command("docker", "rm", "-f", "understudy-inner").Run()
-		exec.Command("docker", "network", "disconnect", "understudy-jump", "understudy-e2e").Run()
-		exec.Command("docker", "network", "rm", "understudy-jump").Run()
+		exec.Command("docker", "network", "disconnect", "-f", network, bastion).Run()
+		exec.Command("docker", "network", "rm", network).Run()
 	})
-	if out, err := exec.Command("docker", "network", "connect", "understudy-jump", "understudy-e2e").CombinedOutput(); err != nil {
+	if out, err := exec.Command("docker", "network", "connect", network, bastion).CombinedOutput(); err != nil {
 		t.Fatalf("connect bastion: %v\n%s", err, out)
 	}
-	if out, err := exec.Command("docker", "run", "-d", "--name", "understudy-inner", "--hostname", "inner-host",
-		"--network", "understudy-jump", "understudy-ssh-test").CombinedOutput(); err != nil {
-		t.Fatalf("run inner: %v\n%s", err, out)
-	}
-	for i := 0; i < 30 && exec.Command("docker", "exec", "understudy-inner", "pgrep", "sshd").Run() != nil; i++ {
+	// Registered after the network's cleanup, so it runs first: the inner
+	// container must be gone before the network can be removed.
+	inner := dockerRun(t, "understudy-inner", "--hostname", "inner-host", "--network", network, image)
+	for i := 0; i < 30 && exec.Command("docker", "exec", inner, "pgrep", "sshd").Run() != nil; i++ {
 		time.Sleep(500 * time.Millisecond)
 	}
 	time.Sleep(time.Second)
@@ -56,9 +50,9 @@ ansible_user=%[1]s
 ansible_password=%[2]s
 
 [hosts]
-inner ansible_host=understudy-inner ansible_ssh_common_args='-o ProxyJump=%[1]s@127.0.0.1:%[3]s'
+inner ansible_host=%[4]s ansible_ssh_common_args='-o ProxyJump=%[1]s@127.0.0.1:%[3]s'
 viacmd ansible_host=bastion ansible_ssh_common_args='-o "ProxyCommand=nc 127.0.0.1 %[3]s"'
-`, testUser, testPass, bastionPort)
+`, testUser, testPass, bastionPort, inner)
 	os.WriteFile(filepath.Join(dir, "hosts"), []byte(inv), 0o644)
 	os.WriteFile(filepath.Join(dir, "play.yml"), []byte(`- hosts: all
   gather_facts: false

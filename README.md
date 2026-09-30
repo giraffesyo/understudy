@@ -278,7 +278,9 @@ pseudo-terminal), configured by keywords or the `ansible_become_*`
 connection variables, over either connection: on `local`, an escalated
 task's module runs in a child of the understudy binary started through
 the become method (a program embedding the Go API serves as that child
-itself).
+itself). On a macOS controller, `local` runs `user`, `group` and
+`hostname` with ansible-core's Darwin implementations (`dscl`,
+`dseditgroup`, `scutil`).
 
 ## Architecture
 

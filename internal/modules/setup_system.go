@@ -3,10 +3,12 @@ package modules
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -88,7 +90,38 @@ func getFQDN(node string) string {
 			return n
 		}
 	}
+	// macOS's gethostbyaddr lists the reverse-lookup name among the
+	// aliases, so a dotless answer ("localhost") gives way to it.
+	if runtime.GOOS == "darwin" {
+		if arpa := reverseAddrName(addrs[0]); arpa != "" {
+			return arpa
+		}
+	}
 	return strings.TrimSuffix(names[0], ".")
+}
+
+// reverseAddrName is an address's PTR query name (in-addr.arpa or
+// ip6.arpa).
+func reverseAddrName(addr string) string {
+	if i := strings.IndexByte(addr, '%'); i >= 0 {
+		addr = addr[:i]
+	}
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return ""
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return fmt.Sprintf("%d.%d.%d.%d.in-addr.arpa", v4[3], v4[2], v4[1], v4[0])
+	}
+	const hex = "0123456789abcdef"
+	var b strings.Builder
+	for i := len(ip) - 1; i >= 0; i-- {
+		b.WriteByte(hex[ip[i]&0xf])
+		b.WriteByte('.')
+		b.WriteByte(hex[ip[i]>>4])
+		b.WriteByte('.')
+	}
+	return b.String() + "ip6.arpa"
 }
 
 // --- python ------------------------------------------------------------

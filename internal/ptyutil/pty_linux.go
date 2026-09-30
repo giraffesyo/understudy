@@ -1,4 +1,4 @@
-package connection
+package ptyutil
 
 import (
 	"fmt"
@@ -7,9 +7,9 @@ import (
 	"unsafe"
 )
 
-// openPTY opens a pseudo-terminal pair: /dev/ptmx, unlocked, and the
+// Open opens a pseudo-terminal pair: /dev/ptmx, unlocked, and the
 // /dev/pts path of its slave.
-func openPTY() (*os.File, string, error) {
+func Open() (*os.File, string, error) {
 	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NOCTTY|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, "", err

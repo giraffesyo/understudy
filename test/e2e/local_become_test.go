@@ -19,12 +19,7 @@ import (
 // understudy at /usr/local/bin/understudy.
 func startLocalBecomeContainer(t *testing.T) string {
 	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not installed")
-	}
-	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skip("docker daemon not running")
-	}
+	dockerAvailable(t)
 	arch, err := exec.Command("docker", "version", "-f", "{{.Server.Arch}}").Output()
 	if err != nil {
 		t.Fatal(err)
@@ -37,25 +32,20 @@ func startLocalBecomeContainer(t *testing.T) string {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("building understudy for linux: %v\n%s", err, out)
 	}
+	// The image carries no understudy build (each worktree has its own);
+	// the binary is copied into this process's container instead.
 	dockerfile := `FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y sudo && \
     useradd -m -s /bin/bash nopw && useradd -m -s /bin/bash pw && echo 'pw:pwpass' | chpasswd && \
     echo 'root:` + rootPass + `' | chpasswd && \
     echo 'nopw ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/nopw && echo 'pw ALL=(ALL) ALL' > /etc/sudoers.d/pw
-COPY understudy /usr/local/bin/understudy
 CMD ["sleep", "infinity"]`
-	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o644); err != nil {
-		t.Fatal(err)
+	image := dockerBuild(t, "understudy-e2e-local-become-img", dockerfile, nil)
+	name := dockerRun(t, "understudy-e2e-local-become", image)
+	if out, err := exec.Command("docker", "cp", bin, name+":/usr/local/bin/understudy").CombinedOutput(); err != nil {
+		t.Fatalf("docker cp: %v\n%s", err, out)
 	}
-	const name = "understudy-e2e-local-become"
-	if out, err := exec.Command("docker", "build", "-q", "-t", name+"-img", dir).CombinedOutput(); err != nil {
-		t.Fatalf("docker build: %v\n%s", err, out)
-	}
-	exec.Command("docker", "rm", "-f", name).Run()
-	if out, err := exec.Command("docker", "run", "-d", "--name", name, name+"-img").CombinedOutput(); err != nil {
-		t.Fatalf("docker run: %v\n%s", err, out)
-	}
-	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	exec.Command("docker", "exec", name, "chmod", "755", "/usr/local/bin/understudy").Run()
 	for i := 0; i < 20; i++ {
 		if exec.Command("docker", "exec", name, "true").Run() == nil {
 			return name

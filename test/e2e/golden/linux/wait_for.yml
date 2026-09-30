@@ -1,0 +1,46 @@
+# ansible.builtin.wait_for on Linux targets: state=drained counts
+# connections from /proc/net/tcp{,6} (active states, exclude_hosts, the
+# 0.0.0.0 wildcard), and port waits against the target's sshd.
+- name: wait_for
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: sshd's port is started
+      wait_for: {port: 22, timeout: 5}
+
+    - name: and shows its banner
+      wait_for: {port: 22, search_regex: '^SSH-2\.0-', timeout: 5}
+
+    - name: a closed port is stopped
+      wait_for: {port: 2, state: stopped}
+
+    - name: nothing is connected to an unused port
+      wait_for: {port: 2, state: drained, timeout: 1}
+
+    - name: hold a local connection open on port 2222 for a while
+      shell: |
+        nohup python3 -c '
+        import socket, time
+        s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("127.0.0.1", 2222)); s.listen(1)
+        c = socket.create_connection(("127.0.0.1", 2222)); a, _ = s.accept()
+        time.sleep(6)
+        ' >/dev/null 2>&1 &
+        sleep 1
+
+    - name: the held connection keeps the port from draining
+      wait_for: {port: 2222, state: drained, timeout: 1}
+      ignore_errors: true
+
+    - name: nor via the wildcard address
+      wait_for: {port: 2222, host: 0.0.0.0, state: drained, timeout: 1, msg: busy}
+      ignore_errors: true
+
+    - name: an excluded peer does not count
+      wait_for: {port: 2222, state: drained, timeout: 1, exclude_hosts: [127.0.0.1]}
+
+    - name: only the listed states count
+      wait_for: {port: 2222, state: drained, timeout: 1, active_connection_states: [SYN_SENT]}
+
+    - name: another host's address does not match
+      wait_for: {port: 2222, host: 10.9.8.7, state: drained, timeout: 1}

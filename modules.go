@@ -65,6 +65,10 @@ func argsOf(v any) map[string]any {
 // Bool returns a *bool for tri-state module options (nil means unset).
 func Bool(b bool) *bool { return &b }
 
+// Int returns an *int64 for integer options where 0 is meaningful (nil
+// means unset).
+func Int(n int64) *int64 { return &n }
+
 // ---- Commands ----
 
 // Command runs an executable directly (no shell interpretation).
@@ -275,6 +279,39 @@ type Hostname struct {
 
 func (h Hostname) ModuleName() string         { return "hostname" }
 func (h Hostname) ModuleArgs() map[string]any { return argsOf(h) }
+
+// Alternatives manages a link group in the alternatives system
+// (update-alternatives on Debian and RHEL).
+type Alternatives struct {
+	Name     string
+	Path     string
+	Link     string
+	Family   string
+	Priority *int64 // nil = unset (a new alternative gets 50)
+	// State is "selected" (the default), "present", "auto" or "absent".
+	State       string
+	Subcommands []AlternativeSubcommand `ans:"-"`
+}
+
+// AlternativeSubcommand is a follower link of an alternative.
+type AlternativeSubcommand struct {
+	Name string
+	Path string
+	Link string
+}
+
+func (a Alternatives) ModuleName() string { return "community.general.alternatives" }
+func (a Alternatives) ModuleArgs() map[string]any {
+	m := argsOf(a)
+	if len(a.Subcommands) > 0 {
+		subs := make([]any, len(a.Subcommands))
+		for i, s := range a.Subcommands {
+			subs[i] = argsOf(s)
+		}
+		m["subcommands"] = subs
+	}
+	return m
+}
 
 // ---- Control-side ----
 

@@ -1,0 +1,142 @@
+---
+# Result dicts and failure messages of wait_for: files (present, absent,
+# search_regex groups, stat errors), ports (a closed one and a banner
+# server, files/wf_fixture.py, whose ephemeral port is kept out of the
+# compared output), timeouts, delay, custom msg, parameter errors and
+# check mode. Timeouts are 1s to keep the corpus quick.
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: a file to wait for
+      copy: {dest: "{{ workdir }}/ready.txt", content: "ready: yes\nversion=1.2.3 build=77\n"}
+
+    - name: a present file (add_path_info decorates the result)
+      wait_for: {path: "{{ workdir }}/ready.txt"}
+
+    - name: search_regex groups, named and unmatched
+      wait_for: {path: "{{ workdir }}/ready.txt", search_regex: 'version=(?P<ver>[0-9.]+) build=([0-9]+)(x)?'}
+
+    - name: search_regex is multiline
+      wait_for: {path: "{{ workdir }}/ready.txt", search_regex: '^version=(\S+) build=(\d+)$', timeout: 5}
+      register: multi
+
+    - debug: {msg: "{{ multi.match_groups }} {{ multi.match_groupdict }} {{ multi.state }}"}
+
+    - name: a directory is present too
+      wait_for: {path: "{{ workdir }}", state: present}
+
+    - name: an absent file
+      wait_for: {path: "{{ workdir }}/nope.txt", state: absent}
+
+    - name: a file that never appears
+      wait_for: {path: "{{ workdir }}/nope.txt", timeout: 1}
+      ignore_errors: true
+
+    - name: a file that never goes away
+      wait_for: {path: "{{ workdir }}/ready.txt", state: absent, timeout: 1}
+      ignore_errors: true
+
+    - name: a string that never appears
+      wait_for: {path: "{{ workdir }}/ready.txt", search_regex: nomatch, timeout: 1}
+      ignore_errors: true
+
+    - name: msg replaces the timeout message
+      wait_for: {path: "{{ workdir }}/nope.txt", timeout: 1, msg: gave up waiting}
+      ignore_errors: true
+
+    - name: a path that cannot be stat'ed
+      wait_for: {path: "{{ workdir }}/ready.txt/x", timeout: 1}
+      ignore_errors: true
+
+    - name: delay counts toward elapsed
+      wait_for: {path: "{{ workdir }}/ready.txt", delay: 1}
+
+    - name: a bare wait sleeps for the timeout
+      wait_for: {timeout: 1}
+
+    - name: a closed port is stopped
+      wait_for: {port: 1, state: stopped}
+
+    - name: port as a string, host by name, sleep and connect_timeout
+      wait_for: {port: "1", host: localhost, state: stopped, sleep: 2, connect_timeout: 1}
+
+    - name: a closed port never starts
+      wait_for: {port: 1, timeout: 1}
+      ignore_errors: true
+
+    - name: nor shows a banner
+      wait_for: {port: 1, timeout: 1, search_regex: SSH}
+      ignore_errors: true
+
+    # The banner server: no_log keeps its ephemeral port out of the output.
+    - name: clear a previous run's port file
+      file: {path: "{{ workdir }}/wf.port", state: absent}
+    - name: start the banner server
+      shell: nohup python3 {{ playbook_dir }}/files/wf_fixture.py {{ workdir }} >/dev/null 2>&1 &
+    - wait_for: {path: "{{ workdir }}/wf.port"}
+      no_log: true
+    - set_fact: {wf_port: "{{ lookup('file', workdir + '/wf.port') }}"}
+      no_log: true
+
+    - name: the server's port is started
+      wait_for: {port: "{{ wf_port }}", timeout: 5}
+      register: started
+      no_log: true
+    - debug: {msg: "{{ started | dict2items | rejectattr('key', 'eq', 'port') | items2dict }}"}
+
+    - name: its banner matches
+      wait_for: {port: "{{ wf_port }}", search_regex: 'SSH-2\.0-(\S+) build=(?P<build>\d+)', timeout: 5}
+      register: banner
+      no_log: true
+    - debug: {msg: "{{ banner | dict2items | rejectattr('key', 'eq', 'port') | items2dict }}"}
+
+    # msg keeps the port out of the error lines, which no_log does not hide.
+    - name: a banner that never comes
+      wait_for: {port: "{{ wf_port }}", search_regex: 'HTTP/1', timeout: 1, msg: no HTTP banner}
+      ignore_errors: true
+      no_log: true
+
+    - name: a started port never stops
+      wait_for: {port: "{{ wf_port }}", state: stopped, timeout: 1, msg: still listening}
+      ignore_errors: true
+      no_log: true
+
+    - name: stop the banner server
+      command: python3 -c "import socket; s = socket.create_connection(('127.0.0.1', {{ wf_port }})); s.sendall(b'quit'); s.close()"
+      changed_when: false
+      no_log: true
+    - name: and its port stops
+      wait_for: {port: "{{ wf_port }}", state: stopped, timeout: 10}
+      no_log: true
+
+    - name: a bad regular expression
+      wait_for: {path: "{{ workdir }}/ready.txt", search_regex: 'a(b'}
+      ignore_errors: true
+
+    - name: port and path together (msg does not replace parameter errors)
+      wait_for: {path: "{{ workdir }}/ready.txt", port: 1, msg: custom}
+      ignore_errors: true
+
+    - name: stopped is for ports
+      wait_for: {path: "{{ workdir }}/ready.txt", state: stopped}
+      ignore_errors: true
+
+    - name: drained is for ports
+      wait_for: {path: "{{ workdir }}/ready.txt", state: drained}
+      ignore_errors: true
+
+    - name: exclude_hosts is for drained
+      wait_for: {port: 1, state: stopped, exclude_hosts: [10.0.0.1]}
+      ignore_errors: true
+
+    - name: an unknown connection state
+      wait_for: {port: 1, active_connection_states: [BOGUS]}
+      ignore_errors: true
+
+    - name: drained without a port
+      wait_for: {state: drained, timeout: 1}
+      ignore_errors: true
+
+    - name: check mode is not supported
+      wait_for: {port: 1, timeout: 1}
+      check_mode: true
