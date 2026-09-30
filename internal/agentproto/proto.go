@@ -147,7 +147,7 @@ func (r *Result) MarshalJSON() ([]byte, error) {
 	if len(r.AnsibleFacts) > 0 {
 		m["ansible_facts"] = r.AnsibleFacts
 	}
-	return json.Marshal(m)
+	return json.Marshal(wireFloats(m))
 }
 
 // UnmarshalJSON collects typed fields and stashes the rest in Extra.
