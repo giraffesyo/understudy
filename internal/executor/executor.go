@@ -64,8 +64,9 @@ type Options struct {
 	Become     bool
 	BecomeUser string
 	BecomePass string
-	Connection string // "" = per-host behavioral vars; "local" forces local
-	BaseDir    string // playbook directory
+	Connection string   // "" = per-host behavioral vars; "local" forces local
+	BaseDir    string   // playbook directory
+	RolesPath  []string // roles_path search directories (after <playbook>/roles)
 	Tags       []string
 	SkipTags   []string
 	ConnOpts   connection.ManagerOptions // ssh-level settings (user, keys, host key checking)

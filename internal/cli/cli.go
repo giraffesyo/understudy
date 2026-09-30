@@ -337,6 +337,7 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		BecomeUser:    p.becomeUser,
 		Connection:    p.connection,
 		BaseDir:       baseDir,
+		RolesPath:     cfg.RolesPath,
 		Tags:          splitCSV(p.tags),
 		SkipTags:      splitCSV(p.skipTags),
 	}
@@ -520,6 +521,10 @@ func playbookCmd(args []string) int {
 		plays []*playbook.Play
 	}
 	var books []book
+	var rolesPath []string
+	if cfg, err := config.Load(); err == nil {
+		rolesPath = cfg.RolesPath
+	}
 	for _, path := range p.positional {
 		// Load by absolute path: error origins show it, as in Ansible.
 		absPath, err := filepath.Abs(path)
@@ -531,7 +536,7 @@ func playbookCmd(args []string) int {
 			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
 			return 4
 		}
-		if err := playbook.ResolveRoles(plays, filepath.Dir(absPath), nil); err != nil {
+		if err := playbook.ResolveRoles(plays, filepath.Dir(absPath), rolesPath); err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
 			return 4
 		}
@@ -840,7 +845,11 @@ func expandImports(play *playbook.Play, tasks []*playbook.Task) []*playbook.Task
 			continue
 		}
 		from, _ := t.Args["tasks_from"].(string)
-		ri, err := playbook.LoadRoleForInclude(name, play.Dir, nil, from)
+		var rolesPath []string
+		if cfg, err := config.Load(); err == nil {
+			rolesPath = cfg.RolesPath
+		}
+		ri, err := playbook.LoadRoleForInclude(name, play.Dir, rolesPath, from)
 		if err != nil {
 			out = append(out, t)
 			continue

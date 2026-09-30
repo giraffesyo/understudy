@@ -206,7 +206,7 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 // vars and registering its handlers, and returns its tasks.
 func (r *Runner) loadIncludedRole(play *playbook.Play, task *playbook.Task, name string) ([]*playbook.Task, error) {
 	tasksFrom, _ := task.Args["tasks_from"].(string)
-	ri, err := playbook.LoadRoleForInclude(name, r.Opts.BaseDir, nil, tasksFrom)
+	ri, err := playbook.LoadRoleForInclude(name, r.Opts.BaseDir, r.Opts.RolesPath, tasksFrom)
 	if err != nil {
 		return nil, err
 	}
