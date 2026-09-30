@@ -571,7 +571,7 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 		}
 		// --step asks about each task some host is about to run (meta
 		// tasks are not asked about; an import_role is not a task).
-		if r.Opts.Step && task.Module != "import_role" && !r.stepTask(task) {
+		if r.Opts.Step && task.Module != "import_role" && !r.stepTask(task, false) {
 			continue
 		}
 		if task.Module == "include_tasks" || task.Module == "include_role" {
@@ -911,6 +911,14 @@ func (r *Runner) flushHandlers(ctx context.Context, play *playbook.Play, playHos
 			}
 		}
 		if len(active) == 0 {
+			continue
+		}
+		if r.Opts.Step && !r.stepTask(handler, true) {
+			// A handler skipped at the step prompt did not run: its hosts
+			// stay notified for the next flush.
+			r.mu.Lock()
+			r.notified[key] = hosts
+			r.mu.Unlock()
 			continue
 		}
 		r.runTaskAcrossHosts(ctx, play, handler, active, playHosts, true)
@@ -2237,9 +2245,9 @@ func (r *Runner) startAt(name string) bool {
 	return true
 }
 
-// stepTask implements --step: it asks whether to run the task, reporting
-// whether it should run.
-func (r *Runner) stepTask(task *playbook.Task) bool {
+// stepTask implements --step: it asks whether to run the task (or
+// handler), reporting whether it should run.
+func (r *Runner) stepTask(task *playbook.Task, handler bool) bool {
 	if !r.stepContinue {
 		// StrategyBase._take_step: the prompt names the task as its repr
 		// does (the untemplated name, else the action), then the prompt
@@ -2251,7 +2259,11 @@ func (r *Runner) stepTask(task *playbook.Task) bool {
 		if task.RoleName != "" {
 			stepName = task.RoleName + " : " + stepName
 		}
-		msg := "Perform task: TASK: " + stepName + " (N)o/(y)es/(c)ontinue: "
+		kind := "TASK: "
+		if handler {
+			kind = "HANDLER: " // Handler.__repr__
+		}
+		msg := "Perform task: " + kind + stepName + " (N)o/(y)es/(c)ontinue: "
 		fmt.Fprint(os.Stdout, msg)
 		answer, err := r.debugIn().ReadString('\n')
 		if err != nil && answer == "" {

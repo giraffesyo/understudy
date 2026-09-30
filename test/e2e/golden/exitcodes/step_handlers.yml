@@ -1,0 +1,35 @@
+# --step asks about handlers too ("HANDLER: name"), once per handler
+# that is about to run; a handler skipped at the prompt stays notified
+# and is offered again at the next flush. (c)ontinue stops asking about
+# handlers as well.
+- hosts: a:b
+  gather_facts: false
+  tasks:
+    - name: notify both
+      debug: msg=notify
+      changed_when: true
+      notify: [first handler, second handler]
+    - meta: flush_handlers
+    - name: notify the first again
+      debug: msg=again
+      changed_when: true
+      notify: first handler
+  handlers:
+    - name: first handler
+      debug: msg=first
+    - name: second handler
+      debug: msg=second
+    - name: never notified
+      debug: msg=never
+- hosts: a
+  gather_facts: false
+  tasks:
+    - name: notify in the second play
+      debug: msg=notify
+      changed_when: true
+      notify: third handler
+    - name: after continue
+      debug: msg=after
+  handlers:
+    - name: third handler
+      debug: msg=third
