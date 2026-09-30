@@ -115,6 +115,15 @@ func mkCommand(shell bool) ModuleFunc {
 			}
 			cmd = exec.Command(sh, "-c", cmdline)
 		} else {
+			// run_command's expand_user_and_vars: each argument gets
+			// os.path.expanduser(os.path.expandvars(arg)).
+			if expand, err := argBool(args, "expand_argument_vars", true); err == nil && expand {
+				expanded := make([]string, len(argv))
+				for i, a := range argv {
+					expanded[i] = pyExpandUser(expandVarsWith(a, env.Env))
+				}
+				argv = expanded
+			}
 			path, err := lookPath(argv[0])
 			if err != nil {
 				return agentproto.Fail("Cannot find command %q: %v", argv[0], err)
@@ -154,11 +163,15 @@ func mkCommand(shell bool) ModuleFunc {
 			}
 		}
 
+		outStr, errStr := stdout.String(), stderr.String()
+		if strip, err := argBool(args, "strip_empty_ends", true); err != nil || strip {
+			outStr, errStr = strings.TrimRight(outStr, "\r\n"), strings.TrimRight(errStr, "\r\n")
+		}
 		res := &agentproto.Result{
 			Changed: true,
 			RC:      agentproto.IntPtr(rc),
-			Stdout:  strings.TrimRight(stdout.String(), "\r\n"),
-			Stderr:  strings.TrimRight(stderr.String(), "\r\n"),
+			Stdout:  outStr,
+			Stderr:  errStr,
 			Extra: map[string]any{
 				"cmd":   cmdField,
 				"start": pyDatetime(start),
@@ -173,6 +186,48 @@ func mkCommand(shell bool) ModuleFunc {
 		}
 		return res
 	}
+}
+
+// expandVarsWith is os.path.expandvars against the module's environment:
+// the task environment over the process one.
+func expandVarsWith(p string, taskEnv map[string]string) string {
+	if len(taskEnv) == 0 || !strings.Contains(p, "$") {
+		return pyExpandVars(p)
+	}
+	var b strings.Builder
+	for i := 0; i < len(p); i++ {
+		if p[i] != '$' || i+1 >= len(p) {
+			b.WriteByte(p[i])
+			continue
+		}
+		name, end := "", i
+		if p[i+1] == '{' {
+			if j := strings.IndexByte(p[i+2:], '}'); j >= 0 {
+				name, end = p[i+2:i+2+j], i+2+j
+			}
+		} else {
+			j := i + 1
+			for j < len(p) && (p[j] == '_' || p[j] >= 'a' && p[j] <= 'z' || p[j] >= 'A' && p[j] <= 'Z' || p[j] >= '0' && p[j] <= '9') {
+				j++
+			}
+			if j > i+1 {
+				name, end = p[i+1:j], j-1
+			}
+		}
+		if name != "" {
+			v, ok := taskEnv[name]
+			if !ok {
+				v, ok = os.LookupEnv(name)
+			}
+			if ok {
+				b.WriteString(v)
+				i = end
+				continue
+			}
+		}
+		b.WriteByte('$')
+	}
+	return b.String()
 }
 
 func expandPath(p, chdir string) string {
