@@ -142,7 +142,16 @@ func pyFloatStr(f float64) string {
 	if f == math.Trunc(f) && math.Abs(f) < 1e16 {
 		return strconv.FormatFloat(f, 'f', 1, 64) // 2.0 not 2
 	}
-	return strconv.FormatFloat(f, 'g', -1, 64)
+	// Python's repr: shortest round-trip digits, positional notation
+	// unless the decimal exponent is < -4 or >= 16 (1790756132.616616,
+	// not Go's 1.790756132616616e+09).
+	e := strconv.FormatFloat(f, 'e', -1, 64)
+	if i := strings.LastIndexByte(e, 'e'); i >= 0 {
+		if exp, err := strconv.Atoi(e[i+1:]); err == nil && exp >= -4 && exp < 16 {
+			return strconv.FormatFloat(f, 'f', -1, 64)
+		}
+	}
+	return e
 }
 
 func sortedKeys(m map[string]any) []string {
