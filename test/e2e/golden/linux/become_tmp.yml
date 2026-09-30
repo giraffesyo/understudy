@@ -1,0 +1,98 @@
+# distros: ubuntu rocky
+---
+# Temporary files under become: a transfer lands in the login user's
+# remote_tmp (reported as src) even when the module runs as root, and a
+# become user that is neither privileged nor the login user gets a
+# system temp dir that _fixup_perms2 makes readable: POSIX ACLs where
+# setfacl exists (Rocky), else chown, chmod +a / A+ ACLs, a common
+# group, world-readable files when allowed, or ansible's error (Ubuntu
+# has no setfacl). (Alpine is left out: OpenSSH's X11 forwarding notice
+# lands in ansible's captured stderr there.)
+- hosts: target
+  gather_facts: false
+  tasks:
+    - name: a second unprivileged user and a group shared with it
+      shell: |
+        useradd -m tester2
+        groupadd shared
+        usermod -aG shared tester
+        usermod -aG shared,tester tester2
+      become: true
+      changed_when: false
+
+    - name: copy as root
+      copy: {content: "as root\n", dest: /root/become_tmp.txt}
+      become: true
+    - name: template as root
+      template: {src: templates/become_tmp.j2, dest: /root/become_tmp_t.txt}
+      become: true
+    - name: unarchive a controller archive as root
+      unarchive: {src: files/become_tmp.tar, dest: /root}
+      become: true
+    - name: unarchive a missing controller file
+      unarchive: {src: files/no-such.tar, dest: /root}
+      become: true
+      ignore_errors: true
+    - name: become to the login user itself
+      copy: {content: "self\n", dest: /tmp/self.txt}
+      become: true
+      become_user: tester
+    - name: a remote_tmp elsewhere
+      copy: {content: "elsewhere\n", dest: /root/rt.txt}
+      become: true
+      vars:
+        ansible_remote_tmp: /tmp/custom-rt
+
+    - name: a module as an unprivileged user
+      command: id -un
+      become: true
+      become_user: tester2
+      ignore_errors: true
+    - name: copy to an unprivileged user
+      copy: {content: "hi\n", dest: /home/tester2/x.txt}
+      become: true
+      become_user: tester2
+      ignore_errors: true
+    - name: template to an unprivileged user
+      template: {src: templates/become_tmp.j2, dest: /home/tester2/t.txt}
+      become: true
+      become_user: tester2
+      ignore_errors: true
+    - name: unarchive as an unprivileged user
+      unarchive: {src: files/become_tmp.tar, dest: /home/tester2}
+      become: true
+      become_user: tester2
+      ignore_errors: true
+    - name: a common group that does not exist
+      command: id -un
+      become: true
+      become_user: tester2
+      ignore_errors: true
+      vars:
+        ansible_common_remote_group: nosuchgroup
+    - name: a common group the login session has not joined yet
+      command: id -un
+      become: true
+      become_user: tester2
+      ignore_errors: true
+      vars:
+        ansible_common_remote_group: shared
+    - name: a common group both users are in
+      command: id -un
+      become: true
+      become_user: tester2
+      vars:
+        ansible_common_remote_group: tester
+    - name: world-readable temporary files
+      copy: {content: "world\n", dest: /tmp/wr.txt}
+      become: true
+      become_user: tester2
+      vars:
+        ansible_shell_allow_world_readable_temp: true
+    - name: a remote_tmp that is a system temp dir
+      copy: {content: "system\n", dest: /tmp/rt2.txt}
+      become: true
+      become_user: tester2
+      vars:
+        ansible_shell_allow_world_readable_temp: true
+        ansible_remote_tmp: /tmp

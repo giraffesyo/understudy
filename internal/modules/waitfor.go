@@ -232,7 +232,7 @@ func waitForModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 			if !time.Now().Before(end) {
 				return fail(fmt.Sprintf("Timeout when waiting for %s:%d to drain", host, port), elapsed())
 			}
-			n, fail := activeTCPConnections(p, host, port, stateIDs)
+			n, fail := activeTCPConnections(env, p, host, port, stateIDs)
 			if fail != nil {
 				return fail
 			}
@@ -265,9 +265,9 @@ func waitForModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 // activeTCPConnections is LinuxTCPConnectionInfo.get_active_connections_count:
 // connections in the active states on host:port per /proc/net/tcp{,6},
 // excluding peers in exclude_hosts. Elsewhere Ansible needs psutil.
-func activeTCPConnections(p *args.Parsed, host string, port int64, stateIDs []string) (int, *agentproto.Result) {
+func activeTCPConnections(env *RunEnv, p *args.Parsed, host string, port int64, stateIDs []string) (int, *agentproto.Result) {
 	if runtime.GOOS != "linux" {
-		res := agentproto.Fail("%s", missingRequiredLib("psutil", "", ""))
+		res := agentproto.Fail("%s", missingRequiredLib(env, "psutil", "", ""))
 		res.Cause = "No module named 'psutil'" // the ImportError it carries
 		return 0, res
 	}

@@ -569,5 +569,9 @@
       register: r
     - debug: {var: r}
 
+    - name: gssapi is a Python library the task's Python lacks
+      uri: {url: "{{ u }}/json", unix_socket: "{{ sock }}", use_gssapi: true}
+      ignore_errors: true
+
     - name: stop the fixture server
       uri: {url: "{{ u }}/shutdown", unix_socket: "{{ sock }}"}
