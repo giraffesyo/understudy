@@ -1395,6 +1395,9 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		RemoteTmp:    r.remoteTmp(vctx),
 		ArgPos:       argPositions(task),
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
+			if req.PythonInterpreter == "" {
+				req.PythonInterpreter = pythonInterpreter(vctx)
+			}
 			return r.runModule(ctx, host, target, kw, inProcess, become, task, taskEnvironment(play, task), req, payload)
 		},
 		SetFact: func(name string, value any) {
@@ -1408,6 +1411,28 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 			}
 		},
 	}, target, nil
+}
+
+// pythonInterpreter is the interpreter ansible would run the task's module
+// with when one is configured (ansible_python_interpreter, else
+// ANSIBLE_PYTHON_INTERPRETER), "" for discovery. understudy runs no
+// Python; modules whose output depends on it read this.
+func pythonInterpreter(vctx *vars.Context) string {
+	var interp string
+	if v, ok := vctx.Get("ansible_python_interpreter"); ok {
+		if tv, err := vctx.TemplateValue(v); err == nil {
+			v = tv
+		}
+		if s, ok := v.(string); ok {
+			interp = s
+		}
+	} else {
+		interp = os.Getenv("ANSIBLE_PYTHON_INTERPRETER")
+	}
+	if strings.HasPrefix(interp, "auto") {
+		return ""
+	}
+	return interp
 }
 
 // factHosts is where a task's facts land: the delegate with
