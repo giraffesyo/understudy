@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 	"time"
 
@@ -168,7 +169,7 @@ func mkPkg(mgrName string) ModuleFunc {
 		if _, err := exec.LookPath(pkgBinary(mgr.name)); err != nil {
 			return agentproto.Fail("package manager %q is not available on this host", mgr.name)
 		}
-		opts, err := pkgOptions(mgr.name, p, rawArgs)
+		opts, err := pkgOptions(mgr.name, p, rawArgs, rpmRepoMatcher(env, mgr.name))
 		if err != nil {
 			return agentproto.Fail("%v", err)
 		}
@@ -363,13 +364,50 @@ func environWith(k, v string) []string {
 	return append(osEnviron(), fmt.Sprintf("%s=%s", k, v))
 }
 
+// rpmRepoMatcher lists the configured repo ids once (dnf repolist --all)
+// and reports whether a glob pattern matches any of them. nil for non-rpm
+// managers or when the list cannot be read (patterns pass through).
+func rpmRepoMatcher(env *RunEnv, mgr string) func(string) bool {
+	if mgr != "dnf" && mgr != "yum" && mgr != "dnf5" {
+		return nil
+	}
+	var ids []string
+	loaded := false
+	return func(pattern string) bool {
+		if !loaded {
+			loaded = true
+			out, err := runOut(env, pkgBinary(mgr), "-q", "repolist", "--all")
+			if err != nil {
+				ids = nil
+			} else {
+				for _, line := range strings.Split(out, "\n") {
+					f := strings.Fields(line)
+					if len(f) == 0 || (len(f) > 1 && f[0] == "repo" && f[1] == "id") {
+						continue
+					}
+					ids = append(ids, f[0])
+				}
+			}
+		}
+		if ids == nil {
+			return true
+		}
+		for _, id := range ids {
+			if ok, _ := path.Match(pattern, id); ok {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 type pkgOpts struct {
 	repo, install, remove []string
 }
 
 // pkgOptions maps module options onto the manager's CLI flags, rejecting
 // options that belong to the other package family.
-func pkgOptions(mgr string, p *args.Parsed, raw map[string]any) (pkgOpts, error) {
+func pkgOptions(mgr string, p *args.Parsed, raw map[string]any, repoKnown func(string) bool) (pkgOpts, error) {
 	var o pkgOpts
 	rpm := mgr == "dnf" || mgr == "yum" || mgr == "dnf5"
 	reject := aptOnlyOpts
@@ -382,11 +420,18 @@ func pkgOptions(mgr string, p *args.Parsed, raw map[string]any) (pkgOpts, error)
 		}
 	}
 	if rpm {
+		// The dnf module enables/disables base.repos.get_matching(pattern):
+		// a pattern matching no configured repo is a no-op, where the dnf
+		// CLI would fail with "Unknown repo".
 		for _, r := range p.List("enablerepo") {
-			o.repo = append(o.repo, "--enablerepo="+fmt.Sprint(r))
+			if repoKnown == nil || repoKnown(fmt.Sprint(r)) {
+				o.repo = append(o.repo, "--enablerepo="+fmt.Sprint(r))
+			}
 		}
 		for _, r := range p.List("disablerepo") {
-			o.repo = append(o.repo, "--disablerepo="+fmt.Sprint(r))
+			if repoKnown == nil || repoKnown(fmt.Sprint(r)) {
+				o.repo = append(o.repo, "--disablerepo="+fmt.Sprint(r))
+			}
 		}
 		for _, x := range p.List("exclude") {
 			o.repo = append(o.repo, "--exclude="+fmt.Sprint(x))
