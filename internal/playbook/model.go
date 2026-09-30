@@ -79,6 +79,7 @@ type BlockRef struct {
 type Task struct {
 	Name           string
 	Module         string
+	Action         string // module as written (FQCN kept): unnamed task banners
 	Args           map[string]any // raw (untemplated) module args
 	FreeForm       string         // raw params for command/shell/raw
 	When           []string       // list of expressions, ANDed
@@ -124,6 +125,15 @@ type Task struct {
 	Orig *Task
 
 	literalKW map[string]bool // keywords set to literal values (parse time)
+}
+
+// DisplayAction is the action as an unnamed task's banner shows it: the
+// module name as written, FQCN included.
+func (t *Task) DisplayAction() string {
+	if t.Action != "" {
+		return t.Action
+	}
+	return t.Module
 }
 
 // Identity returns the parsed task this one was derived from.

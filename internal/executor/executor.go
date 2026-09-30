@@ -598,7 +598,7 @@ func (r *Runner) taskDisplayName(task *playbook.Task, active []string) string {
 	// to the action for unnamed tasks.
 	if task.RoleName != "" {
 		if name == "" {
-			name = task.Module
+			name = task.DisplayAction()
 		}
 		return task.RoleName + " : " + name
 	}
@@ -1124,7 +1124,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		if attempt < attempts {
 			name := r.taskDisplayName(task, []string{host})
 			if name == "" {
-				name = task.Module
+				name = task.DisplayAction()
 			}
 			r.Callback.Retrying(host, task, name, task.Retries-attempt, shown(task, res))
 			time.Sleep(time.Duration(task.Delay) * time.Second)

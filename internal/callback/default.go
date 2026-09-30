@@ -113,7 +113,7 @@ func (d *Default) TaskStart(task *playbook.Task, displayName string, handler boo
 	defer d.mu.Unlock()
 	name := displayName
 	if name == "" {
-		name = task.Module
+		name = task.DisplayAction()
 	}
 	kind := "TASK"
 	if handler {

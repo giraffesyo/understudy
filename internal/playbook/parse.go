@@ -697,6 +697,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 				"couldn't resolve module/action %q", moduleKeys[0])
 		}
 		task.Module = moduleName
+		task.Action = moduleKeys[0]
 
 		// Module args: map form, k=v string form, or null.
 		argsNode := node.MapGet(moduleKeys[0])
@@ -927,6 +928,7 @@ func parseActionValue(task *Task, node *yaml.Node, file string) error {
 			return errAt(file, node, "action: mapping form requires a module key")
 		}
 		task.Module = normalizeModuleName(mod)
+		task.Action = mod
 		args := map[string]any{}
 		for k, val := range m {
 			if k != "module" {
@@ -1008,6 +1010,7 @@ func parseModuleArgs(task *Task, node *yaml.Node, file string) error {
 // value (k=v pairs, or free-form for command/shell/raw).
 func ParseAdhocArgs(task *Task, module, raw string) error {
 	task.Module = normalizeModuleName(module)
+	task.Action = module
 	if freeFormModule(task.Module) {
 		free, kv := splitFreeForm(raw, task.Module)
 		task.FreeForm = free

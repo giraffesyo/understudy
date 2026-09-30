@@ -46,7 +46,7 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 		name = "include_role : " + raw
 	}
 	if name == "" {
-		name = task.Module
+		name = task.DisplayAction()
 	}
 	name = r.taskDisplayName(&playbook.Task{Name: name, RoleName: task.RoleName, Src: task.Src}, active)
 	r.taskStart(task, name, false)
