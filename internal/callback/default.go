@@ -50,6 +50,7 @@ type Default struct {
 	Columns   int // banner width (Display.columns); 0 = 79
 	mu        sync.Mutex
 	errors    map[string]bool // Display de-duplicates repeated errors
+	warns     map[string]bool // ... and repeated warnings
 	srcCache  map[string][]string
 }
 
@@ -353,7 +354,16 @@ func (d *Default) warnings(res *agentproto.Result) {
 	}
 	list, _ := res.Extra["warnings"].([]any)
 	for _, w := range list {
-		fmt.Fprintf(d.Err, "%s\n\n", d.paint(cBrightPurp, "[WARNING]: "+template.PyStr(w)))
+		msg := template.PyStr(w)
+		seen := d.warns[msg]
+		if d.warns == nil {
+			d.warns = map[string]bool{}
+		}
+		d.warns[msg] = true
+		if seen {
+			continue
+		}
+		fmt.Fprintf(d.Err, "%s\n\n", d.paint(cBrightPurp, "[WARNING]: "+msg))
 	}
 }
 
@@ -453,11 +463,31 @@ func (d *Default) excerpt(file string, line, col int) string {
 		return ""
 	}
 	width := len(strconv.Itoa(line))
+	// SourceContext: annotated lines are at most 120 columns; longer
+	// source lines are cut with "...", and a caret beyond the usable
+	// width is omitted.
+	const maxAnnotated, marker = 120, "..."
+	maxSrc := maxAnnotated - width - 1
+	usable := maxSrc
 	var b strings.Builder
 	for n := max(1, line-2); n <= line; n++ {
-		fmt.Fprintf(&b, "%s\n", strings.TrimRight(fmt.Sprintf("%*d %s", width, n, lines[n-1]), " \t\r"))
+		src := strings.ReplaceAll(lines[n-1], "\t", " ")
+		if r := []rune(src); len(r) > maxSrc {
+			src = string(r[:maxSrc-len(marker)]) + marker
+			usable = maxSrc - len(marker)
+		}
+		fmt.Fprintf(&b, "%s\n", strings.TrimRight(fmt.Sprintf("%*d %s", width, n, src), " \t\r"))
 	}
-	fmt.Fprintf(&b, "%s^ column %d\n", strings.Repeat(" ", width+1+max(col-1, 0)), col)
+	if col >= 1 && col <= usable {
+		label := fmt.Sprintf("column %d", col)
+		if col-1+2+len(label) > maxSrc {
+			fmt.Fprintf(&b, "%s %s%s ^\n", strings.Repeat(" ", width), strings.Repeat(" ", max(col-1-len(label)-1, 0)), label)
+		} else {
+			fmt.Fprintf(&b, "%s^ %s\n", strings.Repeat(" ", width+1+col-1), label)
+		}
+	} else if col < 1 {
+		fmt.Fprintf(&b, "%s^ column %d\n", strings.Repeat(" ", width+1), col)
+	}
 	return b.String()
 }
 
