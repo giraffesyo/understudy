@@ -166,7 +166,21 @@ func aptModuleAs(env *RunEnv, rawArgs map[string]any, name string) *agentproto.R
 	if fail != nil {
 		return fail
 	}
+	if env.CheckMode && aptBindingsMissing(env) {
+		// Without python3-apt the module would install it first, which
+		// check mode does not do.
+		return agentproto.Fail("python3-apt must be installed to use check mode. " +
+			"If run normally this module can auto-install it, see the auto_install_module_deps option.")
+	}
 	return runPkg(env, pkgManagers["apt"], p, raw, "")
+}
+
+// aptBindingsMissing reports whether the apt modules would find no
+// python3-apt: the task has a Python, and neither it nor the system
+// Pythons can import apt. (Without any Python, understudy's native code
+// stands in for the bindings.)
+func aptBindingsMissing(env *RunEnv) bool {
+	return targetHasPython(env) && !pyModuleInstalled(env, "apt")
 }
 
 // dnfActionModule is the dnf action plugin (yum redirects to it): the

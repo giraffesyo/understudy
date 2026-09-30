@@ -1,0 +1,25 @@
+# distros: ubuntu
+---
+# The apt modules on a Debian host whose Python has no python3-apt (the
+# image installs python3 alone): check mode cannot install the bindings
+# the modules need, and apt_repository will not without
+# install_python_apt.
+- hosts: target
+  gather_facts: false
+  become: true
+  tasks:
+    - name: apt in check mode
+      apt: {name: tree}
+      check_mode: true
+      ignore_errors: true
+    - name: package in check mode
+      package: {name: tree}
+      check_mode: true
+      ignore_errors: true
+    - name: apt_repository in check mode
+      apt_repository: {repo: "deb http://example.invalid/ubuntu noble main"}
+      check_mode: true
+      ignore_errors: true
+    - name: apt_repository without install_python_apt
+      apt_repository: {repo: "deb http://example.invalid/ubuntu noble main", install_python_apt: false}
+      ignore_errors: true
