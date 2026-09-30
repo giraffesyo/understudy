@@ -13,7 +13,7 @@ var actionParams = map[string][]string{
 	"debug":                  {"msg", "var", "verbosity"},
 	"fail":                   {"msg"},
 	"assert":                 {"that", "fail_msg", "msg", "success_msg", "quiet"},
-	"raw":                    {"_raw_params"},
+	"raw":                    {"_raw_params", "executable"},
 	"script":                 {"_raw_params", "cmd", "creates", "removes", "chdir", "executable"},
 	"validate_argument_spec": {"argument_spec", "provided_arguments"},
 }

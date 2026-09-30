@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
+	"github.com/giraffesyo/understudy/internal/connection"
 )
 
 func init() {
@@ -19,7 +20,13 @@ func runRaw(ctx context.Context, actx *Context, args map[string]any, freeForm st
 	if actx.CheckMode {
 		return &agentproto.Result{Skipped: true, Msg: "remote module (raw) does not support check mode"}
 	}
-	res, err := actx.Conn.Exec(ctx, freeForm, execOptions(actx))
+	cmd := freeForm
+	// _low_level_execute_command(executable=...): run the line through
+	// the given shell instead of the default one.
+	if exe, ok := args["executable"].(string); ok && exe != "" {
+		cmd = exe + " -c " + connection.ShellQuote(cmd)
+	}
+	res, err := actx.Conn.Exec(ctx, cmd, execOptions(actx))
 	if err != nil {
 		return agentproto.Fail("raw: %v", err)
 	}
