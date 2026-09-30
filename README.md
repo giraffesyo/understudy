@@ -87,7 +87,12 @@ understudy playbook -i 'localhost,' -c local site.yml
 
 Inventory works the way you expect — INI and YAML formats, host ranges
 (`web[01:20].example.com`), `group_vars/`, `host_vars/`, patterns
-(`web:&staging:!db`), and `--limit`.
+(`web:&staging:!db`), and `--limit`. Sources go through ansible-core's
+plugin chain (`host_list`, `script`, `auto`, `yaml`, `ini`): INI values
+are Python literals as ansible-core reads them (`yes` stays a string), a
+source no plugin can parse is reported with each plugin's failure and
+skipped, and with nothing parsed only the implicit localhost remains
+(which `all` does not match).
 
 ## Playbooks in Go
 
@@ -334,6 +339,11 @@ than silently diverging. Known boundaries:
   de-duplication; filters warn only for the values they read.
   `deprecation_warnings = False` (or `ANSIBLE_DEPRECATION_WARNINGS`)
   silences them.
+- **Inventory plugins**: the built-in file plugins are native (`host_list`,
+  `script`, `auto`, `yaml`, `ini`); TOML sources and plugin configs for
+  other inventory plugins (`constructed`, `generator`, collection plugins)
+  fail to parse with a clear message, and the source is skipped as
+  ansible-core skips one it cannot parse.
 - **Exit codes**: as ansible-playbook, the result of the last play run
   (failed and unreachable hosts carry over between plays until
   `clear_host_errors`); several playbooks each end with a recap, and one

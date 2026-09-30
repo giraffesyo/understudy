@@ -146,6 +146,8 @@ type Runner struct {
 	playEnded      bool // meta: end_play
 	batchEnded     bool // meta: end_batch
 	mu             sync.Mutex
+	implicitMu     sync.Mutex
+	implicitSet    bool // the implicit localhost's inventory vars are set
 }
 
 // NewRunner builds a runner over a loaded inventory.
@@ -183,6 +185,20 @@ func NewRunner(inv *inventory.Inventory, cb Callback, opts Options) *Runner {
 	return r
 }
 
+// registerImplicit gives the implicit localhost, once a pattern has
+// created it, its inventory variables.
+func (r *Runner) registerImplicit(h *inventory.Host) {
+	if !h.Implicit() {
+		return
+	}
+	r.implicitMu.Lock()
+	defer r.implicitMu.Unlock()
+	if !r.implicitSet {
+		r.implicitSet = true
+		r.Store.SetInventoryVars(h.Name, r.Inv.EffectiveVars(h))
+	}
+}
+
 // Playbooks load before a Runner exists: an action nothing implements is
 // a load error, as in ansible-core.
 func init() { playbook.ModuleKnown = actions.Known }
@@ -216,6 +232,7 @@ func (r *Runner) resolvePlayHosts(play *playbook.Play) ([]string, error) {
 	defer r.mu.Unlock()
 	for _, h := range hosts {
 		names = append(names, h.Name)
+		r.registerImplicit(h)
 		if _, ok := r.stats[h.Name]; !ok {
 			r.stats[h.Name] = &HostStats{}
 			r.order = append(r.order, h.Name)
@@ -335,14 +352,14 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 		}
 		r.Store.AddVarsFile(m)
 	}
-	// ansible-core reads vars_files before the banner: a file that fails
-	// to parse ends the run without one.
-	r.Callback.PlayStart(play)
-
+	// ansible-core reads vars_files and resolves the play's hosts before
+	// the banner: a file that fails to parse, or a pattern that is an
+	// error, ends the run without one.
 	allHosts, err := r.resolvePlayHosts(play)
 	if err != nil {
 		return err
 	}
+	r.Callback.PlayStart(play)
 	if len(allHosts) == 0 {
 		fmt.Println("skipping: no hosts matched")
 		return nil
@@ -955,7 +972,8 @@ func (r *Runner) newHostContext(host string, pos template.Position, playHosts []
 	c := r.Store.NewContext(host, pos)
 	if r.Inv != nil {
 		c.SetMagic("groups", r.Inv.GroupsMap())
-		if h, ok := r.Inv.Hosts[host]; ok {
+		if h := r.Inv.GetHost(host); h != nil {
+			r.registerImplicit(h)
 			names := r.Inv.GroupNames(h)
 			list := make([]any, len(names))
 			for i, n := range names {
@@ -1016,12 +1034,32 @@ func newHostVars(r *Runner, pos template.Position, playHosts []string) *hostVars
 }
 
 func (h *hostVars) GetItem(host string) (any, bool) {
-	if _, ok := h.r.Inv.Hosts[host]; !ok {
+	// A localhost name resolves to the implicit localhost, as
+	// InventoryData.get_host does.
+	if h.r.Inv.GetHost(host) == nil {
 		return nil, false
 	}
 	// Build the target host's context on demand and expose it as a mapping.
-	return h.r.newHostContext(host, h.pos, h.playHosts).AsMapping(), true
+	return hostVarsVars{h.r.newHostContext(host, h.pos, h.playHosts).AsMapping()}, true
 }
+
+// hostVarsVars is one host's variables through hostvars: without
+// hostvars itself (get_vars(include_hostvars=False)), so walking every
+// key terminates.
+type hostVarsVars struct{ template.Mapping }
+
+func (v hostVarsVars) Keys() []string {
+	keys := v.Mapping.Keys()
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if k != "hostvars" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func (v hostVarsVars) Len() int { return len(v.Keys()) }
 
 func (h *hostVars) Keys() []string { return h.names }
 func (h *hostVars) Len() int       { return len(h.names) }

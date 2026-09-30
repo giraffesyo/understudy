@@ -1,0 +1,5 @@
+-i
+@INV@/nowhere
+-l
+zzz
+@INV@/playbook.yml

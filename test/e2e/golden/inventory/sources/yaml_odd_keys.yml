@@ -1,0 +1,18 @@
+all:
+  hosts:
+    h1:
+      color: red
+  children:
+    web:
+      hosts:
+        h2:
+        h3: {color: blue}
+      vars: {tier: front}
+      extras: {x: 1}
+      notes: just a string
+    db: 5
+    empty:
+  vars:
+    shared: yes
+other:
+  hosts: h4

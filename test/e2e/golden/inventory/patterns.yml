@@ -1,0 +1,23 @@
+- name: localhost names
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: which localhost
+      debug:
+        msg: "{{ inventory_hostname }} {{ marker | default('implicit') }} {{ group_names }}"
+
+- name: unknown names
+  hosts: nosuch,w1,also_missing
+  gather_facts: false
+  tasks:
+    - name: matched
+      debug:
+        msg: "{{ inventory_hostname }}"
+
+- name: ipv6 localhost
+  hosts: "::1"
+  gather_facts: false
+  tasks:
+    - name: implicit
+      debug:
+        msg: "{{ inventory_hostname }}"

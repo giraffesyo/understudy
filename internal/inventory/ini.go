@@ -2,11 +2,13 @@ package inventory
 
 import (
 	"fmt"
-	"strconv"
+	"regexp"
 	"strings"
+	"unicode"
 )
 
-// LoadINI parses INI-format inventory text into inv.
+// LoadINI parses INI-format inventory text into inv, as ansible-core's
+// ini inventory plugin does:
 //
 //	host1 ansible_host=10.0.0.1
 //	[web]
@@ -15,147 +17,214 @@ import (
 //	http_port=80
 //	[site:children]
 //	web
+//
+// Values go through Python's ast.literal_eval (so "yes" stays a string,
+// 1.5 is a float and [1, 2] a list). Errors carry the plugin's messages.
 func LoadINI(inv *Inventory, data []byte, filename string) error {
-	section := "ungrouped" // bare hosts before any [group]
-	kind := "hosts"        // hosts | vars | children
+	if err := parseINI(inv, data); err != nil {
+		return &chainError{msg: "Failed to parse inventory.", ctx: "Origin: " + filename, cause: asChain(err)}
+	}
+	return nil
+}
 
-	for lineNo, raw := range strings.Split(string(data), "\n") {
-		line := strings.TrimSpace(raw)
+var (
+	iniSection   = regexp.MustCompile(`^\[([^:\]\s]+)(?::(\w+))?\]\s*(?:#.*)?$`)
+	iniGroupName = regexp.MustCompile(`^([^:\]\s]+)\s*(?:#.*)?$`)
+)
+
+type pendingDecl struct {
+	state, name string
+	parents     []string
+}
+
+func parseINI(inv *Inventory, data []byte) error {
+	pending := map[string]*pendingDecl{}
+	var pendingOrder []string
+	groupName, state := "ungrouped", "hosts"
+	for _, raw := range pySplitLines(string(data)) {
+		line := strings.TrimFunc(raw, unicode.IsSpace)
 		if line == "" || line[0] == '#' || line[0] == ';' {
 			continue
 		}
-		if line[0] == '[' {
-			end := strings.IndexByte(line, ']')
-			if end < 0 {
-				return fmt.Errorf("%s:%d: unterminated section header", filename, lineNo+1)
+		if m := iniSection.FindStringSubmatch(line); m != nil {
+			groupName, state = m[1], m[2]
+			if state == "" {
+				state = "hosts"
 			}
-			name := line[1:end]
-			kind = "hosts"
-			if i := strings.IndexByte(name, ':'); i >= 0 {
-				kind = name[i+1:]
-				name = name[:i]
-				if kind != "vars" && kind != "children" {
-					return fmt.Errorf("%s:%d: unknown section suffix %q", filename, lineNo+1, kind)
+			if state != "hosts" && state != "children" && state != "vars" {
+				return fmt.Errorf("Section [%s:%s] has unknown type: %s", m[1], m[2], state)
+			}
+			if _, ok := inv.Groups[groupName]; !ok {
+				if _, isPending := pending[groupName]; state == "vars" && !isPending {
+					pending[groupName] = &pendingDecl{state: state, name: groupName}
+					pendingOrder = append(pendingOrder, groupName)
+				}
+				inv.ensureGroup(groupName)
+			}
+			if d, ok := pending[groupName]; ok && state != "vars" {
+				switch d.state {
+				case "children":
+					if err := inv.addPendingChildren(groupName, pending); err != nil {
+						return err
+					}
+				case "vars":
+					delete(pending, groupName)
 				}
 			}
-			section = name
-			inv.ensureGroup(section)
 			continue
+		} else if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			return fmt.Errorf("Invalid section entry: '%s'. Please make sure that there are no spaces in the section entry, and that there are no other invalid characters", line)
 		}
 
-		switch kind {
-		case "vars":
-			eq := strings.IndexByte(line, '=')
-			if eq <= 0 {
-				return fmt.Errorf("%s:%d: expected key=value in vars section", filename, lineNo+1)
+		switch state {
+		case "hosts":
+			tokens, err := shlexSplit(line)
+			if err != nil {
+				// Raised while handling shlex's error: not collapsed
+				// into its parent when shown.
+				return &chainError{msg: fmt.Sprintf("Error parsing host definition '%s': %s", line, err), hiddenCause: true}
 			}
-			key := strings.TrimSpace(line[:eq])
-			inv.Groups[section].Vars[key] = coerceINIValue(strings.TrimSpace(line[eq+1:]))
+			if len(tokens) == 0 {
+				return fmt.Errorf("list index out of range")
+			}
+			hosts, port, err := iniExpandHostPattern(tokens[0])
+			if err != nil {
+				return err
+			}
+			vars := yamlOrderedVars{}
+			for _, t := range tokens[1:] {
+				k, v, ok := strings.Cut(t, "=")
+				if !ok {
+					return fmt.Errorf("Expected key=value host variable assignment, got: %s", t)
+				}
+				vars.set(k, parseINIValue(v))
+			}
+			for _, name := range hosts {
+				h := inv.addHost(name, inv.Groups[groupName], port)
+				vars.apply(h.Vars)
+			}
+		case "vars":
+			k, v, ok := strings.Cut(line, "=")
+			if !ok {
+				return fmt.Errorf("Expected key=value, got: %s", line)
+			}
+			inv.Groups[groupName].Vars[strings.TrimFunc(k, unicode.IsSpace)] = parseINIValue(strings.TrimFunc(v, unicode.IsSpace))
 		case "children":
-			child := inv.ensureGroup(line)
-			linkGroups(inv.Groups[section], child)
-		default: // hosts
-			if err := parseHostLine(inv, section, line, filename, lineNo+1); err != nil {
+			m := iniGroupName.FindStringSubmatch(line)
+			if m == nil {
+				return fmt.Errorf("Expected group name, got: %s", line)
+			}
+			child := m[1]
+			if g, ok := inv.Groups[child]; !ok {
+				if d, isPending := pending[child]; !isPending {
+					pending[child] = &pendingDecl{state: state, name: child, parents: []string{groupName}}
+					pendingOrder = append(pendingOrder, child)
+				} else {
+					d.parents = append(d.parents, groupName)
+				}
+			} else if err := inv.addChild(inv.Groups[groupName], g); err != nil {
 				return err
 			}
 		}
 	}
+	// Report the first unresolved reference.
+	for _, name := range pendingOrder {
+		d, ok := pending[name]
+		if !ok {
+			continue
+		}
+		if d.state == "vars" {
+			return fmt.Errorf("Section [%s:vars] not valid for undefined group '%s'.", d.name, d.name)
+		}
+		return fmt.Errorf("Section [%s:children] includes undefined group '%s'.", d.parents[len(d.parents)-1], d.name)
+	}
 	return nil
 }
 
-func parseHostLine(inv *Inventory, groupName, line, filename string, lineNo int) error {
-	words := splitHostLine(line)
-	if len(words) == 0 {
-		return nil
+func (inv *Inventory) addPendingChildren(group string, pending map[string]*pendingDecl) error {
+	for _, parent := range pending[group].parents {
+		if err := inv.addChild(inv.Groups[parent], inv.Groups[group]); err != nil {
+			return err
+		}
+		if d, ok := pending[parent]; ok && d.state == "children" {
+			if err := inv.addPendingChildren(parent, pending); err != nil {
+				return err
+			}
+		}
 	}
-	names, err := ExpandRange(words[0])
+	delete(pending, group)
+	return nil
+}
+
+// iniExpandHostPattern adds the ini plugin's checks to the base
+// expansion.
+func iniExpandHostPattern(pattern string) ([]string, int, error) {
+	hosts, port, err := expandHostPattern(pattern)
 	if err != nil {
-		return fmt.Errorf("%s:%d: %v", filename, lineNo, err)
+		return nil, -1, err
 	}
-	vars := map[string]any{}
-	for _, w := range words[1:] {
-		eq := strings.IndexByte(w, '=')
-		if eq <= 0 {
-			return fmt.Errorf("%s:%d: expected key=value after host name, got %q", filename, lineNo, w)
+	if strings.HasSuffix(strings.TrimFunc(pattern, unicode.IsSpace), ":") && port < 0 {
+		return nil, -1, fmt.Errorf("Invalid host pattern '%s' supplied, ending in ':' is not allowed, this character is reserved to provide a port.", pattern)
+	}
+	for _, h := range hosts {
+		if strings.TrimFunc(h, unicode.IsSpace) == "---" {
+			return nil, -1, fmt.Errorf("Invalid host pattern '%s' supplied, '---' is normally a sign this is a YAML file.", pattern)
 		}
-		vars[w[:eq]] = coerceINIValue(stripQuotes(w[eq+1:]))
 	}
-	group := inv.Groups[groupName]
-	for _, name := range names {
-		h := inv.ensureHost(name)
-		for k, v := range vars {
-			h.Vars[k] = v
-		}
-		addHostToGroup(group, h)
-	}
-	return nil
+	return hosts, port, nil
 }
 
-// splitHostLine tokenizes a host line on whitespace, keeping quoted values
-// (ansible_ssh_common_args="-o Foo=bar") intact.
-func splitHostLine(s string) []string {
+// parseINIValue is the ini plugin's _parse_value: a Python literal when
+// ast.literal_eval accepts it, else the text itself.
+func parseINIValue(v string) any {
+	if out, ok := literalEval(v); ok {
+		return out
+	}
+	return v
+}
+
+// pySplitLines is Python's str.splitlines().
+func pySplitLines(s string) []string {
 	var out []string
-	var cur strings.Builder
-	inWord := false
-	var quote byte
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case quote != 0:
-			cur.WriteByte(c)
-			if c == quote {
-				quote = 0
+	start := 0
+	rs := []rune(s)
+	for i := 0; i < len(rs); i++ {
+		switch rs[i] {
+		case '\n', '\v', '\f', 0x1c, 0x1d, 0x1e, 0x85, 0x2028, 0x2029:
+			out = append(out, string(rs[start:i]))
+			start = i + 1
+		case '\r':
+			out = append(out, string(rs[start:i]))
+			if i+1 < len(rs) && rs[i+1] == '\n' {
+				i++
 			}
-		case c == '"' || c == '\'':
-			quote = c
-			inWord = true
-			cur.WriteByte(c)
-		case c == ' ' || c == '\t':
-			if inWord {
-				out = append(out, cur.String())
-				cur.Reset()
-				inWord = false
-			}
-		case c == '#' && !inWord:
-			// trailing comment
-			if inWord {
-				out = append(out, cur.String())
-			}
-			return out
-		default:
-			inWord = true
-			cur.WriteByte(c)
+			start = i + 1
 		}
 	}
-	if inWord {
-		out = append(out, cur.String())
+	if start < len(rs) {
+		out = append(out, string(rs[start:]))
 	}
 	return out
 }
 
-func stripQuotes(s string) string {
-	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') && s[len(s)-1] == s[0] {
-		return s[1 : len(s)-1]
-	}
-	return s
+// yamlOrderedVars keeps variable assignments in order (later wins).
+type yamlOrderedVars struct {
+	keys []string
+	vals map[string]any
 }
 
-// coerceINIValue applies Ansible's INI literal coercion: ints, floats,
-// booleans, and null; everything else stays a string.
-func coerceINIValue(s string) any {
-	switch s {
-	case "True", "true", "yes":
-		return true
-	case "False", "false", "no":
-		return false
-	case "None", "null", "~":
-		return nil
+func (v *yamlOrderedVars) set(k string, val any) {
+	if v.vals == nil {
+		v.vals = map[string]any{}
 	}
-	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-		return n
+	if _, ok := v.vals[k]; !ok {
+		v.keys = append(v.keys, k)
 	}
-	if f, err := strconv.ParseFloat(s, 64); err == nil && strings.ContainsAny(s, ".eE") {
-		return f
+	v.vals[k] = val
+}
+
+func (v *yamlOrderedVars) apply(into map[string]any) {
+	for _, k := range v.keys {
+		into[k] = v.vals[k]
 	}
-	return s
 }
