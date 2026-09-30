@@ -1397,7 +1397,7 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		RemoteTmp:    r.remoteTmp(vctx),
 		ArgPos:       argPositions(task),
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
-			return r.runModule(ctx, host, target, kw, inProcess, become, task, req, payload)
+			return r.runModule(ctx, host, target, kw, inProcess, become, task, taskEnvironment(play, task), req, payload)
 		},
 		SetFact: func(name string, value any) {
 			for _, h := range r.factHosts(host, target, task) {
@@ -1623,11 +1623,28 @@ func (r *Runner) effectiveBecome(play *playbook.Play, task *playbook.Task, vctx 
 
 // runModule executes a module request: in-process for local connections,
 // via the remote agent otherwise (bootstrapped lazily on first use).
-func (r *Runner) runModule(ctx context.Context, host, target string, kw connection.Keywords, inProcess bool, become *connection.BecomeSpec, task *playbook.Task, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
-	if len(task.Environment) > 0 {
-		env := make(map[string]string, len(task.Environment))
+// taskEnvironment is the task's effective environment keyword: the
+// play's, overridden key by key by the task's (blocks and roles are
+// already merged into the task at parse time).
+func taskEnvironment(play *playbook.Play, task *playbook.Task) map[string]any {
+	if play == nil || len(play.Environment) == 0 {
+		return task.Environment
+	}
+	merged := make(map[string]any, len(play.Environment)+len(task.Environment))
+	for k, v := range play.Environment {
+		merged[k] = v
+	}
+	for k, v := range task.Environment {
+		merged[k] = v
+	}
+	return merged
+}
+
+func (r *Runner) runModule(ctx context.Context, host, target string, kw connection.Keywords, inProcess bool, become *connection.BecomeSpec, task *playbook.Task, environment map[string]any, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
+	if len(environment) > 0 {
+		env := make(map[string]string, len(environment))
 		vctx := r.Store.NewContext(host, template.Position{File: task.Src.File, Line: task.Src.Line})
-		for k, v := range task.Environment {
+		for k, v := range environment {
 			tv, err := vctx.TemplateValue(v)
 			if err != nil {
 				return nil, err

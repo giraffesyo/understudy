@@ -1,0 +1,236 @@
+---
+# Result dicts of cron: jobs/envs lists, the "#Ansible: <name>" marker
+# format, diffs, check mode, env insertion, removal of an emptied cron
+# file, validation failures, and user crontabs managed through the
+# crontab CLI (a fake crontab on PATH keeps the real one untouched).
+- hosts: localhost
+  gather_facts: false
+  vars:
+    cf: "{{ workdir }}/cron/app-jobs"
+    fake: "{{ workdir }}/cron/installed"
+    nobackup: "{{ r | dict2items | rejectattr('key', 'equalto', 'backup_file') | items2dict }}"
+  tasks:
+    - file: {path: "{{ workdir }}/cron/bin", state: directory}
+    - copy: {src: files/fake_crontab, dest: "{{ workdir }}/cron/bin/crontab", mode: "0755"}
+
+    - name: add a job to a cron file
+      cron: {name: nightly, job: "echo hi", minute: "5", hour: "2", user: root, cron_file: "{{ cf }}"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: same job again (no-op)
+      cron: {name: nightly, job: "echo hi", minute: 5, hour: 2, user: root, cron_file: "{{ cf }}"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: change the schedule
+      cron: {name: nightly, job: "echo hi", minute: "10", hour: "2", dow: "1-5", user: root, cron_file: "{{ cf }}"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: env var goes first
+      cron: {name: FOO, env: true, value: "bar", user: root, cron_file: "{{ cf }}"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: env var after another
+      cron: {name: BAZ, env: true, job: "qux", insertafter: FOO, user: root, cron_file: "{{ cf }}"}
+      register: r
+    - debug: {var: r}
+
+    - name: env var before another
+      cron: {name: SHELL, env: true, job: "/bin/sh", insertbefore: BAZ, user: root, cron_file: "{{ cf }}"}
+      register: r
+    - debug: {var: r}
+
+    - name: update an env var
+      cron: {name: FOO, env: true, job: "bar2", user: root, cron_file: "{{ cf }}"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: special_time, disabled, in check mode
+      cron: {name: at boot, special_time: reboot, job: "/bin/true", disabled: true, user: root, cron_file: "{{ cf }}"}
+      check_mode: true
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: special_time, disabled, with a backup
+      cron: {name: at boot, special_time: reboot, job: "/bin/true", disabled: true, user: root, cron_file: "{{ cf }}", backup: true}
+      register: r
+    - debug: {var: nobackup}
+    - debug: {msg: "{{ r.backup_file is match('.*/crontab[a-z0-9_]{8}$') }}"}
+    - slurp: {src: "{{ cf }}"}
+      register: s
+    - debug: {msg: "{{ s.content | b64decode }}"}
+
+    - name: backup without a change keeps no backup
+      cron: {name: at boot, special_time: reboot, job: "/bin/true", disabled: true, user: root, cron_file: "{{ cf }}", backup: true}
+      register: r
+    - debug: {var: r}
+
+    - name: special_time with a time field
+      cron: {name: bad, special_time: daily, minute: "1", job: x, user: root, cron_file: "{{ cf }}"}
+      ignore_errors: true
+      register: r
+    - debug: {var: r}
+
+    - name: cron_file without user
+      cron: {name: bad, job: x, cron_file: "{{ cf }}"}
+      ignore_errors: true
+
+    - name: present without a job
+      cron: {name: bad, user: root, cron_file: "{{ cf }}"}
+      ignore_errors: true
+
+    - name: insertafter without env
+      cron: {name: bad, job: x, insertafter: FOO, user: root, cron_file: "{{ cf }}"}
+      ignore_errors: true
+
+    - name: env name with a space
+      cron: {name: "A B", env: true, job: x, user: root, cron_file: "{{ cf }}"}
+      ignore_errors: true
+
+    - name: insertbefore an unknown variable
+      cron: {name: A, env: true, job: x, insertbefore: NOPE, user: root, cron_file: "{{ cf }}"}
+      ignore_errors: true
+      register: r
+    - debug: {var: r}
+
+    - name: insertafter and insertbefore together
+      cron: {name: A, env: true, job: x, insertafter: FOO, insertbefore: BAZ, user: root, cron_file: "{{ cf }}"}
+      ignore_errors: true
+
+    - name: bad special_time
+      cron: {name: A, special_time: fortnightly, job: x, user: root, cron_file: "{{ cf }}"}
+      ignore_errors: true
+
+    - name: refuse /etc/crontab
+      cron: {name: x, state: absent, cron_file: /etc/crontab}
+      ignore_errors: true
+
+    - name: remove an env var
+      cron: {name: FOO, env: true, state: absent, cron_file: "{{ cf }}"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: remove a job
+      cron: {name: nightly, state: absent, cron_file: "{{ cf }}"}
+      register: r
+    - debug: {var: r}
+
+    - name: remove a missing job
+      cron: {name: nightly, state: absent, cron_file: "{{ cf }}"}
+      register: r
+    - debug: {var: r}
+
+    - cron: {name: BAZ, env: true, state: absent, cron_file: "{{ cf }}"}
+    - cron: {name: SHELL, env: true, state: absent, cron_file: "{{ cf }}"}
+
+    - name: removing the last job deletes the file (check mode)
+      cron: {name: at boot, state: absent, cron_file: "{{ cf }}"}
+      check_mode: true
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: removing the last job deletes the file
+      cron: {name: at boot, state: absent, cron_file: "{{ cf }}"}
+      register: r
+    - debug: {var: r}
+    - stat: {path: "{{ cf }}"}
+      register: st
+    - debug: {var: st.stat.exists}
+
+    - name: removal from a missing file
+      cron: {name: at boot, state: absent, cron_file: "{{ cf }}"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: a job is adopted by its exact line
+      copy: {content: "MAILTO=root\n1 1 * * * root /usr/bin/adopt\n", dest: "{{ workdir }}/cron/adopt"}
+    - cron: {name: adopted, job: /usr/bin/adopt, minute: "1", hour: "1", user: root, cron_file: "{{ workdir }}/cron/adopt"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: a missing final newline is a change
+      copy: {content: "#Ansible: nl\n* * * * * root true", dest: "{{ workdir }}/cron/nonl"}
+    - cron: {name: nl, job: "true", user: root, cron_file: "{{ workdir }}/cron/nonl"}
+      register: r
+    - debug: {var: r}
+
+    - name: odd cron_file name warns
+      cron: {name: w, job: "true", user: root, cron_file: "{{ workdir }}/cron/odd.name"}
+      register: r
+    - debug: {var: r}
+
+    - name: a job with a line break warns
+      cron: {name: lb, job: "a\nb", user: root, cron_file: "{{ workdir }}/cron/linebreak"}
+      register: r
+    - debug: {var: r}
+
+    - name: user crontabs through the crontab CLI
+      environment:
+        PATH: "{{ workdir }}/cron/bin:{{ lookup('env', 'PATH') }}"
+        FAKE_CRONTAB: "{{ fake }}"
+      block:
+        - name: add to an empty crontab
+          cron: {name: tick, job: "/usr/bin/tick", minute: "*/5"}
+          diff: true
+          register: r
+        - debug: {var: r}
+
+        - name: another user's crontab
+          cron: {name: tock, job: "/usr/bin/tock", special_time: hourly, user: nobody}
+          diff: true
+          register: r
+        - debug: {var: r}
+
+        - name: env var in the crontab
+          cron: {name: MAILTO, env: true, job: "ops@example.com"}
+          diff: true
+          register: r
+        - debug: {var: r}
+
+        - name: installed crontab headers are skipped
+          copy:
+            dest: "{{ fake }}"
+            content: |
+              # DO NOT EDIT THIS FILE - edit the master and reinstall.
+              # (/tmp/crontab.abc123 installed on Thu Jan  1 00:00:00 2026)
+              # (Cron version -- $Id: crontab.c,v 2.13 1994/01/17 03:20:37 vixie Exp $)
+              #Ansible: tick
+              */5 * * * * /usr/bin/tick
+        - cron: {name: tick, job: "/usr/bin/tick", minute: "*/10"}
+          diff: true
+          register: r
+        - debug: {var: r}
+        - slurp: {src: "{{ fake }}"}
+          register: s
+        - debug: {msg: "{{ s.content | b64decode }}"}
+
+        - name: disable in check mode
+          cron: {name: tick, job: "/usr/bin/tick", minute: "*/10", disabled: true}
+          check_mode: true
+          diff: true
+          register: r
+        - debug: {var: r}
+
+        - name: remove from the crontab
+          cron: {name: tick, state: absent}
+          diff: true
+          register: r
+        - debug: {var: r}
+
+        - name: remove it again
+          cron: {name: tick, state: absent}
+          register: r
+        - debug: {var: r}

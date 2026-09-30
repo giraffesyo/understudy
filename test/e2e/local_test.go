@@ -717,7 +717,7 @@ func TestNewModulesRegistered(t *testing.T) {
 		"group", "pip", "get_url", "blockinfile", "wait_for", "mount",
 		"sysctl", "tempfile", "find", "modprobe", "script", "firewalld",
 		"selinux", "parted", "filesystem", "yum_repository", "sudoers",
-		"openssh_keypair", "mysql_db", "mysql_user",
+		"openssh_keypair", "mysql_db", "mysql_user", "uri", "git", "cron",
 	}
 	for _, m := range mods {
 		src := "- hosts: all\n  gather_facts: false\n  tasks:\n    - " + m + ": {}\n"
