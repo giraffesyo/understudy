@@ -68,6 +68,13 @@ var moduleKeyOrders = map[string][][]string{
 	"systemd":         {{"name", "status", "enabled", "state"}},
 	"systemd_service": {{"name", "status", "enabled", "state"}},
 	"apt":             {{"stdout", "stderr", "cache_updated", "cache_update_time"}},
+	// dnf's ensure: exit_json(msg, changed, results, rc) or
+	// fail_json(msg, failures, results, rc); dnf5's: results first.
+	"dnf":             {{"failures", "results"}},
+	"yum":             {{"failures", "results"}},
+	"dnf5":            {{"failures", "results"}},
+	"package":         {{"failures", "results"}, {"stdout", "stderr", "cache_updated", "cache_update_time"}},
+	"openssh_keypair": {{"size", "type", "filename", "fingerprint", "public_key", "comment"}},
 	"git":             {{"before", "after", "remote_url_changed"}},
 	"hostname":        {{"name"}},
 }
