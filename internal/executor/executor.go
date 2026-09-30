@@ -1160,7 +1160,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		}
 	}
 	res.DelegatedTo = delegated
-	res.ShowDiff = r.effectiveDiff(task)
+	res.ShowDiff = r.effectiveDiff(play, task)
 	return res
 }
 
@@ -1244,8 +1244,8 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		Vars:         vctx,
 		Conn:         conn,
 		Become:       become,
-		CheckMode:    r.effectiveCheckMode(task),
-		Diff:         r.effectiveDiff(task),
+		CheckMode:    r.effectiveCheckMode(play, task),
+		Diff:         r.effectiveDiff(play, task),
 		Background:   task.Async > 0,
 		AsyncTimeout: task.Async,
 		BaseDir:      r.Opts.BaseDir,
@@ -1304,9 +1304,12 @@ func (e *unreachableError) Error() string { return e.err.Error() }
 // effectiveCheckMode resolves the run-level flag against a task's
 // check_mode: override (check_mode: false forces execution during a
 // --check run; true forces a dry run of that task).
-func (r *Runner) effectiveCheckMode(task *playbook.Task) bool {
+func (r *Runner) effectiveCheckMode(play *playbook.Play, task *playbook.Task) bool {
 	if task.CheckMode != nil {
 		return *task.CheckMode
+	}
+	if play != nil && play.CheckMode != nil {
+		return *play.CheckMode
 	}
 	return r.Opts.CheckMode
 }
@@ -1320,9 +1323,12 @@ func taskDir(task *playbook.Task) string {
 }
 
 // effectiveDiff resolves --diff against a task's diff: keyword.
-func (r *Runner) effectiveDiff(task *playbook.Task) bool {
+func (r *Runner) effectiveDiff(play *playbook.Play, task *playbook.Task) bool {
 	if task.Diff != nil {
 		return *task.Diff
+	}
+	if play != nil && play.Diff != nil {
+		return *play.Diff
 	}
 	return r.Opts.Diff
 }

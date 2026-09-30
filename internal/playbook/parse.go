@@ -39,6 +39,7 @@ var playKeywords = map[string]bool{
 	"max_fail_percentage": true, "any_errors_fatal": true, "roles": true,
 	"force_handlers": true, "vars_prompt": true,
 	"gather_subset": true, "gather_timeout": true, "fact_path": true,
+	"check_mode": true, "diff": true,
 }
 
 // Deferred play keys that must fail loudly rather than be ignored.
@@ -124,6 +125,16 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 		switch key {
 		case "name":
 			play.Name, _ = val.Str()
+		case "check_mode", "diff":
+			b, err := decodeBool(val, file, key)
+			if err != nil {
+				return nil, err
+			}
+			if key == "check_mode" {
+				play.CheckMode = &b
+			} else {
+				play.Diff = &b
+			}
 		case "hosts":
 			v, err := val.Decode()
 			if err != nil {
@@ -386,6 +397,16 @@ func parseImportTasks(item, pathNode *yaml.Node, file string, handlers bool, bc 
 			inh.NoLog, err = decodeBool(val, file, "no_log")
 		case "delegate_to":
 			inh.Delegate, _ = val.Str()
+		case "check_mode":
+			var b bool
+			if b, err = decodeBool(val, file, "check_mode"); err == nil {
+				inh.CheckMode = &b
+			}
+		case "diff":
+			var b bool
+			if b, err = decodeBool(val, file, "diff"); err == nil {
+				inh.Diff = &b
+			}
 		case "any_errors_fatal":
 			var b bool
 			if b, err = decodeBool(val, file, "any_errors_fatal"); err == nil {
@@ -459,6 +480,16 @@ func parseRoleRefs(node *yaml.Node, file string) ([]*RoleRef, error) {
 				for k, v := range m {
 					ref.Params[k] = v
 				}
+			case "check_mode", "diff":
+				b, err := decodeBool(val, file, key)
+				if err != nil {
+					return nil, err
+				}
+				if key == "check_mode" {
+					ref.CheckMode = &b
+				} else {
+					ref.Diff = &b
+				}
 			case "become", "become_user", "delegate_to":
 				return nil, errAt(file, val, "role keyword %q is not supported yet", key)
 			default:
@@ -486,7 +517,7 @@ var blockKeywords = map[string]bool{
 	"block": true, "rescue": true, "always": true, "name": true,
 	"when": true, "become": true, "become_user": true, "become_method": true,
 	"vars": true, "tags": true, "environment": true, "no_log": true,
-	"ignore_errors": true, "check_mode": true, "delegate_to": true, "any_errors_fatal": true,
+	"ignore_errors": true, "check_mode": true, "diff": true, "delegate_to": true, "any_errors_fatal": true,
 }
 
 // parseBlock flattens a block/rescue/always entry: block-level keywords are
@@ -527,6 +558,16 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 			inh.IgnoreErrors, err = decodeBool(val, file, "ignore_errors")
 		case "delegate_to":
 			inh.Delegate, _ = val.Str()
+		case "check_mode":
+			var b bool
+			if b, err = decodeBool(val, file, "check_mode"); err == nil {
+				inh.CheckMode = &b
+			}
+		case "diff":
+			var b bool
+			if b, err = decodeBool(val, file, "diff"); err == nil {
+				inh.Diff = &b
+			}
 		}
 		if err != nil {
 			return nil, err
@@ -610,6 +651,14 @@ func applyBlockInheritance(t *Task, inh *Task) {
 	}
 	if t.AnyErrorsFatal == nil {
 		t.AnyErrorsFatal = inh.AnyErrorsFatal
+	}
+	// check_mode/diff: the nearest explicit setting (task, then the
+	// innermost block) wins.
+	if t.CheckMode == nil {
+		t.CheckMode = inh.CheckMode
+	}
+	if t.Diff == nil {
+		t.Diff = inh.Diff
 	}
 	t.RunOnce = t.RunOnce || inh.RunOnce
 }

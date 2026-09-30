@@ -25,6 +25,8 @@ type Play struct {
 	Handlers    []*Task
 	Tags        []string
 	Environment map[string]any
+	CheckMode   *bool // play-level check_mode (nil = the run's --check)
+	Diff        *bool // play-level diff (nil = the run's --diff)
 
 	// Serial batches the play across hosts (rolling execution). Entries are
 	// host counts or "N%" strings; nil runs all hosts in one batch.
@@ -120,7 +122,9 @@ type RoleRef struct {
 	Params map[string]any // role vars from the ref (high precedence)
 	When   []string
 	Tags   []string
-	Src    Pos
+	// CheckMode/Diff are the role entry's check_mode/diff keywords.
+	CheckMode, Diff *bool
+	Src             Pos
 }
 
 // VarPrompt is one vars_prompt entry.
