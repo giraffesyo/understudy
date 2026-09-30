@@ -50,6 +50,7 @@ type Default struct {
 	Columns   int // banner width (Display.columns); 0 = 79
 	mu        sync.Mutex
 	errors    map[string]bool // Display de-duplicates repeated errors
+	warned    map[string]bool // ... and warnings
 	srcCache  map[string][]string
 }
 
@@ -351,14 +352,23 @@ func isDebug(module string) bool {
 }
 
 // warnings prints a result's module warnings (to stderr, as Display.warning
-// does).
+// does: one line each, and a warning already shown in this run is not
+// shown again).
 func (d *Default) warnings(res *agentproto.Result) {
 	if d.Err == nil || res.Extra == nil {
 		return
 	}
 	list, _ := res.Extra["warnings"].([]any)
 	for _, w := range list {
-		fmt.Fprintf(d.Err, "%s\n\n", d.paint(cBrightPurp, "[WARNING]: "+template.PyStr(w)))
+		msg := "[WARNING]: " + template.PyStr(w)
+		if d.warned == nil {
+			d.warned = map[string]bool{}
+		}
+		if d.warned[msg] {
+			continue
+		}
+		d.warned[msg] = true
+		fmt.Fprintf(d.Err, "%s\n", d.paint(cBrightPurp, msg))
 	}
 }
 
