@@ -17,8 +17,6 @@ func init() {
 		&getURLSpec:      {"get_url", "ansible.builtin.get_url"},
 		&fileSpec:        {"file", "ansible.builtin.file"},
 		&mountSpec:       {"mount", "ansible.posix.mount"},
-		&mysqlDBSpec:     {"mysql_db", "community.mysql.mysql_db"},
-		&mysqlUserSpec:   {"mysql_user", "community.mysql.mysql_user"},
 		&tempfileSpec:    {"tempfile", "ansible.builtin.tempfile"},
 		&findSpec:        {"find", "ansible.builtin.find"},
 		&modprobeSpec:    {"modprobe", "community.general.modprobe"},
@@ -43,6 +41,14 @@ func init() {
 	} {
 		for _, n := range names {
 			specs[n] = *spec
+		}
+	}
+	for name, spec := range map[string]args.Spec{
+		"mysql_db": mysqlDBSpec, "mysql_user": mysqlUserSpec, "mysql_query": mysqlQuerySpec,
+		"mysql_variables": mysqlVariablesSpec, "mysql_info": mysqlInfoSpec,
+	} {
+		for _, n := range []string{name, "community.mysql." + name, "ansible.mysql." + name} {
+			specs[n] = spec
 		}
 	}
 }
