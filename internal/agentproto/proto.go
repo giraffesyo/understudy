@@ -246,6 +246,21 @@ func (r *Result) ToVars() map[string]any {
 		m["stderr"] = r.Stderr
 		m["stdout_lines"] = splitLines(r.Stdout)
 		m["stderr_lines"] = splitLines(r.Stderr)
+	} else {
+		// Without rc (package managers), output still shows; the action
+		// adds *_lines for any stdout/stderr a module returns.
+		if r.Stdout != "" {
+			m["stdout"] = r.Stdout
+			if _, ok := m["stdout_lines"]; !ok {
+				m["stdout_lines"] = splitLines(r.Stdout)
+			}
+		}
+		if r.Stderr != "" {
+			m["stderr"] = r.Stderr
+			if _, ok := m["stderr_lines"]; !ok {
+				m["stderr_lines"] = splitLines(r.Stderr)
+			}
+		}
 	}
 	if len(r.AnsibleFacts) > 0 {
 		m["ansible_facts"] = r.AnsibleFacts
