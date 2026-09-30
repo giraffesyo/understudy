@@ -217,26 +217,6 @@ func shlexWords(s string) []string {
 	return words
 }
 
-// looseVersion compares like distutils' LooseVersion for dotted numbers.
-func looseVersionLess(a, b string) bool {
-	pa, pb := versionParts(a), versionParts(b)
-	for i := 0; i < len(pa) && i < len(pb); i++ {
-		if pa[i] != pb[i] {
-			return pa[i] < pb[i]
-		}
-	}
-	return len(pa) < len(pb)
-}
-
-func versionParts(v string) []int {
-	var out []int
-	for _, part := range regexp.MustCompile(`\d+`).FindAllString(v, -1) {
-		n, _ := strconv.Atoi(part)
-		out = append(out, n)
-	}
-	return out
-}
-
 // gitModule ports ansible.builtin.git on top of the git CLI.
 func gitModule(env *RunEnv, rawArgs map[string]any) (res *agentproto.Result) {
 	defer func() {

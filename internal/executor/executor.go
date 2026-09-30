@@ -1739,7 +1739,10 @@ func (r *Runner) dispatch(ctx context.Context, task *playbook.Task, actx *action
 		return agentproto.Fail("unknown module %q", task.Module)
 	}
 	n := &actions.Normal{Module: task.Module}
-	return n.Run(ctx, actx, args, freeForm)
+	res := n.Run(ctx, actx, args, freeForm)
+	addRoutingDeprecation(task, res)
+	nameCheckModeSkip(task, res)
+	return res
 }
 
 // record finalizes a task result for one host (non-loop path emits the

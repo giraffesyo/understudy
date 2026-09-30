@@ -16,14 +16,38 @@ type lexer struct {
 	tokens []token
 	opts   Options
 	tplPos Position // document position of the template, for errors
+
+	blockStart, blockEnd, varStart, varEnd, commentStart, commentEnd string
 }
 
 func lex(src string, opts Options, tplPos Position) ([]token, error) {
 	l := &lexer{src: src, opts: opts, tplPos: tplPos}
+	l.blockStart, l.blockEnd, l.varStart, l.varEnd, l.commentStart, l.commentEnd = opts.delims()
 	if err := l.run(); err != nil {
 		return nil, err
 	}
+	if nl := opts.NewlineSequence; nl != "" {
+		for i, t := range l.tokens {
+			if t.kind == tokText {
+				l.tokens[i].val = normalizeNewlines(t.val, nl)
+			}
+		}
+	}
 	return l.tokens, nil
+}
+
+// normalizeNewlines is Jinja's _normalize_newlines: \r\n, \r and \n in
+// template data all become the environment's newline_sequence.
+func normalizeNewlines(s, nl string) string {
+	if !strings.ContainsAny(s, "\r\n") {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	if nl == "\n" {
+		return s
+	}
+	return strings.ReplaceAll(s, "\n", nl)
 }
 
 func (l *lexer) errf(format string, args ...any) error {
@@ -42,14 +66,14 @@ func (l *lexer) run() error {
 			return nil
 		}
 
-		marker := l.src[l.pos+1] // '{', '%', or '#'
+		marker, openLen := l.markerAt(l.pos) // '{', '%', or '#'
 
 		// Whitespace control: a '-' right after the opener trims trailing
 		// whitespace from the preceding text.
-		trimBefore := l.pos+2 < len(l.src) && l.src[l.pos+2] == '-'
+		trimBefore := l.pos+openLen < len(l.src) && l.src[l.pos+openLen] == '-'
 		if trimBefore {
 			text = strings.TrimRight(text, " \t\r\n")
-		} else if marker == '%' && l.opts.LstripBlocks {
+		} else if (marker == '%' || marker == '#') && l.opts.LstripBlocks {
 			// Strip whitespace from the start of the line the block tag sits on.
 			if i := strings.LastIndexByte(text, '\n'); i >= 0 {
 				if strings.TrimRight(text[i+1:], " \t") == "" {
@@ -65,17 +89,19 @@ func (l *lexer) run() error {
 
 		switch marker {
 		case '#':
-			end := strings.Index(l.src[l.pos:], "#}")
+			end := strings.Index(l.src[l.pos+openLen:], l.commentEnd)
 			if end < 0 {
-				return l.errf("unclosed comment (missing '#}')")
+				return l.errf("unclosed comment (missing '%s')", l.commentEnd)
 			}
-			closeEnd := l.pos + end + 2
+			end += openLen
+			closeEnd := l.pos + end + len(l.commentEnd)
 			trimAfter := end >= 1 && l.src[l.pos+end-1] == '-'
 			l.pos = closeEnd
-			l.applyTrimAfter(trimAfter, false)
+			// trim_blocks also eats the newline after a comment.
+			l.applyTrimAfter(trimAfter, true)
 		case '{':
 			l.tokens = append(l.tokens, token{kind: tokVarStart, off: l.pos})
-			l.pos += 2
+			l.pos += openLen
 			if trimBefore {
 				l.pos++
 			}
@@ -84,7 +110,7 @@ func (l *lexer) run() error {
 			}
 		case '%':
 			openOff := l.pos
-			l.pos += 2
+			l.pos += openLen
 			if trimBefore {
 				l.pos++
 			}
@@ -104,26 +130,35 @@ func (l *lexer) run() error {
 	}
 }
 
-// scanText advances to the next tag opener ({{, {%, or {#), returning the
-// literal text before it. found=false means the rest of the source is text.
+// scanText advances to the next tag opener ({{, {%, or {# by default),
+// returning the literal text before it. found=false means the rest of
+// the source is text.
 func (l *lexer) scanText() (string, bool) {
 	start := l.pos
-	for {
-		i := strings.IndexByte(l.src[l.pos:], '{')
-		if i < 0 || l.pos+i+1 >= len(l.src) {
-			text := l.src[start:]
-			l.pos = len(l.src)
-			return text, false
+	for p := l.pos; p < len(l.src); p++ {
+		if m, _ := l.markerAt(p); m != 0 {
+			l.pos = p
+			return l.src[start:p], true
 		}
-		abs := l.pos + i
-		switch l.src[abs+1] {
-		case '{', '%', '#':
-			text := l.src[start:abs]
-			l.pos = abs
-			return text, true
-		}
-		l.pos = abs + 1
 	}
+	l.pos = len(l.src)
+	return l.src[start:], false
+}
+
+// markerAt reports which opener starts at p ('{' variable, '%' block,
+// '#' comment, 0 none) and its length; the longest opener wins, as in
+// Jinja's lexer.
+func (l *lexer) markerAt(p int) (byte, int) {
+	best, bestLen := byte(0), 0
+	for _, o := range []struct {
+		s string
+		m byte
+	}{{l.varStart, '{'}, {l.blockStart, '%'}, {l.commentStart, '#'}} {
+		if len(o.s) > bestLen && strings.HasPrefix(l.src[p:], o.s) {
+			best, bestLen = o.m, len(o.s)
+		}
+	}
+	return best, bestLen
 }
 
 func onLineStart(src string, off int) bool {
@@ -168,25 +203,26 @@ func (l *lexer) peekBlockName() (string, int) {
 }
 
 func (l *lexer) finishRawBlock() error {
+	bs, be := l.blockStart, l.blockEnd
 	// Consume the rest of the {% raw %} tag.
-	end := l.findTagEnd("%}")
+	end := l.findTagEnd(be)
 	if end < 0 {
-		return l.errf("unclosed '{%% raw %%}' tag")
+		return l.errf("unclosed '%s raw %s' tag", bs, be)
 	}
 	trimAfterOpen := l.src[end-1] == '-'
-	l.pos = end + 2
+	l.pos = end + len(be)
 	l.applyTrimAfter(trimAfterOpen, true)
 	bodyStart := l.pos
 	// Find {% endraw %}.
 	rest := l.src[l.pos:]
 	for {
-		i := strings.Index(rest, "{%")
+		i := strings.Index(rest, bs)
 		if i < 0 {
-			return l.errf("missing '{%% endraw %%}'")
+			return l.errf("missing '%s endraw %s'", bs, be)
 		}
 		save := l.pos
 		l.pos = save + i
-		p := l.pos + 2
+		p := l.pos + len(bs)
 		if p < len(l.src) && l.src[p] == '-' {
 			p++
 		}
@@ -194,7 +230,7 @@ func (l *lexer) finishRawBlock() error {
 		name, after := l.peekBlockName()
 		if name == "endraw" {
 			body := l.src[bodyStart : save+i]
-			trimBefore := l.src[save+i+2] == '-'
+			trimBefore := save+i+len(bs) < len(l.src) && l.src[save+i+len(bs)] == '-'
 			if trimBefore {
 				body = strings.TrimRight(body, " \t\r\n")
 			}
@@ -202,21 +238,21 @@ func (l *lexer) finishRawBlock() error {
 				l.tokens = append(l.tokens, token{kind: tokText, val: body, off: bodyStart})
 			}
 			l.pos = after
-			end := l.findTagEnd("%}")
+			end := l.findTagEnd(be)
 			if end < 0 {
-				return l.errf("unclosed '{%% endraw %%}' tag")
+				return l.errf("unclosed '%s endraw %s' tag", bs, be)
 			}
 			trimAfter := l.src[end-1] == '-'
-			l.pos = end + 2
+			l.pos = end + len(be)
 			l.applyTrimAfter(trimAfter, true)
 			return nil
 		}
 		l.pos = save
-		rest = l.src[save+i+2:]
+		rest = l.src[save+i+len(bs):]
 		if len(rest) == 0 {
-			return l.errf("missing '{%% endraw %%}'")
+			return l.errf("missing '%s endraw %s'", bs, be)
 		}
-		l.pos = save + i + 2
+		l.pos = save + i + len(bs)
 		rest = l.src[l.pos:]
 	}
 }
@@ -234,17 +270,13 @@ func (l *lexer) findTagEnd(closer string) int {
 			}
 			continue
 		}
-		switch c {
-		case '\'', '"':
+		switch {
+		case c == '\'' || c == '"':
 			inStr = c
-		case closer[0]:
-			if i+1 < len(l.src) && l.src[i+1] == closer[1] {
-				return i
-			}
-		case '-':
-			if i+2 < len(l.src) && l.src[i+1] == closer[0] && l.src[i+2] == closer[1] {
-				return i + 1
-			}
+		case strings.HasPrefix(l.src[i:], closer):
+			return i
+		case c == '-' && strings.HasPrefix(l.src[i+1:], closer):
+			return i + 1
 		}
 	}
 	return -1
@@ -252,15 +284,15 @@ func (l *lexer) findTagEnd(closer string) int {
 
 // lexTag tokenizes expression content until the matching closer token.
 func (l *lexer) lexTag(closer tokKind) error {
-	closeStr := "}}"
+	closeStr, openStr := l.varEnd, l.varStart
 	if closer == tokBlockEnd {
-		closeStr = "%}"
+		closeStr, openStr = l.blockEnd, l.blockStart
 	}
 	depth := 0 // bracket depth: a '}' at depth 0 may be part of '}}'
 	for {
 		l.skipTagWhitespace()
 		if l.pos >= len(l.src) {
-			return l.errf("unclosed %s (missing '%s')", map[tokKind]string{tokVarEnd: "'{{'", tokBlockEnd: "'{%'"}[closer], closeStr)
+			return l.errf("unclosed '%s' (missing '%s')", openStr, closeStr)
 		}
 		c := l.src[l.pos]
 
@@ -268,13 +300,13 @@ func (l *lexer) lexTag(closer tokKind) error {
 		if depth == 0 {
 			if c == '-' && strings.HasPrefix(l.src[l.pos+1:], closeStr) {
 				l.tokens = append(l.tokens, token{kind: closer, off: l.pos})
-				l.pos += 3
+				l.pos += 1 + len(closeStr)
 				l.applyTrimAfter(true, closer == tokBlockEnd)
 				return nil
 			}
 			if strings.HasPrefix(l.src[l.pos:], closeStr) {
 				l.tokens = append(l.tokens, token{kind: closer, off: l.pos})
-				l.pos += 2
+				l.pos += len(closeStr)
 				l.applyTrimAfter(false, closer == tokBlockEnd)
 				return nil
 			}
