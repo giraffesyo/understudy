@@ -36,6 +36,9 @@ type TaskRequest struct {
 	BecomeUser   string            `json:"become_user,omitempty"`   // informational
 	Background   bool              `json:"background,omitempty"`    // run as an async job (ansible's async_wrapper)
 	AsyncTimeout int               `json:"async_timeout,omitempty"` // async: seconds before the job is killed
+
+	// PythonInterpreter is ansible_python_interpreter ("" for discovery).
+	PythonInterpreter string `json:"python_interpreter,omitempty"`
 }
 
 // Result is the outcome of one module invocation. Its shape mirrors

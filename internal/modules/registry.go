@@ -44,6 +44,10 @@ type RunEnv struct {
 	FreeForm   string            // raw params for command/shell/script
 	Env        map[string]string // task environment: applied to shell-outs
 	Background bool              // fire-and-forget (async + poll: 0)
+
+	// PythonInterpreter is the task's ansible_python_interpreter ("" for
+	// discovery): output that depends on the target's Python follows it.
+	PythonInterpreter string
 }
 
 // ModuleFunc executes one module invocation. Failures are reported in the
@@ -88,6 +92,8 @@ func Run(req *agentproto.TaskRequest, payload io.Reader) (res *agentproto.Result
 		FreeForm:   req.FreeForm,
 		Env:        req.Env,
 		Background: req.Background,
+
+		PythonInterpreter: req.PythonInterpreter,
 	}
 	_, copyAction := req.Args[copyActionKey]
 	res = fn(env, req.Args)
