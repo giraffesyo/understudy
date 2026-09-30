@@ -287,6 +287,33 @@
       ignore_errors: true
     - debug: {var: r.msg}
 
+    - name: verify_commit on a signed commit
+      git: {repo: "{{ workdir }}/signed", dest: "{{ w }}/signed", verify_commit: true}
+      environment: {GNUPGHOME: "{{ workdir }}/gnupg"}
+      register: r
+    - debug: {var: r}
+
+    - name: verify_commit with the signer in gpg_allowlist
+      git:
+        repo: "{{ workdir }}/signed"
+        dest: "{{ w }}/signed"
+        verify_commit: true
+        gpg_allowlist: [35165AA9F99984CCB1EEB68C1851EB6CBAD553FF]
+      environment: {GNUPGHOME: "{{ workdir }}/gnupg"}
+      register: r
+    - debug: {var: r}
+
+    - name: verify_commit with only another key allowed
+      git:
+        repo: "{{ workdir }}/signed"
+        dest: "{{ w }}/signed"
+        verify_commit: true
+        gpg_allowlist: [0123456789ABCDEF0123456789ABCDEF01234567]
+      environment: {GNUPGHOME: "{{ workdir }}/gnupg"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
     - name: a repository that does not exist
       git: {repo: "{{ workdir }}/nope", dest: "{{ w }}/nope"}
       register: r
