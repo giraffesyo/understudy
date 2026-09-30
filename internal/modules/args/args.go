@@ -61,6 +61,50 @@ type Parsed struct {
 	values map[string]any
 }
 
+// AliasWarnings are the warnings _handle_aliases gives for raw: "Both
+// option X and its alias Y are set." for each alias set after the option
+// (or an earlier alias of it) was, whose value then wins.
+func (s Spec) AliasWarnings(raw map[string]any) []string {
+	names := make([]string, 0, len(s))
+	for name := range s {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out []string
+	for _, name := range names {
+		_, set := raw[name]
+		for _, alias := range s[name].Aliases {
+			if _, ok := raw[alias]; !ok {
+				continue
+			}
+			if set {
+				out = append(out, fmt.Sprintf("Both option %s and its alias %s are set.", name, alias))
+			}
+			set = true
+		}
+	}
+	return out
+}
+
+// ResolveAliases returns raw with each option that is set through an
+// alias holding the value that wins (the last alias set), and the aliases
+// removed, as _handle_aliases leaves the parameters.
+func (s Spec) ResolveAliases(raw map[string]any) map[string]any {
+	out := make(map[string]any, len(raw))
+	for k, v := range raw {
+		out[k] = v
+	}
+	for name, def := range s {
+		for _, alias := range def.Aliases {
+			if v, ok := raw[alias]; ok {
+				out[name] = v
+				delete(out, alias)
+			}
+		}
+	}
+	return out
+}
+
 // Parse validates raw args against the spec.
 func (s Spec) Parse(raw map[string]any) (*Parsed, error) {
 	values := map[string]any{}
@@ -81,10 +125,18 @@ func (s Spec) Parse(raw map[string]any) (*Parsed, error) {
 			unknown = append(unknown, key)
 			continue
 		}
-		if _, dup := values[name]; dup {
-			return nil, fmt.Errorf("both %q and an alias were given", name)
+		if name == key {
+			values[name] = val
 		}
-		values[name] = val
+	}
+	// _handle_aliases: an alias that is set overrides the option (and the
+	// aliases before it); AliasWarnings reports the overrides.
+	for name, def := range s {
+		for _, alias := range def.Aliases {
+			if v, ok := raw[alias]; ok {
+				values[name] = v
+			}
+		}
 	}
 	if len(unknown) > 0 {
 		sort.Strings(unknown)

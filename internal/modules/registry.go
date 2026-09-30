@@ -137,9 +137,29 @@ func Run(req *agentproto.TaskRequest, payload io.Reader) (res *agentproto.Result
 		Background: req.Background,
 	}
 	_, copyAction := req.Args[copyActionKey]
-	res = fn(env, req.Args)
+	args := req.Args
+	var aliasWarnings []string
+	if spec, ok := specs[req.Module]; ok {
+		// An option set along with its alias: the alias wins, with a
+		// warning (AnsibleModule's argument validation).
+		if aliasWarnings = spec.AliasWarnings(args); len(aliasWarnings) > 0 {
+			args = spec.ResolveAliases(args)
+		}
+	}
+	res = fn(env, args)
 	if res == nil {
 		res = agentproto.Fail("module %s returned no result", req.Module)
+	}
+	if len(aliasWarnings) > 0 {
+		warnings := make([]any, 0, len(aliasWarnings))
+		for _, w := range aliasWarnings {
+			warnings = append(warnings, w)
+		}
+		if res.Extra == nil {
+			res.Extra = map[string]any{}
+		}
+		prior, _ := res.Extra["warnings"].([]any)
+		res.Extra["warnings"] = append(warnings, prior...)
 	}
 	if pathInfoModules[req.Module] && !res.Skipped && !copyAction {
 		addPathInfo(res)
