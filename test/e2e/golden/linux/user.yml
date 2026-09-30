@@ -166,6 +166,28 @@
       shell: test -s /home/alice2/.ssh/new_rsa && test -s /home/alice2/.ssh/new_rsa.pub && stat -c '%U %a' /home/alice2/.ssh/new_rsa
       changed_when: false
 
+    - name: a passphrase key in check mode
+      user: {name: alice, generate_ssh_key: true, ssh_key_file: .ssh/pass_ed, ssh_key_type: ed25519, ssh_key_passphrase: "golden pass"}
+      check_mode: true
+
+    - name: a passphrase key (answered at the prompts)
+      user: {name: alice, generate_ssh_key: true, ssh_key_file: .ssh/pass_ed, ssh_key_type: ed25519, ssh_key_passphrase: "golden pass", ssh_key_comment: golden}
+      no_log: true
+
+    - name: the passphrase opens it, an empty one does not
+      shell: |
+        ssh-keygen -y -P 'golden pass' -f /home/alice2/.ssh/pass_ed | cut -d' ' -f1
+        ssh-keygen -y -P '' -f /home/alice2/.ssh/pass_ed >/dev/null 2>&1 || echo locked
+        stat -c '%U %a' /home/alice2/.ssh/pass_ed
+      changed_when: false
+
+    - name: an existing passphrase key is kept
+      user: {name: alice, generate_ssh_key: true, ssh_key_file: .ssh/pass_ed, ssh_key_passphrase: "golden pass"}
+      register: kept
+      no_log: true
+
+    - debug: {msg: "{{ kept.changed }} {{ kept.ssh_key_file }}"}
+
     - name: a system user without a home
       user: {name: svcgold, system: true, create_home: false, shell: /sbin/nologin}
 

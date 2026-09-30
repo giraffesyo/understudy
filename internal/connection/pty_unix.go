@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+
+	"github.com/giraffesyo/understudy/internal/ptyutil"
 )
 
 // localPTY is a local command on a pseudo-terminal.
@@ -39,7 +41,7 @@ func (p *localPTY) Kill() {
 // controlling terminal (a new session), for su and doas on a local
 // connection.
 func startLocalPTY(ctx context.Context, cmd string) (ptyProcess, error) {
-	master, slaveName, err := openPTY()
+	master, slaveName, err := ptyutil.Open()
 	if err != nil {
 		return nil, err
 	}
@@ -57,11 +59,4 @@ func startLocalPTY(ctx context.Context, cmd string) (ptyProcess, error) {
 		return nil, err
 	}
 	return &localPTY{master: master, cmd: c}, nil
-}
-
-func ioctl(fd uintptr, req uintptr, arg uintptr) error {
-	if _, _, e := syscall.Syscall(syscall.SYS_IOCTL, fd, req, arg); e != 0 {
-		return e
-	}
-	return nil
 }

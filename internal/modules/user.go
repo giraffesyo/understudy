@@ -1044,14 +1044,21 @@ func (u *userRun) sshKeyGen() (*int, string, string) {
 		comment = "ansible-generated on " + host
 	}
 	cmd = append(cmd, "-C", comment, "-f", keyFile)
-	// ansible-core answers ssh-keygen's passphrase prompts on a pty; the
-	// passphrase given with -N makes the same key.
-	passphrase := ""
+	var rc int
+	var out, errOut string
 	if u.p.Has("ssh_key_passphrase") {
-		passphrase = u.p.Str("ssh_key_passphrase")
+		// Answered at ssh-keygen's prompts on a pty, never in argv.
+		if u.env.CheckMode {
+			return &zero, "", ""
+		}
+		prc, pout, perr := sshKeygenPTY(u.env, cmd, u.p.Str("ssh_key_passphrase"))
+		if prc == nil {
+			return nil, pout, perr
+		}
+		rc, out, errOut = *prc, pout, perr
+	} else {
+		rc, out, errOut = u.execute(append(cmd, "-N", ""), overwrite, true)
 	}
-	cmd = append(cmd, "-N", passphrase)
-	rc, out, errOut := u.execute(cmd, overwrite, true)
 	if rc == 0 && !u.env.CheckMode {
 		os.Chown(keyFile, int(info.uid), int(info.gid))
 		os.Chown(pub, int(info.uid), int(info.gid))
