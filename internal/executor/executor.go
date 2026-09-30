@@ -649,15 +649,9 @@ func (r *Runner) runImportRole(ctx context.Context, play *playbook.Play, task *p
 	}
 	r.adoptBlocks(task, tasks)
 	for _, t := range tasks {
-		if len(task.Vars) > 0 {
-			merged := maps.Clone(task.Vars)
-			maps.Copy(merged, t.Vars)
-			t.Vars = merged
-		}
-		t.Tags = append(append([]string{}, task.Tags...), t.Tags...)
-		if len(task.When) > 0 {
-			t.When = append(append([]string{}, task.When...), t.When...)
-		}
+		// A static import is its tasks' parent: every inheritable
+		// keyword on it (and on its enclosing blocks) applies.
+		playbook.Inherit(t, task)
 	}
 	return r.runTaskList(ctx, play, tasks, playHosts, active, depth+1)
 }

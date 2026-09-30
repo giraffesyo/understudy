@@ -1,0 +1,5 @@
+---
+- name: nested include
+  include_tasks: keywords.yml
+  vars:
+    where: the nested include

@@ -1,0 +1,77 @@
+# Which keywords reach included and imported tasks. A static import is
+# its tasks' parent: environment, ignore_errors (every inheritable
+# keyword) apply to them. A dynamic include is not: its own keywords
+# (ignore_errors, timeout, tags, ...) stay on the include, while its
+# enclosing blocks' keywords and its apply: keywords reach its tasks,
+# nested includes too.
+- name: keyword inheritance through imports and includes
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: import_tasks passes its keywords down
+      import_tasks: includes/keywords.yml
+      environment:
+        KW_ENV: import_tasks
+      ignore_errors: true
+      vars:
+        where: import_tasks
+
+    - name: import_role passes its keywords down
+      import_role:
+        name: kwrole
+      environment:
+        KW_ENV: import_role
+      ignore_errors: true
+      vars:
+        where: import_role
+
+    - name: block keywords reach included tasks
+      block:
+        - name: include in a block
+          include_tasks: includes/keywords.yml
+          vars:
+            where: the block's include
+      environment:
+        KW_ENV: block
+      ignore_errors: true
+
+    - name: apply keywords reach included tasks
+      include_tasks:
+        file: includes/keywords.yml
+        apply:
+          environment:
+            KW_ENV: apply
+          ignore_errors: true
+      vars:
+        where: apply
+
+    - name: apply reaches a nested include's tasks
+      include_tasks:
+        file: includes/nested_include.yml
+        apply:
+          environment:
+            KW_ENV: outer apply
+          ignore_errors: true
+
+    - name: include_role with apply
+      include_role:
+        name: kwrole
+        apply:
+          environment:
+            KW_ENV: role apply
+          ignore_errors: true
+      vars:
+        where: include_role
+
+    - name: an include's own keywords stay on the include
+      block:
+        - name: include with ignore_errors and no_log
+          include_tasks: includes/keywords.yml
+          ignore_errors: true
+          no_log: true
+          vars:
+            where: plain include
+      rescue:
+        - name: the included failure was not ignored
+          debug:
+            msg: "rescued {{ ansible_failed_result.msg }}"

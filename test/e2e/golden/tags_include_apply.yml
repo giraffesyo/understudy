@@ -1,0 +1,49 @@
+# Run with --tags run_me,also: an include's own tags select the include
+# but not its tasks; apply: tags and enclosing block tags reach them;
+# an import's tags reach its tasks.
+- name: tags through includes
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: tagged include
+      include_tasks: includes/loop_vars.yml
+      tags: [run_me]
+      vars:
+        item: own tags only
+
+    - name: tagged include with apply tags
+      include_tasks:
+        file: includes/loop_vars.yml
+        apply:
+          tags: [also]
+      tags: [run_me]
+      vars:
+        item: apply tags
+
+    - name: tagged block around an include
+      tags: [also]
+      block:
+        - name: include in the tagged block
+          include_tasks: includes/loop_vars.yml
+          vars:
+            item: block tags
+
+    - name: tagged import
+      import_tasks: includes/loop_vars.yml
+      tags: [run_me]
+      vars:
+        item: import tags
+
+    - name: tagged include_role
+      include_role:
+        name: looprole
+      tags: [also]
+
+    - name: tagged include_role with apply
+      include_role:
+        name: looprole
+        apply:
+          tags: [run_me]
+      tags: [also]
+      vars:
+        it: role apply tags
