@@ -99,9 +99,9 @@ func (r *getURLRun) fail(msg string, extra map[string]any) *agentproto.Result {
 
 // getURLModule ports ansible.builtin.get_url.
 func getURLModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
-	p, err := getURLSpec.Parse(rawArgs)
-	if err != nil {
-		return agentproto.Fail("%v", err)
+	p, fail := parseModuleArgs(getURLSpec, rawArgs, "get_url")
+	if fail != nil {
+		return fail
 	}
 	r := &getURLRun{env: env, p: p}
 	defer func() {

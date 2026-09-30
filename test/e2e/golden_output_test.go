@@ -84,12 +84,19 @@ var (
 	loopbackPortRe = regexp.MustCompile(`//([^/@\s]*@)?(127\.0\.0\.1|localhost):[0-9]{4,5}\b`)
 	// Async job ids: j<random>.<pid>.
 	asyncJIDRe = regexp.MustCompile(`\bj[0-9]+\.[0-9]+\b`)
+	// A module's temp files: <remote_tmp>/ansible-tmp-<time>-<pid>-<random>/
+	// and tempfile names in it (get_url's download), which failure
+	// messages show at any verbosity.
+	stagingDirRe  = regexp.MustCompile(`/ansible-tmp-[0-9.]+-[0-9]+-[0-9]+/`)
+	stagingFileRe = regexp.MustCompile(`/ansible-tmp-X/tmp[a-z0-9_]{8}`)
 )
 
 func normalizeOutput(s, work string) string {
 	s = strings.ReplaceAll(s, work, "WORK")
 	s = loopbackPortRe.ReplaceAllString(s, "//$1$2:PORT")
 	s = asyncJIDRe.ReplaceAllString(s, "JID")
+	s = stagingDirRe.ReplaceAllString(s, "/ansible-tmp-X/")
+	s = stagingFileRe.ReplaceAllString(s, "/ansible-tmp-X/tmpX")
 	return timingRe.ReplaceAllString(s, `"$1": "T"`)
 }
 
