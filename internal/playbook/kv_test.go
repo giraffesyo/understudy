@@ -23,3 +23,27 @@ func TestParseKVJinja(t *testing.T) {
 		}
 	}
 }
+
+// Free-form command lines keep their spacing and newlines, as ansible-core's
+// split_args/join_args rebuild them; option words are taken out anywhere.
+func TestSplitFreeFormKeepsWhitespace(t *testing.T) {
+	cases := []struct {
+		in, free string
+		kv       map[string]any
+	}{
+		{"  echo hi  ", "  echo hi  ", nil},
+		{"echo a\necho b\n", "echo a\necho b\n", nil},
+		{"\n\necho a", "\n\necho a", nil},
+		{"echo 'a  b' \"c  d\"", "echo 'a  b' \"c  d\"", nil},
+		{"echo {{ x  }} y", "echo {{ x  }} y", nil},
+		{"echo a  chdir=/tmp  \n", "echo a ", map[string]any{"chdir": "/tmp"}},
+		{"iptables -F creates=/etc/x", "iptables -F", map[string]any{"creates": "/etc/x"}},
+		{"echo a=b", "echo a=b", nil},
+	}
+	for _, c := range cases {
+		free, kv := splitFreeForm(c.in, "shell")
+		if free != c.free || !reflect.DeepEqual(kv, c.kv) {
+			t.Errorf("%q: got %q %v, want %q %v", c.in, free, kv, c.free, c.kv)
+		}
+	}
+}
