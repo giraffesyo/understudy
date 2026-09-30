@@ -82,11 +82,14 @@ var (
 	timingRe = regexp.MustCompile(`"(delta|start|end)": "[^"]*"`)
 	// The HTTP fixture's (golden/files/http_fixture.py) ephemeral ports.
 	loopbackPortRe = regexp.MustCompile(`//([^/@\s]*@)?(127\.0\.0\.1|localhost):[0-9]{4,5}\b`)
+	// Async job ids: j<random>.<pid>.
+	asyncJIDRe = regexp.MustCompile(`\bj[0-9]+\.[0-9]+\b`)
 )
 
 func normalizeOutput(s, work string) string {
 	s = strings.ReplaceAll(s, work, "WORK")
 	s = loopbackPortRe.ReplaceAllString(s, "//$1$2:PORT")
+	s = asyncJIDRe.ReplaceAllString(s, "JID")
 	return timingRe.ReplaceAllString(s, `"$1": "T"`)
 }
 

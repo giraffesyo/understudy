@@ -9,7 +9,17 @@ type Position struct {
 	File string
 	Line int
 	Col  int
+
+	// InContainer marks a template that is one item of a templated
+	// container (a list or dict argument): deprecated values its result
+	// still holds are reported for the container, whose origin is
+	// unknown, rather than at File:Line:Col.
+	InContainer bool
 }
+
+// ContainerOrigin is the origin a deprecated value found while finishing
+// a templated container is reported at: ansible-core's "<<container>>".
+var ContainerOrigin = Position{File: "<<container>>"}
 
 func (p Position) String() string {
 	if p.File == "" {

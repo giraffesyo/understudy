@@ -1,0 +1,19 @@
+---
+# At the threshold (not over it) the play goes on; hosts rescued do not
+# count, and the failed host still fails the run.
+- hosts: a:b
+  gather_facts: false
+  max_fail_percentage: 50
+  tasks:
+    - block:
+        - fail:
+          when: inventory_hostname == 'h2'
+      rescue:
+        - debug: msg=rescued
+    - fail:
+      when: inventory_hostname == 'h1'
+    - debug: msg=after
+- hosts: b
+  gather_facts: false
+  tasks:
+    - debug: msg=reached

@@ -830,8 +830,11 @@ func seqReduce(better func(a, b any) (bool, error)) FilterFunc {
 		if err != nil {
 			return nil, err
 		}
+		// With attribute=, items compare by it, and the item wins (Jinja's
+		// key function).
+		keys := items
 		if attr, ok := kwargs["attribute"]; ok {
-			items, err = extractAll(items, attr)
+			keys, err = extractAll(items, attr)
 			if err != nil {
 				return nil, err
 			}
@@ -839,17 +842,17 @@ func seqReduce(better func(a, b any) (bool, error)) FilterFunc {
 		if len(items) == 0 {
 			return nil, fmt.Errorf("sequence is empty")
 		}
-		best := items[0]
-		for _, item := range items[1:] {
-			b, err := better(item, best)
+		best := 0
+		for i := 1; i < len(items); i++ {
+			b, err := better(keys[i], keys[best])
 			if err != nil {
 				return nil, err
 			}
 			if b {
-				best = item
+				best = i
 			}
 		}
-		return best, nil
+		return items[best], nil
 	}
 }
 

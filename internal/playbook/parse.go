@@ -42,7 +42,7 @@ var playKeywords = map[string]bool{
 	"force_handlers": true, "vars_prompt": true,
 	"gather_subset": true, "gather_timeout": true, "fact_path": true,
 	"check_mode": true, "diff": true, "become_flags": true, "become_exe": true,
-	"debugger": true,
+	"debugger": true, "timeout": true,
 }
 
 // Deferred play keys that must fail loudly rather than be ignored.
@@ -303,11 +303,17 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 			}
 			play.Roles = refs
 		case "environment":
-			v, err := decodeMap(val, file, "environment")
+			v, err := decodeEnvironment(val)
 			if err != nil {
 				return nil, err
 			}
 			play.Environment = v
+		case "timeout":
+			v, err := val.Decode()
+			if err != nil {
+				return nil, err
+			}
+			play.Timeout = v
 		case "serial":
 			v, err := val.Decode()
 			if err != nil {
@@ -493,7 +499,9 @@ func parseImportTasks(item, pathNode *yaml.Node, file string, handlers bool, bc 
 		case "debugger":
 			inh.Debugger, err = parseDebugger(val, file)
 		case "environment":
-			inh.Environment, err = decodeMap(val, file, "environment")
+			inh.Environment, err = decodeEnvironment(val)
+		case "timeout":
+			inh.Timeout, err = val.Decode()
 		case "no_log":
 			inh.NoLog, _, err = decodeBoolKW(inh, val, file, "no_log")
 		case "delegate_to":
@@ -591,6 +599,18 @@ func parseRoleRefs(node *yaml.Node, file string) ([]*RoleRef, error) {
 				} else {
 					ref.Diff = &b
 				}
+			case "environment":
+				env, err := decodeEnvironment(val)
+				if err != nil {
+					return nil, err
+				}
+				ref.Environment = env
+			case "timeout":
+				v, err := val.Decode()
+				if err != nil {
+					return nil, err
+				}
+				ref.Timeout = v
 			case "become", "become_user", "delegate_to":
 				return nil, errAt(file, val, "role keyword %q is not supported yet", key)
 			default:
@@ -661,7 +681,9 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 		case "tags":
 			inh.Tags = decodeStringList(val)
 		case "environment":
-			inh.Environment, err = decodeMap(val, file, "environment")
+			inh.Environment, err = decodeEnvironment(val)
+		case "timeout":
+			inh.Timeout, err = val.Decode()
 		case "no_log":
 			inh.NoLog, _, err = decodeBoolKW(&inh, val, file, "no_log")
 		case "ignore_errors":
@@ -776,14 +798,12 @@ func applyBlockInheritance(t *Task, inh *Task) {
 		t.Tags = append(append([]string{}, inh.Tags...), t.Tags...)
 	}
 	if len(inh.Environment) > 0 {
-		merged := make(map[string]any, len(inh.Environment)+len(t.Environment))
-		for k, v := range inh.Environment {
-			merged[k] = v
-		}
-		for k, v := range t.Environment {
-			merged[k] = v
-		}
-		t.Environment = merged
+		// The enclosing environments come first: their values merge in
+		// before the task's own (ansible-core's prepend-extended list).
+		t.Environment = append(append([]any{}, inh.Environment...), t.Environment...)
+	}
+	if t.Timeout == nil {
+		t.Timeout = inh.Timeout
 	}
 	t.NoLog = t.NoLog || inh.NoLog
 	t.IgnoreErrors = t.IgnoreErrors || inh.IgnoreErrors
@@ -1023,11 +1043,17 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			}
 			task.Vars = m
 		case "environment":
-			m, err := decodeMap(val, file, "environment")
+			v, err := decodeEnvironment(val)
 			if err != nil {
 				return nil, err
 			}
-			task.Environment = m
+			task.Environment = v
+		case "timeout":
+			v, err := val.Decode()
+			if err != nil {
+				return nil, err
+			}
+			task.Timeout = v
 		case "notify":
 			task.Notify = decodeStringList(val)
 		case "listen":
@@ -1083,7 +1109,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			if ok {
 				task.Diff = &b
 			}
-		case "throttle", "timeout", "ignore_unreachable", "collections",
+		case "throttle", "ignore_unreachable", "collections",
 			"module_defaults", "port":
 			// Accepted: no effect on execution outcome here.
 		case "async":
@@ -1276,6 +1302,24 @@ func emptyValue(v any) bool {
 		return len(t) == 0
 	}
 	return false
+}
+
+// decodeEnvironment decodes the environment keyword: a mapping, a
+// template, or a list of them. Each is an entry that merges, in order, into
+// the environment at run time (ansible-core's list-valued environment,
+// extended by prepending the enclosing blocks', role's and play's).
+func decodeEnvironment(node *yaml.Node) ([]any, error) {
+	v, err := node.Decode()
+	if err != nil {
+		return nil, err
+	}
+	switch t := v.(type) {
+	case nil:
+		return nil, nil
+	case []any:
+		return t, nil
+	}
+	return []any{v}, nil
 }
 
 func decodeMap(node *yaml.Node, file, key string) (map[string]any, error) {

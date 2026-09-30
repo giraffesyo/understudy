@@ -66,10 +66,7 @@ func scriptModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		cmd.Dir = chdir
 	}
 	if len(env.Env) > 0 {
-		cmd.Env = os.Environ()
-		for k, v := range env.Env {
-			cmd.Env = append(cmd.Env, k+"="+v)
-		}
+		cmd.Env = env.Environ()
 	}
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout

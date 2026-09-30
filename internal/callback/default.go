@@ -217,6 +217,12 @@ func (d *Default) Included(task *playbook.Task, target string, hosts []string, i
 	d.display(cCyan, line)
 }
 
+func (d *Default) NoHostsRemaining() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.banner("NO MORE HOSTS LEFT")
+}
+
 func (d *Default) HostUnreachable(host string, task *playbook.Task, msg string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -237,7 +243,7 @@ func (d *Default) Recap(stats map[string]*executor.HostStats, order []string) {
 	sort.Strings(hosts)
 	for _, host := range hosts {
 		st := stats[host]
-		if st == nil {
+		if !st.Processed() {
 			continue
 		}
 		fmt.Fprintf(d.Out, "%s : %s %s %s %s %s %s %s\n",
@@ -416,13 +422,22 @@ func (d *Default) taskError(task *playbook.Task, res *agentproto.Result) {
 func (d *Default) taskErrorChain(task *playbook.Task, ec *agentproto.ErrorChain) {
 	var b strings.Builder
 	brief := ec.Outer
-	if !strings.HasSuffix(ec.Outer, ec.Inner) {
-		brief = strings.TrimRight(ec.Outer, ". ") + ": " + ec.Inner
+	for _, cause := range []string{ec.Mid, ec.Inner} {
+		if cause != "" && !strings.HasSuffix(brief, cause) {
+			brief = strings.TrimRight(brief, ". ") + ": " + cause
+		}
 	}
 	b.WriteString("[ERROR]: " + brief + "\n\n" + ec.Outer + "\n")
 	if task.Src.File != "" && task.Src.Line > 0 {
 		fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n", task.Src.File, task.Src.Line, task.Src.Col)
 		b.WriteString(strings.TrimRight(d.excerpt(task.Src.File, task.Src.Line, task.Src.Col), "\n") + "\n")
+	}
+	if ec.Mid != "" {
+		b.WriteString("\n<<< caused by >>>\n\n" + ec.Mid + "\n")
+		if ec.MidFile != "" && ec.MidLine > 0 {
+			fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n", ec.MidFile, ec.MidLine, ec.MidCol)
+			b.WriteString(strings.TrimRight(d.excerpt(ec.MidFile, ec.MidLine, ec.MidCol), "\n") + "\n")
+		}
 	}
 	b.WriteString("\n<<< caused by >>>\n\n")
 	switch {

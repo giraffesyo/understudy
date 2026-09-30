@@ -1,0 +1,67 @@
+---
+# Where deprecation warnings point, and which reads warn: filters warn
+# about the deprecated values they read (not every one their input
+# holds), a variable's templates report from its definition, list-form
+# assert conditions from each entry, and templates inside container
+# arguments from their own entry, or from '<<container>>' for a
+# deprecated value their result still holds.
+- name: deprecation origins
+  hosts: all
+  gather_facts: false
+  vars:
+    via_template: "{{ r.skipped_reason }}"
+    nested:
+      inner: "{{ r.skipped_reason }}"
+    listed:
+      - "{{ r.skipped_reason }}"
+    hosts_copy: "{{ play_hosts }}"
+  tasks:
+    - debug: msg=x
+      loop: []
+      register: r
+    - set_fact:
+        n: {x: "{{ r }}"}
+    - set_fact:
+        l: ["{{ r }}"]
+    - debug: {msg: "{{ r | type_debug }}"}
+    - debug: {msg: "{{ r | list | length }}"}
+    - debug: {msg: "{{ r | dict2items | length }}"}
+    - debug: {msg: "{{ n | dict2items | length }}"}
+    - debug: {msg: "{{ n | to_json | length }}"}
+    - debug: {msg: "{{ l | first | type_debug }}"}
+    - debug: {msg: "{{ r | combine({}) | length }}"}
+    - debug: {msg: "{{ n | combine({'y': 1}) | length }}"}
+    - debug: {msg: "{{ n | combine({'x': {'y': 1}}, recursive=True) | length }}"}
+    - debug: {msg: "{{ r.keys() | list | length }}"}
+    - debug: {msg: "{{ r | select | list | length }}"}
+    - debug: {msg: "{{ r | unique | length }}"}
+    - debug: {msg: "{{ r | map('type_debug') | list | length }}"}
+    - debug: {msg: "{{ l | map('type_debug') | list }}"}
+    - debug: {msg: "{{ r.items() | list | length }}"}
+    - debug: {msg: "{{ r.get('skipped_reason') }}"}
+    - debug: {msg: "{{ n | dict2items | map(attribute='value') | map('type_debug') | list }}"}
+    - debug: {msg: "{{ [r] | map(attribute='skipped_reason') | list | length }}"}
+    - debug: {msg: "{{ l | min(attribute='changed') | type_debug }}"}
+    - debug: {msg: "{{ l | sort(attribute='changed') | length }}"}
+    - debug: {msg: "{{ l | join(',') | length }}"}
+    - debug: {msg: "{{ r | join(',') | length }}"}
+    - debug: {msg: "{{ l | flatten | length }}"}
+    - assert:
+        that:
+          - r.changed == false
+          - r.skipped_reason == 'No items in the list'
+          - "'x' in r.skipped_reason or true"
+    - debug: msg="{{ via_template }}"
+    - debug: var=via_template
+    - debug: msg="{{ nested.inner }}"
+    - debug: msg="{{ listed[0] }}"
+    - debug: msg="{{ hosts_copy }}"
+    - debug:
+        msg: "{{ task_level }}"
+      vars:
+        task_level: "{{ r.skipped_reason }}"
+    - debug: msg="{{ lookup('vars', 'via_template') }}"
+    - debug:
+        msg: ["a", "{{ r.skipped_reason }}"]
+    - debug:
+        msg: {x: {y: "{{ r }}"}}

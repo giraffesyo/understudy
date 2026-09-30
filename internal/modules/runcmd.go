@@ -3,7 +3,6 @@ package modules
 import (
 	"bytes"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
 )
@@ -33,13 +32,7 @@ func runCommand(env *RunEnv, argv []string, o cmdOpts) (int, string, string) {
 	cmd := exec.Command(path, argv[1:]...)
 	cmd.Dir = o.Cwd
 	if len(env.Env) > 0 || len(o.Env) > 0 {
-		cmd.Env = os.Environ()
-		for k, v := range env.Env {
-			cmd.Env = append(cmd.Env, k+"="+v)
-		}
-		for k, v := range o.Env {
-			cmd.Env = append(cmd.Env, k+"="+v)
-		}
+		cmd.Env = env.Environ(o.Env)
 	}
 	switch {
 	case o.Stdin != nil:

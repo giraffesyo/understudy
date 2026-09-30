@@ -31,7 +31,8 @@ type TaskRequest struct {
 	FreeForm     string            `json:"free_form,omitempty"` // command/shell raw params
 	CheckMode    bool              `json:"check_mode,omitempty"`
 	Diff         bool              `json:"diff,omitempty"`
-	Env          map[string]string `json:"env,omitempty"` // task environment: for shell-outs
+	Env          map[string]string `json:"env,omitempty"`       // task environment: for shell-outs
+	EnvOrder     []string          `json:"env_order,omitempty"` // Env's variables in the task's order
 	PayloadLen   int64             `json:"payload_len,omitempty"`
 	BecomeUser   string            `json:"become_user,omitempty"`   // informational
 	Background   bool              `json:"background,omitempty"`    // run as an async job (ansible's async_wrapper)
@@ -83,6 +84,12 @@ type ErrorChain struct {
 	// InnerFile/InnerLine/InnerCol locate the cause's origin, when known.
 	InnerFile           string
 	InnerLine, InnerCol int
+
+	// Mid, when set, is a cause between the two (Outer caused by Mid,
+	// caused by Inner), located at MidFile:MidLine:MidCol.
+	Mid             string
+	MidFile         string
+	MidLine, MidCol int
 }
 
 // causeKey carries Result.Cause across the agent wire.
@@ -150,7 +157,7 @@ func (r *Result) MarshalJSON() ([]byte, error) {
 	if len(r.AnsibleFacts) > 0 {
 		m["ansible_facts"] = r.AnsibleFacts
 	}
-	return json.Marshal(m)
+	return json.Marshal(wireFloats(m))
 }
 
 // UnmarshalJSON collects typed fields and stashes the rest in Extra.

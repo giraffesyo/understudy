@@ -1,0 +1,18 @@
+---
+# A later play's clear_host_errors clears an earlier play's failure: the
+# host sits that play out but runs again in the next, and the run exits 0.
+- hosts: a:b
+  gather_facts: false
+  tasks:
+    - fail:
+      when: inventory_hostname == 'h1'
+- hosts: a:b
+  gather_facts: false
+  tasks:
+    - debug: msg=before
+    - meta: clear_host_errors
+    - debug: msg=after
+- hosts: a
+  gather_facts: false
+  tasks:
+    - debug: msg=again

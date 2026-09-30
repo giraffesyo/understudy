@@ -11,7 +11,11 @@ import (
 // WriteFrame writes the request header line and, if req.PayloadLen > 0,
 // copies exactly that many bytes from payload.
 func WriteFrame(w io.Writer, req *TaskRequest, payload io.Reader) error {
-	header, err := json.Marshal(req)
+	wire := *req
+	if req.Args != nil {
+		wire.Args = wireFloats(req.Args).(map[string]any)
+	}
+	header, err := json.Marshal(&wire)
 	if err != nil {
 		return err
 	}
