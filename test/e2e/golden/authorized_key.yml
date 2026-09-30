@@ -1,0 +1,135 @@
+# ansible.posix.authorized_key against key files under workdir (path is
+# always given, so the module never touches the real ~/.ssh): merging,
+# ordering, options/comment handling, exclusive, absent, file:// keys,
+# symlinks, check mode and diffs.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    me: "{{ lookup('pipe', 'id -un') }}"
+    kf: "{{ workdir }}/ssh/authorized_keys"
+    k1: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl one@host"
+    k2: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDk2 two@host"
+    k3: "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTY3 three"
+  tasks:
+    - file: {path: "{{ workdir }}", state: directory}
+    - name: seed a file with comments, blanks, duplicates and junk
+      copy:
+        dest: "{{ workdir }}/seed"
+        content: |
+          # managed keys
+
+          {{ k2 }}
+          not a key line
+          no-pty,from="10.0.0.1,10.0.0.2" {{ k3 }}
+          {{ k2 }}
+
+          # trailing comment
+    - name: check mode against a missing file with a path
+      authorized_key: {user: "{{ me }}", path: "{{ kf }}", key: "{{ k1 }}"}
+      check_mode: true
+      diff: true
+    - name: multiple keys at once, dir is created
+      authorized_key:
+        user: "{{ me }}"
+        path: "{{ kf }}"
+        key: "{{ k1 }}\n# a comment\n\n{{ k2 }}"
+      diff: true
+    - name: again is ok
+      authorized_key:
+        user: "{{ me }}"
+        path: "{{ kf }}"
+        key: "{{ k1 }}\n{{ k2 }}"
+    - copy: {dest: "{{ workdir }}/pub", content: "{{ k3 }}\n{{ k2 }}\n"}
+    - name: key from a file url
+      authorized_key: {user: "{{ me }}", path: "{{ kf }}", key: "file://{{ workdir }}/pub"}
+      diff: true
+    - name: merge into a seeded file
+      authorized_key: {user: "{{ me }}", path: "{{ workdir }}/seed", key: "{{ k1 }}\n{{ k3 }}", manage_dir: false}
+      diff: true
+    - name: exclusive on the seeded file
+      authorized_key: {user: "{{ me }}", path: "{{ workdir }}/seed", key: "{{ k3 }}", exclusive: true, manage_dir: false}
+      diff: true
+    - name: missing file url
+      authorized_key: {user: "{{ me }}", path: "{{ kf }}", key: "file://{{ workdir }}/nope"}
+      ignore_errors: true
+    - name: directory file url
+      authorized_key: {user: "{{ me }}", path: "{{ kf }}", key: "file://{{ workdir }}"}
+      ignore_errors: true
+    - name: unreachable url
+      authorized_key: {user: "{{ me }}", path: "{{ kf }}", key: "http://127.0.0.1:9/keys", validate_certs: false}
+      ignore_errors: true
+    - name: options in reverse order are the same options
+      authorized_key:
+        user: "{{ me }}"
+        path: "{{ kf }}"
+        key: "{{ k3 }}"
+        key_options: 'from="10.0.0.1,10.0.0.2",no-pty'
+    - name: changed options rewrite the key at the end
+      authorized_key:
+        user: "{{ me }}"
+        path: "{{ kf }}"
+        key: "{{ k3 }}"
+        key_options: 'no-agent-forwarding,,x="a b",y'
+      diff: true
+    - name: key options embedded in the key
+      authorized_key:
+        user: "{{ me }}"
+        path: "{{ kf }}"
+        key: 'environment="A=1" {{ k1 }}'
+      diff: true
+    - name: comment override
+      authorized_key: {user: "{{ me }}", path: "{{ kf }}", key: "{{ k2 }}", comment: "new comment"}
+      diff: true
+    - name: absent with other options still removes
+      authorized_key: {user: "{{ me }}", path: "{{ kf }}", key: "{{ k2 }}", state: absent, key_options: "no-pty"}
+      diff: true
+    - name: absent again is ok
+      authorized_key: {user: "{{ me }}", path: "{{ kf }}", key: "{{ k2 }}", state: absent}
+    - name: exclusive in check mode
+      authorized_key: {user: "{{ me }}", path: "{{ kf }}", key: "{{ k2 }}\n{{ k1 }}", exclusive: true}
+      check_mode: true
+      diff: true
+    - name: exclusive
+      authorized_key: {user: "{{ me }}", path: "{{ kf }}", key: "{{ k2 }}\n{{ k1 }}", exclusive: true}
+      diff: true
+    - name: exclusive again
+      authorized_key: {user: "{{ me }}", path: "{{ kf }}", key: "{{ k2 }}\n{{ k1 }}", exclusive: true}
+    - name: escaped hash in a comment
+      authorized_key: {user: "{{ me }}", path: "{{ kf }}", key: "{{ k3 }} x \\#y"}
+      diff: true
+    - name: symlinked key file, followed
+      file: {src: "{{ kf }}", dest: "{{ workdir }}/link_keys", state: link}
+    - authorized_key: {user: "{{ me }}", path: "{{ workdir }}/link_keys", key: "{{ k2 }} z", follow: true, manage_dir: false}
+      diff: true
+    - name: symlinked key file replaced
+      authorized_key: {user: "{{ me }}", path: "{{ workdir }}/link_keys", key: "{{ k2 }} zz", manage_dir: false}
+      diff: true
+    - name: the link was replaced by a file
+      debug:
+        msg: "{{ lookup('pipe', 'test -L ' ~ workdir ~ '/link_keys && echo link || echo file') }}"
+    - name: missing parent without manage_dir
+      authorized_key: {user: "{{ me }}", path: "{{ workdir }}/a/b/keys", key: "{{ k2 }}", manage_dir: false}
+    - name: missing parent with manage_dir
+      authorized_key: {user: "{{ me }}", path: "{{ workdir }}/c/d/keys", key: "{{ k2 }}"}
+      ignore_errors: true
+    - name: bad key type
+      authorized_key: {user: "{{ me }}", path: "{{ kf }}", key: "ssh-foo AAAA"}
+      ignore_errors: true
+    - name: bad args
+      authorized_key: {user: "{{ me }}", path: "{{ kf }}", key: "{{ k2 }}", state: gone}
+      ignore_errors: true
+    - command: cat {{ kf }}
+      register: final
+      changed_when: false
+    - debug: {var: final.stdout_lines}
+    - name: unknown user
+      ansible.posix.authorized_key: {user: nosuchuser_us, key: "{{ k1 }}"}
+      ignore_errors: true
+    - name: unknown user in check mode without a path
+      ansible.posix.authorized_key: {user: nosuchuser_us, key: "{{ k1 }}"}
+      check_mode: true
+      ignore_errors: true
+    - name: unknown user in check mode with a path needs no lookup
+      ansible.posix.authorized_key: {user: nosuchuser_us, key: "{{ k1 }}", path: "{{ workdir }}/other/keys"}
+      check_mode: true
+      diff: true
