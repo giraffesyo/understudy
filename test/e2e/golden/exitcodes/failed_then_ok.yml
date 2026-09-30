@@ -1,0 +1,12 @@
+---
+# A host that failed in an earlier play stays failed: the last play's
+# result is still RUN_FAILED_HOSTS though the play itself went fine.
+- hosts: a:b
+  gather_facts: false
+  tasks:
+    - fail:
+      when: inventory_hostname == 'h1'
+- hosts: b
+  gather_facts: false
+  tasks:
+    - debug: msg=ok

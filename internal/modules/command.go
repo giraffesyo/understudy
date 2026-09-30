@@ -143,10 +143,7 @@ func mkCommand(shell bool) ModuleFunc {
 			cmd.Dir = chdir
 		}
 		if len(env.Env) > 0 {
-			cmd.Env = os.Environ()
-			for k, v := range env.Env {
-				cmd.Env = append(cmd.Env, k+"="+v)
-			}
+			cmd.Env = env.Environ()
 		}
 		if hasStdin {
 			if nl, err := argBool(args, "stdin_add_newline", true); err == nil && nl && !strings.HasSuffix(stdinStr, "\n") {

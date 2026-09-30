@@ -170,9 +170,7 @@ func validateArgSpec(spec, params map[string]any, ctx []string) []string {
 			legal[a] = true
 			aliasNames = append(aliasNames, a)
 			if v, ok := params[a]; ok {
-				if _, has := params[name]; !has {
-					params[name] = v
-				}
+				params[name] = v // a set alias overrides the option (_handle_aliases)
 			}
 		}
 	}

@@ -1,0 +1,21 @@
+---
+# --step: each task is confirmed (y), skipped (n) or run with the rest of
+# the play (c); (c)ontinue lasts for one play. A host none of whose tasks
+# ran is left out of the recap.
+- hosts: a:b
+  gather_facts: false
+  tasks:
+    - name: first
+      debug: msg=first
+    - fail:
+      when: inventory_hostname == 'h1'
+    - debug: msg=continued
+    - debug: msg="also continued"
+- hosts: b
+  gather_facts: false
+  tasks:
+    - debug: msg="step again"
+- hosts: a
+  gather_facts: false
+  tasks:
+    - debug: msg="skipped by step"

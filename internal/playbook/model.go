@@ -24,7 +24,8 @@ type Play struct {
 	PostTasks   []*Task
 	Handlers    []*Task
 	Tags        []string
-	Environment map[string]any
+	Environment []any // environment entries (mappings or templates), merged in order
+	Timeout     any   // timeout keyword, raw (nil = unset)
 	CheckMode   *bool // play-level check_mode (nil = the run's --check)
 	Debugger    string
 	Diff        *bool // play-level diff (nil = the run's --diff)
@@ -109,7 +110,8 @@ type Task struct {
 	Delay          int
 	Become         BecomeFields
 	Vars           map[string]any
-	Environment    map[string]any
+	Environment    []any // environment entries, enclosing blocks' and role's first
+	Timeout        any   // timeout keyword, raw: an int or a template (nil = inherit)
 	Notify         []string
 	Tags           []string
 	NoLog          bool
@@ -164,6 +166,8 @@ type RoleRef struct {
 	Tags   []string
 	// CheckMode/Diff are the role entry's check_mode/diff keywords.
 	CheckMode, Diff *bool
+	Environment     []any // the role entry's environment entries
+	Timeout         any   // the role entry's timeout keyword (nil = unset)
 	Src             Pos
 }
 

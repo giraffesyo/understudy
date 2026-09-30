@@ -1,0 +1,14 @@
+---
+# Breaching max_fail_percentage ends the play and the whole run (no later
+# plays), with RUN_FAILED_HOSTS.
+- hosts: a:b
+  gather_facts: false
+  max_fail_percentage: 10
+  tasks:
+    - fail:
+      when: inventory_hostname == 'h1'
+    - debug: msg="not reached"
+- hosts: b
+  gather_facts: false
+  tasks:
+    - debug: msg="not reached"

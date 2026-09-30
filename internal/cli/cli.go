@@ -364,6 +364,7 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 
 		NoDeprecationWarnings: !cfg.DeprecationWarnings,
 		InjectFactsSet:        cfg.InjectFactsSet,
+		TaskTimeout:           cfg.TaskTimeout,
 	}
 	if cfg.Source != "" {
 		if abs, err := filepath.Abs(cfg.Source); err == nil {
@@ -650,9 +651,9 @@ func playbookCmd(args []string) int {
 		printError(err)
 		return 1
 	}
-	var all []*playbook.Play
+	var all [][]*playbook.Play
 	for _, b := range books {
-		all = append(all, b.plays...)
+		all = append(all, b.plays)
 	}
 	cb, err := buildCallback(p.verbosity, false, filepath.Dir(p.positional[0]))
 	if err != nil {
@@ -661,7 +662,7 @@ func playbookCmd(args []string) int {
 	}
 	runner := executor.NewRunner(inv, cb, opts)
 	runner.Limit = p.limit
-	code, err := runner.Run(context.Background(), all)
+	code, err := runner.RunPlaybooks(context.Background(), all)
 	if err != nil {
 		printError(err)
 		var ye *yaml.Error

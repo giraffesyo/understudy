@@ -53,6 +53,18 @@ func (ec *EvalCtx) deprecated(d Deprecated) {
 	}
 }
 
+// finalized reports d found in a template's result: at the template's
+// origin, or for its container when the template is an item of one.
+func (ec *EvalCtx) finalized(d Deprecated) {
+	if ec.pos.InContainer {
+		if ec.engine.Deprecation != nil {
+			ec.engine.Deprecation(ContainerOrigin, d)
+		}
+		return
+	}
+	ec.deprecated(d)
+}
+
 // access is reading v from a variable or container: a deprecated value
 // warns and yields its plain value.
 func (ec *EvalCtx) access(v any) any {
@@ -78,7 +90,7 @@ func (ec *EvalCtx) finalize(v any) any {
 	if k, ok := ec.vars.(KeepsDeprecated); ok {
 		keep = k.KeepDeprecated()
 	}
-	out, _ := walkDeprecated(v, ec.deprecated, !keep)
+	out, _ := walkDeprecated(v, ec.finalized, !keep)
 	if keep && ec.lastDeprecated != nil && sameValue(out, ec.lastDeprecated.Value) {
 		d := *ec.lastDeprecated
 		d.Value = out
