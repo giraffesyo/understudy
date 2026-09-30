@@ -1397,6 +1397,14 @@ func atoiOr(s string) any {
 }
 
 func groupID(env *RunEnv, group string) string {
+	if platformSystem() == "Darwin" { // grp.getgrnam: Directory Services
+		for _, l := range darwinGetentLines("group", group) {
+			if f := strings.Split(l, ":"); len(f) >= 3 && f[0] == group {
+				return f[2]
+			}
+		}
+		return ""
+	}
 	out, err := runOut(env, "getent", "group", group)
 	if err != nil {
 		return ""
