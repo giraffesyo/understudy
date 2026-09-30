@@ -1,0 +1,6 @@
+# YAML load error: a value with two quoted strings
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=x
+      when: "foo" in "bar"

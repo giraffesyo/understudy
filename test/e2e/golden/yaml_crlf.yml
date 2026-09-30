@@ -1,0 +1,9 @@
+# A playbook with CRLF line endings.
+- hosts: all
+  gather_facts: false
+  vars:
+    folded: >
+      one
+      two
+  tasks:
+    - debug: var=folded

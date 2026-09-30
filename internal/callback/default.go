@@ -450,7 +450,7 @@ func (d *Default) excerpt(file string, line, col int) string {
 	if !ok {
 		data, err := os.ReadFile(file)
 		if err == nil {
-			lines = strings.Split(string(data), "\n")
+			lines = template.SourceLines(string(data))
 		}
 		d.srcCache[file] = lines
 	}

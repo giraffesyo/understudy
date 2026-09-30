@@ -1,0 +1,7 @@
+# YAML load error: a complex (?) key that is a sequence
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        ? [a]
+        : b

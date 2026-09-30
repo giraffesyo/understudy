@@ -28,14 +28,11 @@ func loadTaskFile(path, srcDir string, handler bool) ([]*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := yaml.Parse(data, path)
-	if err != nil {
+	doc, err := yaml.ParseSingle(data, path)
+	if err != nil || doc == nil {
 		return nil, err
 	}
-	if len(f.Docs) == 0 {
-		return nil, nil
-	}
-	tasks, err := parseTaskListIn(f.Docs[0], path, handler, &blockCounter{}, nil)
+	tasks, err := parseTaskListIn(doc, path, handler, &blockCounter{}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -409,14 +406,11 @@ func loadYAMLBase(dir, base string) (*yaml.Node, string, error) {
 		if err != nil {
 			continue
 		}
-		f, err := yaml.Parse(data, path)
+		doc, err := yaml.ParseSingle(data, path)
 		if err != nil {
 			return nil, "", err
 		}
-		if len(f.Docs) == 0 {
-			return nil, path, nil
-		}
-		return f.Docs[0], path, nil
+		return doc, path, nil
 	}
 	return nil, "", nil
 }

@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/term"
@@ -552,6 +553,7 @@ func playbookCmd(args []string) int {
 	var rolesPath []string
 	if cfg, err := config.Load(); err == nil {
 		rolesPath = cfg.RolesPath
+		configureYAML(cfg)
 	}
 	for _, path := range p.positional {
 		// Load by absolute path: error origins show it, as in Ansible.
@@ -652,6 +654,10 @@ func playbookCmd(args []string) int {
 	code, err := runner.Run(context.Background(), all)
 	if err != nil {
 		printError(err)
+		var ye *yaml.Error
+		if errors.As(err, &ye) {
+			return 4 // a parser error, as at load
+		}
 		return 1
 	}
 	return code
@@ -916,6 +922,35 @@ func buildCallback(verbosity int, adhoc bool, playbookDir string) (executor.Call
 	return callback.Build(s, func(msg string) { fmt.Fprintf(os.Stderr, "[WARNING]: %s\n", msg) })
 }
 
+// configureYAML applies the YAML loader settings and shows its warnings
+// (duplicate mapping keys) as ansible-core's Display.warning does: the
+// message, the origin with the source excerpt, and the help text; an
+// identical warning shows once.
+func configureYAML(cfg *config.Config) {
+	yaml.DuplicateKeyMode = cfg.DuplicateDictKey
+	var mu sync.Mutex
+	shown := map[string]bool{}
+	yaml.OnWarning = func(w yaml.Warning) {
+		var msg string
+		switch {
+		case w.Line > 0:
+			msg = fmt.Sprintf("[WARNING]: %s\nOrigin: %s:%d:%d\n\n%s\n%s\n\n", w.Msg, w.File, w.Line, w.Col,
+				template.SourceExcerpt(w.File, w.Line, w.Col), w.Help)
+		case w.Value != "":
+			// A key with no origin (a bool): its value stands in for the source.
+			msg = fmt.Sprintf("[WARNING]: %s\nOrigin: <unknown>\n\n%s\n\n%s\n\n", w.Msg, w.Value, w.Help)
+		default:
+			msg = fmt.Sprintf("[WARNING]: %s %s\n", w.Msg, w.Help)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if !shown[msg] {
+			shown[msg] = true
+			fmt.Fprint(os.Stderr, msg)
+		}
+	}
+}
+
 // loadErrorCode is ansible-playbook's exit status for a playbook that
 // fails to load: 4 for a parser error, 1 for other errors (a missing file
 // or role).
@@ -933,9 +968,17 @@ func loadErrorCode(err error) int {
 func printError(err error) {
 	var oe playbook.OriginError
 	if errors.As(err, &oe) {
+		help := ""
+		if h, ok := oe.(interface{ HelpText() string }); ok && h.HelpText() != "" {
+			help = strings.TrimRight(h.HelpText(), "\n") + "\n\n"
+		}
 		if file, line, col := oe.Origin(); line > 0 {
-			fmt.Fprintf(os.Stderr, "[ERROR]: %s\nOrigin: %s:%d:%d\n\n%s\n", oe.Message(), file, line, col,
-				template.SourceExcerpt(file, line, col))
+			fmt.Fprintf(os.Stderr, "[ERROR]: %s\nOrigin: %s:%d:%d\n\n%s\n%s", oe.Message(), file, line, col,
+				template.SourceExcerpt(file, line, col), help)
+			return
+		} else if h, ok := oe.(interface{ HasOrigin() bool }); ok && h.HasOrigin() {
+			// An error that names its file but no position in it.
+			fmt.Fprintf(os.Stderr, "[ERROR]: %s\nOrigin: %s\n\n", oe.Message(), file)
 			return
 		}
 		fmt.Fprintf(os.Stderr, "[ERROR]: %s\n", oe.Message())

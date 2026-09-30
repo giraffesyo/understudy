@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/vars"
+	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
 // includeUnit is one IncludedFile in Ansible's sense: a resolved task file
@@ -145,10 +147,26 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 		r.mu.Unlock()
 	}
 
+	// Load the included files first: one that fails to parse ends the run
+	// (ansible-core re-raises parser errors from includes), before any
+	// "included:" line.
+	loaded := make([][]*playbook.Task, len(units))
+	loadErrs := make([]error, len(units))
+	for i, u := range units {
+		if isRole {
+			loaded[i], loadErrs[i] = r.loadIncludedRole(play, task, u.target)
+		} else {
+			loaded[i], loadErrs[i] = playbook.LoadTaskFile(u.target, task.SrcDir)
+		}
+		var ye *yaml.Error
+		if errors.As(loadErrs[i], &ye) {
+			return loadErrs[i]
+		}
+	}
 	for _, u := range units {
 		r.Callback.Included(task, u.target, u.hosts, u.label, u.hasItem)
 	}
-	for _, u := range units {
+	for ui, u := range units {
 		if r.playEnded {
 			return nil
 		}
@@ -163,25 +181,16 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 				scope[task.IndexVar] = int64(u.index)
 			}
 		}
-		var tasks []*playbook.Task
-		if isRole {
-			ri, err := r.loadIncludedRole(play, task, u.target)
-			if err != nil {
-				for _, host := range u.hosts {
+		tasks, err := loaded[ui], loadErrs[ui]
+		if err != nil {
+			for _, host := range u.hosts {
+				if isRole {
 					r.record(host, task, agentproto.Fail("%s: %v", task.Module, err), nil)
-				}
-				continue
-			}
-			tasks = ri
-		} else {
-			loaded, err := playbook.LoadTaskFile(u.target, task.SrcDir)
-			if err != nil {
-				for _, host := range u.hosts {
+				} else {
 					r.record(host, task, agentproto.Fail("include_tasks: %v", err), nil)
 				}
-				continue
 			}
-			tasks = loaded
+			continue
 		}
 		r.adoptBlocks(task, tasks)
 		for _, t := range tasks {

@@ -1,0 +1,6 @@
+# YAML load error: a !vault tag on a number
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: !vault 123

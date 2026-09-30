@@ -241,7 +241,6 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 	if err := r.promptVars(play); err != nil {
 		return err
 	}
-	r.Callback.PlayStart(play)
 	if play.Dir != "" {
 		// Several playbooks in one run: paths resolve from each play's
 		// own playbook directory.
@@ -290,6 +289,9 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 		}
 		r.Store.AddVarsFile(m)
 	}
+	// ansible-core reads vars_files before the banner: a file that fails
+	// to parse ends the run without one.
+	r.Callback.PlayStart(play)
 
 	allHosts, err := r.resolvePlayHosts(play)
 	if err != nil {

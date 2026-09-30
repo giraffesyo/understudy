@@ -15,13 +15,29 @@ func SourceExcerpt(file string, line, col int) string {
 	if err != nil {
 		return ""
 	}
-	return ExcerptLines(strings.Split(string(data), "\n"), line, col)
+	return ExcerptLines(SourceLines(string(data)), line, col)
+}
+
+// SourceLines splits a file's text into lines as Python's text-mode file
+// iteration does (universal newlines, no empty line after a final break;
+// an empty file reads as one empty line).
+func SourceLines(data string) []string {
+	data = strings.ReplaceAll(data, "\r\n", "\n")
+	data = strings.ReplaceAll(data, "\r", "\n")
+	lines := strings.Split(data, "\n")
+	if len(lines) > 1 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
 }
 
 // ExcerptLines is SourceExcerpt over a file's lines.
 func ExcerptLines(lines []string, line, col int) string {
-	if line > len(lines) || line < 1 {
+	if line < 1 || lines == nil {
 		return ""
+	}
+	if line > len(lines) {
+		return "(source not shown: file truncated)\n"
 	}
 	width := len(strconv.Itoa(line))
 	// Lines wider than 120 columns (with the label) are cut with "...",

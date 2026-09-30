@@ -1,0 +1,7 @@
+# YAML load error: a merge key listing a scalar
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        <<: [a]
+        msg: x
