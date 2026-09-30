@@ -1482,7 +1482,16 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 			if req.PythonInterpreter == "" {
 				req.PythonInterpreter = pythonInterpreter(vctx)
 			}
-			return r.runModule(ctx, host, target, kw, inProcess, become, task, envKeys, env, req, payload)
+			if req.PythonFallback == nil {
+				req.PythonFallback = varList(vctx, "ansible_interpreter_python_fallback")
+			}
+			b := become
+			if b != nil && !inProcess {
+				bs := *b
+				bs.Shell = r.shellOptions(target, kw, vctx)
+				b = &bs
+			}
+			return r.runModule(ctx, host, target, kw, inProcess, b, task, envKeys, env, req, payload)
 		},
 		SetFact: func(name string, value any) {
 			for _, h := range r.factHosts(host, target, task) {
@@ -1495,6 +1504,67 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 			}
 		},
 	}, target, nil
+}
+
+// shellOptions are the shell plugin options for a task's temporary files
+// on target: the ansible_admin_users, ansible_system_tmpdirs,
+// ansible_common_remote_group and ansible_shell_allow_world_readable_temp
+// variables over the configuration.
+func (r *Runner) shellOptions(target string, kw connection.Keywords, vctx *vars.Context) *connection.ShellOptions {
+	sh := r.Conns.Opts.Shell
+	sh.RemoteUser = r.Conns.RemoteUser(target, kw)
+	sh.RemoteTmp = r.remoteTmp(vctx)
+	sh.Warn = r.Conns.Opts.Warn
+	if l := varList(vctx, "ansible_admin_users"); l != nil {
+		sh.AdminUsers = l
+	}
+	if l := varList(vctx, "ansible_system_tmpdirs"); l != nil {
+		sh.SystemTmpdirs = l
+	}
+	if v, ok := vctx.Get("ansible_common_remote_group"); ok && v != nil {
+		if tv, err := vctx.TemplateValue(v); err == nil {
+			v = tv
+		}
+		sh.CommonRemoteGroup = fmt.Sprint(v)
+	}
+	if v, ok := vctx.Get("ansible_shell_allow_world_readable_temp"); ok && v != nil {
+		if tv, err := vctx.TemplateValue(v); err == nil {
+			v = tv
+		}
+		sh.WorldReadableTemp = template.Truthy(v) && !strings.EqualFold(fmt.Sprint(v), "false") && !strings.EqualFold(fmt.Sprint(v), "no")
+	}
+	return &sh
+}
+
+// varList is a list-typed variable (a list, or a comma-separated
+// string), nil when unset.
+func varList(vctx *vars.Context, name string) []string {
+	v, ok := vctx.Get(name)
+	if !ok || v == nil {
+		return nil
+	}
+	if tv, err := vctx.TemplateValue(v); err == nil {
+		v = tv
+	}
+	var out []string
+	switch t := v.(type) {
+	case []any:
+		for _, e := range t {
+			out = append(out, fmt.Sprint(e))
+		}
+	case string:
+		for _, e := range strings.Split(t, ",") {
+			if e = strings.TrimSpace(e); e != "" {
+				out = append(out, e)
+			}
+		}
+	default:
+		return nil
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out
 }
 
 // pythonInterpreter is the interpreter ansible would run the task's module
@@ -1841,7 +1911,9 @@ func (r *Runner) runModule(ctx context.Context, host, target string, kw connecti
 		if err != nil {
 			return nil, err
 		}
-		client := &connection.AgentClient{Conn: connection.NewLocal(), AgentPath: connection.ShellQuote(exe) + " " + modules.LocalAgentArg}
+		login := &connection.LoginInfo{Path: os.Getenv("PATH"), UID: os.Getuid(), GID: os.Getgid()}
+		login.Home, _ = os.UserHomeDir()
+		client := &connection.AgentClient{Conn: connection.NewLocal(), AgentPath: connection.ShellQuote(exe) + " " + modules.LocalAgentArg, Login: login}
 		res, err := client.Run(ctx, req, payload, become)
 		if bf := actions.BecomeFailure(err); bf != nil {
 			return bf, nil

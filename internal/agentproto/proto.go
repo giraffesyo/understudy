@@ -40,6 +40,24 @@ type TaskRequest struct {
 
 	// PythonInterpreter is ansible_python_interpreter ("" for discovery).
 	PythonInterpreter string `json:"python_interpreter,omitempty"`
+	// PythonFallback is ansible_interpreter_python_fallback, the list
+	// interpreter discovery tries (nil for ansible's default).
+	PythonFallback []string `json:"python_fallback,omitempty"`
+	// DiscoveryPath is the login user's PATH, which interpreter discovery
+	// searches ("" when the module runs as that user).
+	DiscoveryPath string `json:"discovery_path,omitempty"`
+
+	// LoginHome, LoginUID and LoginGID describe the login user when the
+	// module runs as another one: remote_tmp's ~ is the login user's
+	// home, and directories made there belong to that user (a negative
+	// id: unknown).
+	LoginHome string `json:"login_home,omitempty"`
+	LoginUID  int    `json:"login_uid,omitempty"`
+	LoginGID  int    `json:"login_gid,omitempty"`
+	// StageDir is the temporary directory a transferred file is reported
+	// in when an unprivileged become user runs the module (made by the
+	// login user in a system temp dir), "" otherwise.
+	StageDir string `json:"stage_dir,omitempty"`
 }
 
 // Result is the outcome of one module invocation. Its shape mirrors

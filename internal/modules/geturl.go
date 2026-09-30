@@ -416,18 +416,6 @@ func digestFileAlgo(p, algorithm string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// moduleTmpdir is AnsibleModule.tmpdir: a fresh
-// ~/.ansible/tmp/ansible-tmp-<time>-<pid>-<rand> directory.
-func moduleTmpdir() (string, error) {
-	base := pyExpandUser("~/.ansible/tmp")
-	if err := os.MkdirAll(base, 0o700); err != nil {
-		base = os.TempDir()
-	}
-	name := fmt.Sprintf("ansible-tmp-%s-%d-%d", pyFloat(float64(time.Now().UnixNano())/1e9), os.Getpid(), rand.Int63n(1<<48))
-	dir := filepath.Join(base, name)
-	return dir, os.Mkdir(dir, 0o700)
-}
-
 // mkstemp is tempfile.mkstemp(dir=dir): "tmp" plus 8 random characters.
 func mkstemp(dir string) (*os.File, error) {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789_"
@@ -482,7 +470,7 @@ func (r *getURLRun) urlGet(rawURL, dest string, lastMod time.Time, force bool, m
 		}
 	} else {
 		if r.tmpdir == "" {
-			dir, err := moduleTmpdir()
+			_, dir, err := transferDir(r.env, "~/.ansible/tmp")
 			if err != nil {
 				return "", nil, moduleCrash(err)
 			}

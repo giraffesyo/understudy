@@ -53,7 +53,7 @@ func runUnarchive(ctx context.Context, actx *Context, args map[string]any, _ str
 		}
 	}
 	delete(fwd, "decrypt")
-	marker := map[string]any{"transfer": !remoteSrc}
+	marker := map[string]any{"transfer": !remoteSrc, "remote_tmp": actx.RemoteTmp}
 	fwd["_unarchive_action"] = marker
 	req := &agentproto.TaskRequest{
 		Proto:     agentproto.ProtoVersion,

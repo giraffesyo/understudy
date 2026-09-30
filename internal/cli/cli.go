@@ -36,6 +36,9 @@ import (
 // Unstamped builds fall back to the module version `go install` records.
 var version = "0.1.0-dev"
 
+// connWarned holds the connection warnings already shown.
+var connWarned sync.Map
+
 func init() {
 	if version != "0.1.0-dev" {
 		return
@@ -377,9 +380,16 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		HostKeyChecking: cfg.HostKeyChecking,
 		Timeout:         timeout,
 		RemoteTmp:       cfg.RemoteTmp,
-		SSHArgs:         p.sshArgs,
+		Shell: connection.ShellOptions{
+			AdminUsers: cfg.AdminUsers, SystemTmpdirs: cfg.SystemTmpdirs,
+			CommonRemoteGroup: cfg.CommonRemoteGroup, WorldReadableTemp: cfg.WorldReadableTemp,
+		},
+		SSHArgs: p.sshArgs,
 		Warn: func(msg string) {
-			fmt.Fprintf(os.Stderr, "[WARNING]: %s\n", msg)
+			// Display.warning shows each distinct warning once.
+			if _, seen := connWarned.LoadOrStore(msg, true); !seen {
+				fmt.Fprintf(os.Stderr, "[WARNING]: %s\n", msg)
+			}
 		},
 		KeyPassphrase: func() (string, error) {
 			return promptSecret("SSH key passphrase")

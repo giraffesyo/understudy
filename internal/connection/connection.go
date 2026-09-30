@@ -27,6 +27,11 @@ type BecomeSpec struct {
 	// SuccessTimeout is the local connection's become_success_timeout
 	// (0: DefaultLocalBecomeTimeout).
 	SuccessTimeout time.Duration
+
+	// Shell, when set, carries the shell options that govern temporary
+	// files for this become user (an unprivileged one gets them in a
+	// system temp dir, readable through _fixup_perms2's chain).
+	Shell *ShellOptions
 }
 
 // ExecOptions modify one Exec call.
