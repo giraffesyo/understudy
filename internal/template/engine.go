@@ -81,6 +81,9 @@ type Engine struct {
 	// Deprecation receives each deprecated value a template reads, with
 	// the template's position (nil: no warnings).
 	Deprecation func(pos Position, d Deprecated)
+	// Verbose receives Display.verbose messages plugins print at a given
+	// verbosity (nil: none).
+	Verbose func(verbosity int, msg string)
 }
 
 // New returns an Engine with the built-in filters, tests, and globals.

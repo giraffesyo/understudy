@@ -59,9 +59,14 @@ func (r *Runner) runMeta(ctx context.Context, play *playbook.Play, task *playboo
 				return fmt.Errorf("%s:%d: meta %s: %v", task.Src.File, task.Src.Line, action, err)
 			}
 			if !ok {
+				r.displayVerbose(2, "META: "+metaSkipHeader(action, host))
 				r.Callback.HostResult(host, task, metaSkip(action, host), false, nil)
 				continue
 			}
+			if action == "flush_handlers" {
+				r.announceNotified(host)
+			}
+			r.displayVerbose(2, "META: "+metaMsg(action, host))
 			targets = append(targets, host)
 		}
 		switch action {
@@ -92,9 +97,11 @@ func (r *Runner) runMeta(ctx context.Context, play *playbook.Play, task *playboo
 		return fmt.Errorf("%s:%d: meta %s: %v", task.Src.File, task.Src.Line, action, err)
 	}
 	if !ok {
+		r.displayVerbose(2, "META: "+metaSkipHeader(action, active[0]))
 		r.Callback.HostResult(active[0], task, metaSkip(action, active[0]), false, nil)
 		return nil
 	}
+	r.displayVerbose(2, "META: "+metaMsg(action, active[0]))
 	switch action {
 	case "end_play":
 		r.playEnded = true
@@ -140,13 +147,57 @@ func (r *Runner) notEnded(playHosts, restrict []string) []string {
 	return out
 }
 
+// metaMsg is _execute_meta's message for a meta task that ran (shown
+// as "META: <msg>" at -vv).
+func metaMsg(action, host string) string {
+	switch action {
+	case "flush_handlers":
+		return "triggered running handlers for " + host
+	case "refresh_inventory":
+		return "inventory successfully refreshed"
+	case "clear_facts":
+		return "facts cleared"
+	case "clear_host_errors":
+		return "cleared host errors"
+	case "end_batch":
+		return "ending batch"
+	case "end_play":
+		return "ending play"
+	case "end_host":
+		return "ending play for " + host
+	case "reset_connection":
+		return "reset connection"
+	}
+	return action
+}
+
+// metaSkipHeader is _execute_meta's skip_reason for a meta task whose
+// when: is false.
+func metaSkipHeader(action, host string) string {
+	reason := action + " conditional evaluated to False"
+	switch action {
+	case "flush_handlers":
+		reason += ", not running handlers for " + host
+	case "clear_facts":
+		reason += ", not clearing facts and fact cache for " + host
+	case "clear_host_errors":
+		reason += ", not clearing host error state for " + host
+	case "end_batch":
+		reason += ", continuing current batch"
+	case "end_play":
+		reason += ", continuing play"
+	case "end_host":
+		reason += ", continuing execution for " + host
+	}
+	return reason
+}
+
 // metaSkip is ansible-core's result for a meta task whose when: is false.
 func metaSkip(action, host string) *agentproto.Result {
 	res := &agentproto.Result{Skipped: true, Msg: action, Extra: map[string]any{
-		"skip_reason": action + " conditional evaluated to False",
+		"skip_reason": metaSkipHeader(action, host),
 	}}
 	if action == "end_host" {
-		res.Extra["skip_reason"] = "end_host conditional evaluated to False, continuing execution for " + host
 		res.Msg = "end_host conditional evaluated to false, continuing execution for " + host
 	}
 	return res

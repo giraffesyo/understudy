@@ -52,6 +52,10 @@ type Play struct {
 	PlayRoleNames      []string
 	DependentRoleNames []string
 
+	// LoadNotes are the -vv lines loading the play printed, in ansible-core's
+	// load order: its roles, then handlers, pre_tasks, post_tasks, tasks.
+	LoadNotes []string
+
 	Src Pos
 }
 
@@ -125,6 +129,8 @@ type Task struct {
 	SrcDir         string     // role root for src resolution ("" = playbook dir)
 	RoleName       string     // owning role (for "role : task" banners); "" = play task
 	Src            Pos
+	Synthesized    bool           // built without a source of its own (get_path shows the play's)
+	LoadNotes      []string       // -vv lines loading it printed (plugin redirects, static imports)
 	ArgPos         map[string]Pos // source position of each map-form module arg value
 	ArgsPos        Pos            // the module's value (k=v or free-form string args share it)
 	KeywordPos     map[string]Pos // source position of each task keyword's value (when, ...)
@@ -148,6 +154,19 @@ func (t *Task) DisplayAction() string {
 		return t.Action
 	}
 	return t.Module
+}
+
+// GetName is Task.get_name(): the untemplated name (else the action),
+// prefixed "role : " for a role's task.
+func (t *Task) GetName() string {
+	name := t.Name
+	if name == "" {
+		name = t.DisplayAction()
+	}
+	if t.RoleName != "" {
+		return t.RoleName + " : " + name
+	}
+	return name
 }
 
 // Identity returns the parsed task this one was derived from.

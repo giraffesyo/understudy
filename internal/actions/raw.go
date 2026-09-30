@@ -26,6 +26,9 @@ func runRaw(ctx context.Context, actx *Context, args map[string]any, freeForm st
 	if exe, ok := args["executable"].(string); ok && exe != "" {
 		cmd = exe + " -c " + connection.ShellQuote(cmd)
 	}
+	if actx.Connecting != nil {
+		actx.Connecting()
+	}
 	res, err := actx.Conn.Exec(ctx, cmd, execOptions(actx))
 	if err != nil {
 		if bf := BecomeFailure(err); bf != nil {

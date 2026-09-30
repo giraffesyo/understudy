@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,24 +52,30 @@ type Default struct {
 	mu        sync.Mutex
 	errors    map[string]bool // Display de-duplicates repeated errors
 	warns     map[string]bool // ... and repeated warnings
+	play      *playbook.Play  // the current play (task paths of synthesized tasks)
 }
 
 // New builds the default callback, auto-detecting color and terminal width.
 func New(verbosity int) *Default {
 	fd := int(os.Stdout.Fd())
-	isTTY := term.IsTerminal(fd)
-	noColor := os.Getenv("NO_COLOR") != "" || os.Getenv("ANSIBLE_NOCOLOR") != "" || !isTTY
-	if v := os.Getenv("ANSIBLE_FORCE_COLOR"); v != "" && v != "0" && !strings.EqualFold(v, "false") {
-		noColor = false
-	}
 	// Display.columns = max(79, tty width - 1).
 	cols := 79
-	if isTTY {
+	if term.IsTerminal(fd) {
 		if w, _, err := term.GetSize(fd); err == nil && w-1 > cols {
 			cols = w - 1
 		}
 	}
-	return &Default{Out: os.Stdout, Err: os.Stderr, Verbosity: verbosity, NoColor: noColor, Columns: cols}
+	return &Default{Out: os.Stdout, Err: os.Stderr, Verbosity: verbosity, NoColor: NoColor(), Columns: cols}
+}
+
+// NoColor reports whether stdout output goes uncolored: not a terminal, or
+// NO_COLOR/ANSIBLE_NOCOLOR set, unless ANSIBLE_FORCE_COLOR is.
+func NoColor() bool {
+	noColor := os.Getenv("NO_COLOR") != "" || os.Getenv("ANSIBLE_NOCOLOR") != "" || !term.IsTerminal(int(os.Stdout.Fd()))
+	if v := os.Getenv("ANSIBLE_FORCE_COLOR"); v != "" && v != "0" && !strings.EqualFold(v, "false") {
+		noColor = false
+	}
+	return noColor
 }
 
 func (d *Default) paint(c color, s string) string {
@@ -101,6 +108,7 @@ func (d *Default) banner(msg string) {
 func (d *Default) PlayStart(play *playbook.Play) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.play = play
 	name := strings.TrimSpace(play.Name)
 	if name == "" {
 		name = play.HostPattern
@@ -120,6 +128,43 @@ func (d *Default) TaskStart(task *playbook.Task, displayName string, handler boo
 		kind = "RUNNING HANDLER"
 	}
 	d.banner(fmt.Sprintf("%s [%s]", kind, strings.TrimSpace(name)))
+	if d.Verbosity >= 2 {
+		d.taskPath(task)
+	}
+}
+
+// taskPath is _print_task_path: "task path: <file>:<line>".
+// A task built without a source of its own (a role's argument
+// validation) shows its play's.
+func (d *Default) taskPath(task *playbook.Task) {
+	src := task.Src
+	if task.Synthesized {
+		if d.play == nil {
+			return
+		}
+		src = d.play.Src
+	}
+	if src.File != "" && src.Line > 0 {
+		d.display(cDebug, fmt.Sprintf("task path: %s:%d", src.File, src.Line))
+	}
+}
+
+// PlaybookStart is v2_playbook_on_start: the -vv "PLAYBOOK: <file>" banner.
+func (d *Default) PlaybookStart(path string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.Verbosity > 1 {
+		d.banner("PLAYBOOK: " + filepath.Base(path))
+	}
+}
+
+// HandlerNotified is v2_playbook_on_notify.
+func (d *Default) HandlerNotified(handler *playbook.Task, host string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.Verbosity > 1 {
+		d.display(cVerbose, fmt.Sprintf("NOTIFIED HANDLER %s for %s", handler.GetName(), host))
+	}
 }
 
 func (d *Default) HostResult(host string, task *playbook.Task, res *agentproto.Result, ignored bool, item any) {
@@ -155,7 +200,7 @@ func (d *Default) HostResult(host string, task *playbook.Task, res *agentproto.R
 		if isItem {
 			line += fmt.Sprintf(" => (item=%s) ", itemLabel)
 		}
-		if d.Verbosity > 0 {
+		if d.runIsVerbose(task, res, 0) {
 			line += " => " + d.dump(task, res)
 		}
 		d.display(cCyan, line)
@@ -179,7 +224,7 @@ func (d *Default) HostResult(host string, task *playbook.Task, res *agentproto.R
 		if isItem {
 			line += fmt.Sprintf(" => (item=%s)", itemLabel)
 		}
-		if d.Verbosity > 0 || res.VerboseAlways {
+		if d.runIsVerbose(task, res, 0) {
 			line += " => " + d.dump(task, res)
 		}
 		d.display(c, line)
@@ -199,7 +244,7 @@ func (d *Default) LoopResult(host string, task *playbook.Task, res *agentproto.R
 		}
 	case res.Skipped:
 		line := fmt.Sprintf("skipping: [%s]", host)
-		if d.Verbosity > 0 {
+		if d.runIsVerbose(task, res, 0) {
 			line += " => " + d.dump(task, res)
 		}
 		d.display(cCyan, line)
@@ -283,6 +328,22 @@ func (d *Default) colorize(lead string, n int, c color) string {
 		return d.paint(c, s)
 	}
 	return s
+}
+
+// runIsVerbose is CallbackBase._run_is_verbose: past the given verbosity
+// (or with verbose_always) a result is dumped, except a setup/gather_facts
+// result, whose action sets _ansible_verbose_override.
+func (d *Default) runIsVerbose(task *playbook.Task, res *agentproto.Result, verbosity int) bool {
+	return (d.Verbosity > verbosity || res.VerboseAlways) && !verboseOverride(task.Module)
+}
+
+func verboseOverride(module string) bool {
+	switch module {
+	case "setup", "ansible.builtin.setup", "ansible.legacy.setup",
+		"gather_facts", "ansible.builtin.gather_facts", "ansible.legacy.gather_facts":
+		return true
+	}
+	return false
 }
 
 func (d *Default) indent(verboseAlways bool) int {
@@ -472,14 +533,17 @@ func (d *Default) excerpt(file string, line, col int) string {
 	return playbook.SourceContext(file, line, col)
 }
 
-const cDebug color = "0;90" // COLOR_DEBUG (dark gray)
+const (
+	cDebug   color = "0;90" // COLOR_DEBUG (dark gray)
+	cVerbose color = "0;34" // COLOR_VERBOSE (blue)
+)
 
 // Retrying is v2_runner_retry: "FAILED - RETRYING: [host]: task (N retries left)."
 func (d *Default) Retrying(host string, task *playbook.Task, name string, left int, res *agentproto.Result) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	line := fmt.Sprintf("FAILED - RETRYING: [%s]: %s (%d retries left).", host, name, left)
-	if d.Verbosity >= 2 || res.VerboseAlways {
+	if d.runIsVerbose(task, res, 2) {
 		// v2_runner_retry dumps without _clean_results (no debug trim).
 		line += "Result was: " + d.dumpRaw(task, res, false)
 	}

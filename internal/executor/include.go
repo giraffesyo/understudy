@@ -160,18 +160,27 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 	// "included:" line.
 	loaded := make([][]*playbook.Task, len(units))
 	loadErrs := make([]error, len(units))
+	notes := make([][]string, len(units))
 	for i, u := range units {
 		if isRole {
-			loaded[i], loadErrs[i] = r.loadIncludedRole(play, task, u.target)
+			var handlers []*playbook.Task
+			loaded[i], handlers, loadErrs[i] = r.loadIncludedRole(play, task, u.target)
+			notes[i] = append(playbook.TaskLoadNotes(loaded[i]), playbook.TaskLoadNotes(handlers)...)
 		} else {
 			loaded[i], loadErrs[i] = playbook.LoadTaskFile(u.target, task.SrcDir)
+			notes[i] = playbook.TaskLoadNotes(loaded[i])
 		}
 		var ye *yaml.Error
 		if errors.As(loadErrs[i], &ye) {
 			return loadErrs[i]
 		}
 	}
-	for _, u := range units {
+	for i, u := range units {
+		// Loading a file announces its redirects and imports (-vv) before
+		// its "included:" line.
+		for _, n := range notes[i] {
+			r.displayVerbose(2, n)
+		}
 		r.Callback.Included(task, u.target, u.hosts, u.label, u.hasItem)
 	}
 	for ui, u := range units {
@@ -254,12 +263,12 @@ func (r *Runner) adoptBlocks(include *playbook.Task, tasks []*playbook.Task) {
 }
 
 // loadIncludedRole loads a role for include_role, layering its defaults and
-// vars and registering its handlers, and returns its tasks.
-func (r *Runner) loadIncludedRole(play *playbook.Play, task *playbook.Task, name string) ([]*playbook.Task, error) {
+// vars and registering its handlers, and returns its tasks and handlers.
+func (r *Runner) loadIncludedRole(play *playbook.Play, task *playbook.Task, name string) ([]*playbook.Task, []*playbook.Task, error) {
 	tasksFrom, _ := task.Args["tasks_from"].(string)
 	ri, err := playbook.LoadRoleForInclude(name, r.Opts.BaseDir, r.Opts.RolesPath, tasksFrom)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(ri.Defaults) > 0 {
 		r.Store.AddRoleDefaults(ri.Defaults)
@@ -270,5 +279,5 @@ func (r *Runner) loadIncludedRole(play *playbook.Play, task *playbook.Task, name
 	r.mu.Lock() // include_role may run concurrently (parallel blocks)
 	play.Handlers = append(play.Handlers, ri.Handlers...)
 	r.mu.Unlock()
-	return ri.Tasks, nil
+	return ri.Tasks, ri.Handlers, nil
 }
