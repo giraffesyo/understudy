@@ -11,7 +11,7 @@
     - name: trailing removes skips when the file is missing
       shell: echo nope removes={{ workdir }}/missing
     - name: chdir in the middle
-      command: pwd chdir={{ workdir }}
+      command: pwd -P chdir={{ workdir }}
       register: pw
       changed_when: false
     - name: unknown k=v stays in the command
