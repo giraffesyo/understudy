@@ -68,6 +68,7 @@ type Result struct {
 	VerboseAlways bool   `json:"-"` // shown with its JSON even at -v0 (debug, assert)
 	DelegatedTo   string `json:"-"` // delegate_to target, when not the host itself
 	ShowDiff      bool   `json:"-"` // diff mode is on for the task: display Diff
+	Censored      bool   `json:"-"` // no_log: display only the censored placeholder
 }
 
 // ErrorChain is a two-level exception chain for error display.

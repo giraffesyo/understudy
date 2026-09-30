@@ -1,0 +1,73 @@
+---
+# Templated task/block keywords (no_log, ignore_errors, retries, delay)
+# resolved per host, and no_log censoring of ok, failed and loop results.
+- name: no_log and templated keywords
+  hosts: all
+  gather_facts: false
+  vars:
+    hide: true
+    tolerate: "yes"
+    tries: 2
+  tasks:
+    - name: ok result hidden
+      command: echo secret
+      no_log: "{{ hide }}"
+      register: out
+
+    - name: registered value is not censored
+      debug:
+        msg: "{{ out.stdout }}"
+
+    - name: debug with no_log
+      debug:
+        msg: secret
+      no_log: true
+
+    - name: failure hidden
+      shell: "echo secret; exit 1"
+      no_log: "{{ hide }}"
+      ignore_errors: "{{ tolerate }}"
+
+    - name: loop items hidden
+      debug:
+        msg: "{{ item }}"
+      loop: [a, b]
+      no_log: true
+
+    - name: loop failure hidden
+      shell: "{{ item }}"
+      loop: ["true", "false"]
+      no_log: true
+      ignore_errors: true
+
+    - name: changed result hidden
+      command: echo hi
+      no_log: yes
+
+    - name: no_log false shows output
+      debug:
+        msg: shown
+      no_log: "{{ not hide }}"
+
+    - name: templated retries
+      shell: echo x
+      register: r
+      until: r.stdout == "x"
+      retries: "{{ tries }}"
+      delay: "{{ 0 }}"
+      ignore_errors: true
+
+    - name: block level templated keywords
+      block:
+        - name: inherits no_log and ignore_errors
+          shell: exit 3
+      no_log: "{{ hide }}"
+      ignore_errors: "{{ hide }}"
+
+    - name: task overrides block no_log
+      block:
+        - name: own literal no_log
+          debug:
+            msg: visible
+          no_log: false
+      no_log: "{{ hide }}"

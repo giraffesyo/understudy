@@ -134,6 +134,9 @@ func (d *Default) HostResult(host string, task *playbook.Task, res *agentproto.R
 	itemLabel := ""
 	if isItem {
 		itemLabel = template.PyStr(item)
+		if res.Censored {
+			itemLabel = "(censored due to no_log)"
+		}
 	}
 
 	switch {
@@ -282,6 +285,19 @@ func (d *Default) indent(verboseAlways bool) int {
 // invocation/diff (below -vvv) and exception are dropped, debug output is
 // trimmed to its message, and keys are sorted in Python-json form.
 func (d *Default) dump(task *playbook.Task, res *agentproto.Result) string {
+	if res.Censored {
+		// TaskResult.clean_copy under no_log keeps only these keys.
+		m := map[string]any{"censored": censoredMsg}
+		if !isDebug(task.Module) { // debug results carry no changed key
+			m["changed"] = res.Changed
+		}
+		for _, k := range []string{"attempts", "retries"} {
+			if v, ok := res.Extra[k]; ok {
+				m[k] = v
+			}
+		}
+		return template.PyJSON(m, d.indent(false), true, false)
+	}
 	m := res.ToVars()
 	delete(m, "failed")
 	delete(m, "skipped")
@@ -318,6 +334,8 @@ func (d *Default) dump(task *playbook.Task, res *agentproto.Result) string {
 	}
 	return template.PyJSON(m, d.indent(res.VerboseAlways), true, false)
 }
+
+const censoredMsg = "the output has been hidden due to the fact that 'no_log: true' was specified for this result"
 
 func isDebug(module string) bool {
 	return module == "debug" || module == "ansible.builtin.debug" || module == "ansible.legacy.debug"

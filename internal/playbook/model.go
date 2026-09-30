@@ -110,6 +110,24 @@ type Task struct {
 	SrcDir         string     // role root for src resolution ("" = playbook dir)
 	RoleName       string     // owning role (for "role : task" banners); "" = play task
 	Src            Pos
+
+	// KeywordTemplates holds keywords given as templates ("{{ x }}"),
+	// resolved per host at run time: no_log, ignore_errors, become,
+	// check_mode, retries, delay.
+	KeywordTemplates map[string]string
+	// Orig is the parsed task a per-host resolved copy was made from (nil
+	// on parsed tasks); Identity() is stable across copies.
+	Orig *Task
+
+	literalKW map[string]bool // keywords set to literal values (parse time)
+}
+
+// Identity returns the parsed task this one was derived from.
+func (t *Task) Identity() *Task {
+	if t.Orig != nil {
+		return t.Orig
+	}
+	return t
 }
 
 // RoleRef is one entry in a play's roles: list.

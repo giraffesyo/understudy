@@ -927,6 +927,12 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 	if len(task.Vars) > 0 {
 		base = base.WithOverlay(task.Vars)
 	}
+	resolved, err := resolveKeywords(task, base)
+	if err != nil {
+		r.recordFailure(host, task, agentproto.Fail("%v", err))
+		return
+	}
+	task = resolved
 
 	// Resolve the loop (nil = run once with no loop var).
 	items, isLoop, err := r.resolveLoop(task, base)
@@ -975,7 +981,7 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 				label = l
 			}
 		}
-		r.Callback.HostResult(host, task, res, false, label)
+		r.Callback.HostResult(host, task, shown(task, res), false, label)
 		m := res.ToVars()
 		itemResults = append(itemResults, m)
 		anyChanged = anyChanged || res.Changed
@@ -1116,7 +1122,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			if name == "" {
 				name = task.Module
 			}
-			r.Callback.Retrying(host, task, name, task.Retries-attempt, res)
+			r.Callback.Retrying(host, task, name, task.Retries-attempt, shown(task, res))
 			time.Sleep(time.Duration(task.Delay) * time.Second)
 		} else {
 			retriesExhausted = !res.Failed
@@ -1417,9 +1423,9 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	}
 	ignored := task.IgnoreErrors && res.Failed
 	if loopItems == nil {
-		r.Callback.HostResult(host, task, res, ignored, nil)
+		r.Callback.HostResult(host, task, shown(task, res), ignored, nil)
 	} else {
-		r.Callback.LoopResult(host, task, res, ignored)
+		r.Callback.LoopResult(host, task, shown(task, res), ignored)
 	}
 	if task.Register != "" {
 		for _, h := range r.fanOut(host, task) {
@@ -1584,10 +1590,11 @@ type freeBanner struct {
 func (f *freeCallback) announce(task *playbook.Task, name string, handler bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.names[task] = freeBanner{name, handler}
+	f.names[task.Identity()] = freeBanner{name, handler}
 }
 
 func (f *freeCallback) banner(task *playbook.Task) {
+	task = task.Identity()
 	if f.last == task {
 		return
 	}
