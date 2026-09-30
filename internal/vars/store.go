@@ -433,7 +433,9 @@ func (c *Context) deepTemplate(v any) (any, error) {
 		// The decrypted value may itself contain templates.
 		return c.store.engine.RenderTemplate(plain, c, c.pos)
 	case []any:
-		out := make([]any, len(t))
+		// Its own backing array even when empty: the list has an identity
+		// to_yaml aliases by, as PyYAML does by id().
+		out := make([]any, len(t), max(len(t), 1))
 		for i, item := range t {
 			r, err := c.items().deepTemplate(item)
 			if err != nil {

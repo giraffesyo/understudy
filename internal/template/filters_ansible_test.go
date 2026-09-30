@@ -263,6 +263,42 @@ func TestSerializationFilters(t *testing.T) {
 	expectEq(t, back, map[string]any{"a": []any{int64(1), int64(2)}}, "to_yaml round trip")
 }
 
+// to_yaml/to_nice_yaml take yaml.dump's keyword arguments (the layout
+// itself is checked against PyYAML in the yaml package's dump corpus).
+func TestToYAMLArguments(t *testing.T) {
+	x := []any{int64(1), int64(2)}
+	cases := []struct {
+		expr string
+		want string
+	}{
+		{"{'a': x} | to_yaml", "a: [1, 2]\n"},
+		{"{'a': x} | to_nice_yaml", "a:\n- 1\n- 2\n"},
+		{"{'a': [x]} | to_nice_yaml(2)", "a:\n- - 1\n  - 2\n"},
+		{"{'a': [x]} | to_nice_yaml(indent=2.5)", "a:\n- - 1\n  - 2\n"},
+		{"{'a': x} | to_yaml(5, 7)", "a: [1, 2]\n"},
+		{"{'a': x} | to_nice_yaml(default_flow_style=none)", "a: [1, 2]\n"},
+		{"{'a': x} | to_yaml(default_style='x')", "a:\n- 1\n- 2\n"},
+		{"{'b': 1, 'a': x} | to_yaml(sort_keys=0, explicit_start=1)", "---\nb: 1\na: [1, 2]\n"},
+		{"{'a': x, 'b': x} | to_yaml", "a: &id001 [1, 2]\nb: *id001\n"},
+		{"x | to_yaml(encoding='utf-8', vault_behavior='redact')", "[1, 2]\n"},
+	}
+	for _, c := range cases {
+		expectEq(t, evalExpr(t, c.expr, map[string]any{"x": x}), c.want, c.expr)
+	}
+	for expr, want := range map[string]string{
+		"x | to_yaml(allow_unicode=False)":    "yaml.dump() got multiple values for keyword argument 'allow_unicode'",
+		"x | to_yaml(bogus=1)":                "dump_all() got an unexpected keyword argument 'bogus'",
+		"x | to_yaml(indent='3')":             "an integer is required",
+		"x | to_yaml(vault_behavior='other')": "The vault parameter must be one of decrypt, keep_encrypted, redact, fail",
+		"range(3) | to_yaml":                  "('cannot represent an object', range(0, 3))",
+	} {
+		_, err := New().EvalExpression(expr, MapVars(map[string]any{"x": x}), testPos)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: error %v, want %q", expr, err, want)
+		}
+	}
+}
+
 func TestPathAndMiscFilters(t *testing.T) {
 	cases := []struct {
 		expr string

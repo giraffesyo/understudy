@@ -288,7 +288,9 @@ understudy splits cleanly into two planes:
 
 - **Language plane** — `internal/yaml` (a port of libyaml, the parser
   ansible-core loads YAML with: same errors and positions, PyYAML-compatible
-  construction, source positions), `internal/template` (the Jinja2-compatible
+  construction, source positions; and of its emitter, which `to_yaml` and
+  `to_nice_yaml` dump through as ansible-core's do, aliases for values
+  referenced twice included), `internal/template` (the Jinja2-compatible
   engine), and `internal/vars` (layered precedence with lazy, use-time
   resolution).
 - **Execution plane** — `internal/inventory`, `internal/playbook`,

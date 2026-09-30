@@ -246,7 +246,10 @@ func constructFloat(s string) (any, error) {
 }
 
 func (n *Node) decodeSequence(unsafe bool) (any, error) {
-	out := make([]any, 0, len(n.Content))
+	// Every list gets its own backing array, even an empty one, so it has
+	// an identity (to_yaml aliases a list referenced twice, as PyYAML
+	// does by id(); zero-capacity slices would all share one address).
+	out := make([]any, 0, max(len(n.Content), 1))
 	for _, item := range n.Content {
 		v, err := item.decode(unsafe)
 		if err != nil {
