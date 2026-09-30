@@ -18,57 +18,41 @@ const testUser = "tester"
 const testPass = "testpass"
 
 // startContainer builds and runs the sshd container, returning its mapped
-// port and a cleanup func.
+// port.
 func startContainer(t *testing.T) string {
-	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not installed")
-	}
-	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skip("docker daemon not running")
-	}
+	_, port := startSSHContainer(t)
+	return port
+}
 
-	dir := t.TempDir()
-	dockerfile := `FROM ubuntu:24.04
+// startSSHContainer builds and runs the sshd container, returning its name
+// and mapped port.
+func startSSHContainer(t *testing.T) (name, port string) {
+	t.Helper()
+	dockerAvailable(t)
+	image := dockerBuild(t, "understudy-ssh-test", sshDockerfile, nil)
+	name = dockerRun(t, "understudy-e2e", "-p", "127.0.0.1:0:22", image)
+	port = dockerPort(t, name, "22")
+
+	// Wait for sshd to accept connections.
+	for i := 0; i < 30; i++ {
+		c := exec.Command("docker", "exec", name, "pgrep", "sshd")
+		if c.Run() == nil {
+			time.Sleep(500 * time.Millisecond)
+			return name, port
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatal("sshd never came up")
+	return "", ""
+}
+
+const sshDockerfile = `FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y openssh-server sudo && \
     mkdir /run/sshd && \
     useradd -m -s /bin/bash ` + testUser + ` && echo '` + testUser + `:` + testPass + `' | chpasswd && \
     echo '` + testUser + ` ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/` + testUser + `
 EXPOSE 22
 CMD ["/usr/sbin/sshd", "-D"]`
-	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("docker", "build", "-q", "-t", "understudy-ssh-test", dir).CombinedOutput(); err != nil {
-		t.Fatalf("docker build: %v\n%s", err, out)
-	}
-	exec.Command("docker", "rm", "-f", "understudy-e2e").Run()
-	if out, err := exec.Command("docker", "run", "-d", "--name", "understudy-e2e",
-		"-p", "0:22", "understudy-ssh-test").CombinedOutput(); err != nil {
-		t.Fatalf("docker run: %v\n%s", err, out)
-	}
-	t.Cleanup(func() { exec.Command("docker", "rm", "-f", "understudy-e2e").Run() })
-
-	out, err := exec.Command("docker", "port", "understudy-e2e", "22").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// "0.0.0.0:55001\n..." -> port
-	line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
-	port := line[strings.LastIndexByte(line, ':')+1:]
-
-	// Wait for sshd to accept connections.
-	for i := 0; i < 30; i++ {
-		c := exec.Command("docker", "exec", "understudy-e2e", "pgrep", "sshd")
-		if c.Run() == nil {
-			time.Sleep(500 * time.Millisecond)
-			return port
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	t.Fatal("sshd never came up")
-	return ""
-}
 
 // runSSH invokes the built understudy binary against the container.
 func runSSH(t *testing.T, port, playbookSrc string, extraArgs ...string) (string, int) {

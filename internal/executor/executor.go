@@ -1878,7 +1878,9 @@ func moduleOrigin(res *agentproto.Result) string {
 			res.Msg = "Task failed: Module failed: Unknown error."
 		}
 	}
-	if res.Failed && strings.HasPrefix(res.Msg, "Task failed: Module failed: ") {
+	// An exception with an empty message (a bare NotImplementedError)
+	// leaves just "Task failed: Module failed.".
+	if res.Failed && (strings.HasPrefix(res.Msg, "Task failed: Module failed: ") || res.Msg == "Task failed: Module failed.") {
 		return "verbatim"
 	}
 	return "module"

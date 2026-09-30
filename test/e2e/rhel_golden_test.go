@@ -26,18 +26,13 @@ import (
 )
 
 const rgUser = "tester"
-const rgImage = "understudy-rhelgolden-img" // distinct from rhel_test.go's image
 
 // bootRockyKeyAuth boots the systemd Rocky container with SSH key auth for
-// `tester` (passwordless sudo) and returns the ssh port and private-key path.
-func bootRockyKeyAuth(t *testing.T) (port, keyFile string) {
+// `tester` (passwordless sudo) and returns its name, the ssh port and the
+// private-key path.
+func bootRockyKeyAuth(t *testing.T) (name, port, keyFile string) {
 	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not installed")
-	}
-	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skip("docker daemon not running")
-	}
+	dockerAvailable(t)
 
 	// Build the image if it isn't already present (Dockerfile lives in
 	// rhel_test.go; rebuild here so this test is independent of test order).
@@ -57,10 +52,7 @@ RUN printf 'keepcache=1\nmetadata_expire=-1\n' >> /etc/dnf/dnf.conf && \
     systemctl enable sshd
 STOPSIGNAL SIGRTMIN+3
 CMD ["/usr/sbin/init"]`
-	os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o644)
-	if out, err := exec.Command("docker", "build", "-q", "-t", rgImage, dir).CombinedOutput(); err != nil {
-		t.Fatalf("docker build: %v\n%s", err, out)
-	}
+	image := dockerBuild(t, "understudy-rhelgolden-img", dockerfile, nil)
 
 	// Generate a keypair.
 	keyFile = filepath.Join(dir, "id_ed25519")
@@ -72,14 +64,8 @@ CMD ["/usr/sbin/init"]`
 		t.Fatal(err)
 	}
 
-	name := "understudy-rhelgolden"
-	exec.Command("docker", "rm", "-f", name).Run()
-	runArgs := []string{"run", "-d", "--name", name, "--privileged", "--cgroupns=host",
-		"-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw", "-p", "0:22", rgImage, "/usr/sbin/init"}
-	if out, err := exec.Command("docker", runArgs...).CombinedOutput(); err != nil {
-		t.Fatalf("docker run: %v\n%s", err, out)
-	}
-	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	name = dockerRun(t, "understudy-rhelgolden", "--privileged", "--cgroupns=host",
+		"-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw", "-p", "127.0.0.1:0:22", image, "/usr/sbin/init")
 
 	// Wait for sshd, then install the authorized key.
 	for i := 0; ; i++ {
@@ -101,18 +87,13 @@ CMD ["/usr/sbin/init"]`
 		t.Fatalf("install key: %v\n%s", err, out)
 	}
 
-	portOut, err := exec.Command("docker", "port", name, "22").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	line := strings.SplitN(strings.TrimSpace(string(portOut)), "\n", 2)[0]
-	return line[strings.LastIndexByte(line, ':')+1:], keyFile
+	return name, dockerPort(t, name, "22"), keyFile
 }
 
 func TestRHELGoldenDifferential(t *testing.T) {
 	ansible := ansiblePlaybookBin(t)
 	understudy := understudyBin(t)
-	port, keyFile := bootRockyKeyAuth(t)
+	name, port, keyFile := bootRockyKeyAuth(t)
 
 	corpus, err := filepath.Glob("golden/rhel/*.yml")
 	if err != nil || len(corpus) == 0 {
@@ -147,10 +128,10 @@ func TestRHELGoldenDifferential(t *testing.T) {
 				"sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf 2>/dev/null; " +
 				"dnf -y remove zip chrony 2>/dev/null; " +
 				"umount /etc/hostname 2>/dev/null; hostnamectl set-hostname rhelgolden.example 2>/dev/null; true"
-			exec.Command("docker", "exec", "understudy-rhelgolden", "sh", "-c", resetCmd).Run()
+			exec.Command("docker", "exec", name, "sh", "-c", resetCmd).Run()
 			a := runTool(t, ansible, []string{"-i", invA, pb}, env, 1)
 
-			exec.Command("docker", "exec", "understudy-rhelgolden", "sh", "-c", resetCmd).Run()
+			exec.Command("docker", "exec", name, "sh", "-c", resetCmd).Run()
 			u := runTool(t, understudy, []string{"playbook", "-i", invB, pb}, env, 1)
 
 			if os.Getenv("UNDERSTUDY_GOLDEN_LOG") != "" {

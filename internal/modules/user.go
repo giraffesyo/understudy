@@ -118,6 +118,7 @@ type userRun struct {
 	uidMin, uidMax                  *int64
 	expireMin, expireMax, expireWrn *int64
 	busybox                         bool
+	darwin                          *darwinState // DarwinUser, on macOS
 
 	warnings []string
 }
@@ -161,6 +162,9 @@ func parseInt64(s string) int64 {
 // getentLines returns `getent <db> [key]` lines, or the file's lines when
 // getent is unavailable.
 func getentLines(db, key string) []string {
+	if platformSystem() == "Darwin" {
+		return darwinGetentLines(db, key)
+	}
 	argv := []string{"getent", db}
 	if key != "" {
 		argv = append(argv, key)
@@ -265,6 +269,9 @@ func getspnam(name string) *spEntry {
 }
 
 func (u *userRun) userExists() bool {
+	if u.darwin != nil {
+		return u.darwinUserExists()
+	}
 	if u.local {
 		data, err := os.ReadFile("/etc/passwd")
 		if err != nil {
@@ -880,6 +887,9 @@ func (u *userRun) modifyBusybox() (*int, string, string) {
 			fsutil.Backup("/etc/passwd")
 			if err := fsutil.AtomicMove(tmp.Name(), "/etc/passwd", true); err != nil {
 				os.Remove(tmp.Name())
+				if res := seFailure(err); res != nil {
+					u.fail(res.Msg, res.Extra)
+				}
 				u.fail(pyStrOSError(err, "/etc/passwd"), nil)
 			}
 		}
@@ -1034,14 +1044,21 @@ func (u *userRun) sshKeyGen() (*int, string, string) {
 		comment = "ansible-generated on " + host
 	}
 	cmd = append(cmd, "-C", comment, "-f", keyFile)
-	// ansible-core answers ssh-keygen's passphrase prompts on a pty; the
-	// passphrase given with -N makes the same key.
-	passphrase := ""
+	var rc int
+	var out, errOut string
 	if u.p.Has("ssh_key_passphrase") {
-		passphrase = u.p.Str("ssh_key_passphrase")
+		// Answered at ssh-keygen's prompts on a pty, never in argv.
+		if u.env.CheckMode {
+			return &zero, "", ""
+		}
+		prc, pout, perr := sshKeygenPTY(u.env, cmd, u.p.Str("ssh_key_passphrase"))
+		if prc == nil {
+			return nil, pout, perr
+		}
+		rc, out, errOut = *prc, pout, perr
+	} else {
+		rc, out, errOut = u.execute(append(cmd, "-N", ""), overwrite, true)
 	}
-	cmd = append(cmd, "-N", passphrase)
-	rc, out, errOut := u.execute(cmd, overwrite, true)
 	if rc == 0 && !u.env.CheckMode {
 		os.Chown(keyFile, int(info.uid), int(info.gid))
 		os.Chown(pub, int(info.uid), int(info.gid))
@@ -1090,10 +1107,8 @@ func (u *userRun) warnPasswordHash() {
 	}
 }
 
-func selinuxEnabled() bool {
-	b, err := os.ReadFile("/sys/fs/selinux/enforce")
-	return err == nil && len(b) > 0 && pathExists("/etc/selinux/config")
-}
+// selinuxEnabled is AnsibleModule.selinux_enabled.
+func selinuxEnabled() bool { return fsutil.SELinuxEnabled() }
 
 func userModule(env *RunEnv, rawArgs map[string]any) (res *agentproto.Result) {
 	p, err := userSpec.Parse(rawArgs)
@@ -1169,13 +1184,18 @@ func userModule(env *RunEnv, rawArgs map[string]any) (res *agentproto.Result) {
 	} else {
 		u.sshFile = pyJoin(".ssh", "id_"+p.Str("ssh_key_type"))
 	}
-	if platformSystem() == "Linux" {
+	switch platformSystem() {
+	case "Linux":
 		switch pyDistribution() {
 		case "Alpine", "Buildroot":
 			u.busybox = true
 		}
+	case "Darwin":
+		u.darwinInit()
 	}
-	u.warnPasswordHash()
+	if u.darwin == nil { // Darwin takes a cleartext password
+		u.warnPasswordHash()
+	}
 	if u.seuser != nil && !selinuxEnabled() {
 		u.warnings = append(u.warnings, "'seuser' is set to '"+*u.seuser+"' but SELinux is not enabled on "+
 			"this system. The 'seuser' parameter will be ignored.")
@@ -1211,7 +1231,11 @@ func userModule(env *RunEnv, rawArgs map[string]any) (res *agentproto.Result) {
 				return checkChanged()
 			}
 			var r int
-			r, out, errOut = u.removeUserdel()
+			if u.darwin != nil {
+				r, out, errOut = u.darwinRemove()
+			} else {
+				r, out, errOut = u.removeUserdel()
+			}
 			rc = &r
 			if r != 0 {
 				return failRC(r, errOut)
@@ -1226,9 +1250,12 @@ func userModule(env *RunEnv, rawArgs map[string]any) (res *agentproto.Result) {
 			}
 			needsParents := u.home != nil && p.Bool("create_home") && !isDir(pyDirname(*u.home))
 			var r int
-			if u.busybox {
+			switch {
+			case u.darwin != nil:
+				r, out, errOut = u.darwinCreate()
+			case u.busybox:
 				r, out, errOut = u.createBusybox()
-			} else {
+			default:
 				r, out, errOut = u.createUseradd()
 			}
 			rc = &r
@@ -1240,9 +1267,12 @@ func userModule(env *RunEnv, rawArgs map[string]any) (res *agentproto.Result) {
 			result["system"] = p.Bool("system")
 			result["create_home"] = p.Bool("create_home")
 		} else {
-			if u.busybox {
+			switch {
+			case u.darwin != nil:
+				rc, out, errOut = u.darwinModify()
+			case u.busybox:
 				rc, out, errOut = u.modifyBusybox()
-			} else {
+			default:
 				rc, out, errOut = u.modifyUsermod()
 			}
 			result["append"] = p.Bool("append")
@@ -1332,13 +1362,15 @@ func userModule(env *RunEnv, rawArgs map[string]any) (res *agentproto.Result) {
 // differ from shadow (nothing when the shadow entry is unreadable).
 func (u *userRun) setPasswordExpire() (*int, string, string) {
 	minC, maxC, warnC := u.expireMin != nil, u.expireMax != nil, u.expireWrn != nil
-	sp := getspnam(u.name)
-	if sp == nil {
-		return nil, "", ""
+	if u.darwin == nil { // macOS's libc has no getspnam
+		sp := getspnam(u.name)
+		if sp == nil {
+			return nil, "", ""
+		}
+		minC = minC && *u.expireMin != sp.min
+		maxC = maxC && *u.expireMax != sp.max
+		warnC = warnC && *u.expireWrn != sp.warn
 	}
-	minC = minC && *u.expireMin != sp.min
-	maxC = maxC && *u.expireMax != sp.max
-	warnC = warnC && *u.expireWrn != sp.warn
 	if !minC && !maxC && !warnC {
 		return nil, "", ""
 	}
@@ -1365,6 +1397,14 @@ func atoiOr(s string) any {
 }
 
 func groupID(env *RunEnv, group string) string {
+	if platformSystem() == "Darwin" { // grp.getgrnam: Directory Services
+		for _, l := range darwinGetentLines("group", group) {
+			if f := strings.Split(l, ":"); len(f) >= 3 && f[0] == group {
+				return f[2]
+			}
+		}
+		return ""
+	}
 	out, err := runOut(env, "getent", "group", group)
 	if err != nil {
 		return ""

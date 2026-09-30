@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -341,7 +342,22 @@ func setMode(env *RunEnv, path string, mode any, changed bool, diff *fileDiff) (
 // moduleCrash is an unhandled Python exception escaping a module: Ansible
 // reports it with this verbatim message.
 func moduleCrash(err error) *agentproto.Result {
+	if res := seFailure(err); res != nil {
+		return res
+	}
 	return &agentproto.Result{Failed: true, Msg: "Task failed: Module failed: " + pyOSError(err)}
+}
+
+// seFailure is the fail_json of an SELinux labeling error (atomic_move's
+// set_context_if_different), or nil for any other error.
+func seFailure(err error) *agentproto.Result {
+	var se *fsutil.SELinuxError
+	if !errors.As(err, &se) {
+		return nil
+	}
+	res := agentproto.Fail("%s", se.Msg)
+	res.Extra = se.Extra
+	return res
 }
 
 // pyInt is Python's int(s) for base 10.

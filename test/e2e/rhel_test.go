@@ -26,49 +26,29 @@ RUN dnf -y install openssh-server sudo systemd iptables procps-ng && \
 STOPSIGNAL SIGRTMIN+3
 CMD ["/usr/sbin/init"]`
 
-// startRHELContainer boots a systemd Rocky container and returns its ssh port.
-func startRHELContainer(t *testing.T) string {
+// startRHELContainer boots a systemd Rocky container and returns its name
+// and ssh port.
+func startRHELContainer(t *testing.T) (name, port string) {
 	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not installed")
-	}
-	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skip("docker daemon not running")
-	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(rhelDockerfile), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("docker", "build", "-q", "-t", "understudy-rhel-test", dir).CombinedOutput(); err != nil {
-		t.Fatalf("docker build: %v\n%s", err, out)
-	}
-	exec.Command("docker", "rm", "-f", "understudy-rhel-e2e").Run()
-	runArgs := []string{"run", "-d", "--name", "understudy-rhel-e2e",
+	dockerAvailable(t)
+	image := dockerBuild(t, "understudy-rhel-test", rhelDockerfile, nil)
+	name = dockerRun(t, "understudy-rhel-e2e",
 		"--privileged", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw",
-		"-p", "0:22", "understudy-rhel-test", "/usr/sbin/init"}
-	if out, err := exec.Command("docker", runArgs...).CombinedOutput(); err != nil {
-		t.Fatalf("docker run: %v\n%s", err, out)
-	}
-	t.Cleanup(func() { exec.Command("docker", "rm", "-f", "understudy-rhel-e2e").Run() })
+		"-p", "127.0.0.1:0:22", image, "/usr/sbin/init")
 
 	// Wait for systemd + sshd.
 	for i := 0; i < 60; i++ {
-		out, _ := exec.Command("docker", "exec", "understudy-rhel-e2e", "systemctl", "is-active", "sshd").Output()
+		out, _ := exec.Command("docker", "exec", name, "systemctl", "is-active", "sshd").Output()
 		if strings.TrimSpace(string(out)) == "active" {
 			break
 		}
 		time.Sleep(time.Second)
 	}
-	out, err := exec.Command("docker", "exec", "understudy-rhel-e2e", "systemctl", "is-active", "sshd").Output()
+	out, err := exec.Command("docker", "exec", name, "systemctl", "is-active", "sshd").Output()
 	if strings.TrimSpace(string(out)) != "active" {
 		t.Fatalf("sshd never became active: %v", err)
 	}
-	portOut, err := exec.Command("docker", "port", "understudy-rhel-e2e", "22").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	line := strings.SplitN(strings.TrimSpace(string(portOut)), "\n", 2)[0]
-	return line[strings.LastIndexByte(line, ':')+1:]
+	return name, dockerPort(t, name, "22")
 }
 
 // runRHEL executes a playbook (with roles alongside) against the container
@@ -92,7 +72,7 @@ func runRHEL(t *testing.T, port, dir string) (string, int) {
 // TestRHELRolesIdempotent runs real chrony + ip-forwarding roles on a
 // RHEL-family host and asserts a clean second run (changed=0).
 func TestRHELRolesIdempotent(t *testing.T) {
-	port := startRHELContainer(t)
+	name, port := startRHELContainer(t)
 	dir := t.TempDir()
 
 	// ntp role: yum install chrony + systemd service, with a handler.
@@ -137,7 +117,7 @@ func TestRHELRolesIdempotent(t *testing.T) {
 		"iptables -t nat -C POSTROUTING -o eth0 -j MASQUERADE": "",
 	}
 	for cmd, want := range checks {
-		out, err := exec.Command("docker", "exec", "understudy-rhel-e2e", "sh", "-c", cmd).CombinedOutput()
+		out, err := exec.Command("docker", "exec", name, "sh", "-c", cmd).CombinedOutput()
 		if err != nil && want != "" {
 			t.Errorf("check %q failed: %v\n%s", cmd, err, out)
 		}
@@ -179,7 +159,7 @@ func writeFiles(t *testing.T, root string, files map[string]string) {
 // — and asserts a clean idempotent second run. Mirrors what real
 // config-management roles do.
 func TestRHELModuleSurface(t *testing.T) {
-	port := startRHELContainer(t)
+	name, port := startRHELContainer(t)
 	dir := t.TempDir()
 
 	os.WriteFile(filepath.Join(dir, "site.yml"), []byte(`
@@ -268,7 +248,7 @@ func TestRHELModuleSurface(t *testing.T) {
 		"grep 'option a' /etc/understudy-e2e/app.conf": "option a",
 	}
 	for cmd, want := range checks {
-		out, err := exec.Command("docker", "exec", "understudy-rhel-e2e", "sh", "-c", cmd).CombinedOutput()
+		out, err := exec.Command("docker", "exec", name, "sh", "-c", cmd).CombinedOutput()
 		if err != nil && want != "" {
 			t.Errorf("check %q failed: %v\n%s", cmd, err, out)
 		}

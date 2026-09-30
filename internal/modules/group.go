@@ -3,6 +3,7 @@ package modules
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -28,7 +29,8 @@ var groupSpec = args.Spec{
 
 const groupFile = "/etc/group"
 
-// groupModule ports ansible.builtin.group (the Linux Group class).
+// groupModule ports ansible.builtin.group (the Linux Group class, and
+// DarwinGroup on a macOS controller's local connection).
 func groupModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	p, err := groupSpec.Parse(rawArgs)
 	if err != nil {
@@ -91,7 +93,13 @@ func groupModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	if fail != nil {
 		return fail
 	}
-	if p.Str("state") == "absent" {
+	darwin := platformSystem() == "Darwin"
+	switch {
+	case darwin:
+		if argv, fail = darwinGroupArgv(env, p, found); fail != nil {
+			return fail
+		}
+	case p.Str("state") == "absent":
 		if found {
 			if env.CheckMode {
 				return &agentproto.Result{Changed: true}
@@ -102,7 +110,7 @@ func groupModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 			}
 			argv = append(argv, name)
 		}
-	} else if !found {
+	case !found:
 		if env.CheckMode {
 			return &agentproto.Result{Changed: true}
 		}
@@ -126,7 +134,7 @@ func groupModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 			argv = append(argv, "-K", "GID_MAX="+strconv.FormatInt(p.Int("gid_max"), 10))
 		}
 		argv = append(argv, name)
-	} else {
+	default:
 		if f := checkGID(); f != nil {
 			return f
 		}
@@ -147,11 +155,13 @@ func groupModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	if argv != nil {
 		res.Changed = true
 		if len(argv) > 0 {
-			bin, err := getBinPath(argv[0])
-			if err != nil {
-				return agentproto.Fail("%v", err)
+			if !filepath.IsAbs(argv[0]) {
+				bin, err := getBinPath(argv[0])
+				if err != nil {
+					return agentproto.Fail("%v", err)
+				}
+				argv[0] = bin
 			}
-			argv[0] = bin
 			rc, out, errOut := runCommand(env, argv, cmdOpts{})
 			if rc != 0 {
 				r := agentproto.Fail("%s", errOut)
@@ -173,4 +183,90 @@ func groupModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		}
 	}
 	return res
+}
+
+// darwinGroupArgv is DarwinGroup's group_add / group_del / group_mod:
+// dseditgroup, and for a new system group the lowest free gid under 500.
+// Like upstream, a gid change runs even in check mode (DarwinGroup's
+// group_mod does not consult it).
+func darwinGroupArgv(env *RunEnv, p *args.Parsed, found bool) ([]string, *agentproto.Result) {
+	name := p.Str("name")
+	dsedit := func() (string, *agentproto.Result) {
+		bin, err := getBinPath("dseditgroup")
+		if err != nil {
+			return "", agentproto.Fail("%v", err)
+		}
+		return bin, nil
+	}
+	switch {
+	case p.Str("state") == "absent":
+		if !found {
+			return nil, nil
+		}
+		if env.CheckMode {
+			return nil, &agentproto.Result{Changed: true}
+		}
+		if p.Bool("force") {
+			return nil, agentproto.Fail("The force option is not supported for group deletion on this platform.")
+		}
+		bin, fail := dsedit()
+		if fail != nil {
+			return nil, fail
+		}
+		return []string{bin, "-o", "delete", "-L", name}, nil
+	case !found:
+		if env.CheckMode {
+			return nil, &agentproto.Result{Changed: true}
+		}
+		bin, fail := dsedit()
+		if fail != nil {
+			return nil, fail
+		}
+		argv := []string{bin, "-o", "create"}
+		if p.Has("gid") {
+			argv = append(argv, "-i", strconv.FormatInt(p.Int("gid"), 10))
+		} else if p.Bool("system") {
+			if gid, ok := darwinLowestSystemGID(env); ok {
+				argv = append(argv, "-i", strconv.FormatInt(gid, 10))
+			}
+		}
+		return append(argv, "-L", name), nil
+	default:
+		if !p.Has("gid") || strconv.FormatInt(p.Int("gid"), 10) == groupID(env, name) {
+			return nil, nil
+		}
+		bin, fail := dsedit()
+		if fail != nil {
+			return nil, fail
+		}
+		return []string{bin, "-o", "edit", "-i", strconv.FormatInt(p.Int("gid"), 10), "-L", name}, nil
+	}
+}
+
+// darwinLowestSystemGID is get_lowest_available_system_gid: one past the
+// highest gid under 500, unless there is none or it is 499.
+func darwinLowestSystemGID(env *RunEnv) (int64, bool) {
+	bin, err := getBinPath("dscl")
+	if err != nil {
+		return 0, false
+	}
+	_, out, _ := runCommand(env, []string{bin, "/Local/Default", "-list", "/Groups", "PrimaryGroupID"}, cmdOpts{})
+	var highest int64
+	for _, line := range pySplitlines(out) {
+		parts := strings.Split(line, " ")
+		if len(parts) < 2 {
+			continue
+		}
+		gid, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		if gid > highest && gid < 500 {
+			highest = gid
+		}
+	}
+	if highest == 0 || highest == 499 {
+		return 0, false
+	}
+	return highest + 1, true
 }

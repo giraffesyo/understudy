@@ -527,6 +527,9 @@ func copyCore(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 				}
 			}
 			if err := fsutil.AtomicMove(mysrc, dest, !remoteSrc); err != nil {
+				if res := seFailure(err); res != nil {
+					return res
+				}
 				return &agentproto.Result{Failed: true,
 					Msg: fmt.Sprintf("Task failed: Module failed: Failed to copy %s to %s.: %s", pyStrRepr(src), pyStrRepr(dest), pyOSError(err))}
 			}

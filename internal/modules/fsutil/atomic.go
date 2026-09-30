@@ -16,9 +16,12 @@ func Umask() uint32 { return processUmask() }
 // keepDestAttrs an existing dest's owner, mode and flags carry over to the
 // new content; a newly created dest gets 0666 &^ umask and the caller's
 // euid (and the directory's group when it is setgid). Cross-device and
-// permission-denied renames fall back to a copy beside dest.
+// permission-denied renames fall back to a copy beside dest. With SELinux
+// on, dest keeps its label (a new dest gets the policy's default), since
+// the rename carries src's; a labeling failure is a *SELinuxError.
 func AtomicMove(src, dest string, keepDestAttrs bool) error {
 	var destStat os.FileInfo
+	var context SEContext
 	if st, err := os.Stat(dest); err == nil && keepDestAttrs {
 		destStat = st
 		if uid, gid, ok := statIDs(st); ok {
@@ -31,6 +34,13 @@ func AtomicMove(src, dest string, keepDestAttrs bool) error {
 		}
 		now := time.Now()
 		os.Chtimes(src, now, now)
+		if SELinuxEnabled() {
+			if context, err = SELinuxContext(dest); err != nil {
+				return err
+			}
+		}
+	} else if SELinuxEnabled() {
+		context = SELinuxDefaultContext(dest)
 	}
 	_, statErr := os.Stat(dest)
 	creating := statErr != nil
@@ -63,6 +73,11 @@ func AtomicMove(src, dest string, keepDestAttrs bool) error {
 			now := time.Now()
 			os.Chtimes(tmpName, now, now)
 		}
+		if SELinuxEnabled() {
+			if _, err := SetSELinuxContextIfDifferent(tmpName, context, false); err != nil {
+				return err
+			}
+		}
 		if err := os.Rename(tmpName, dest); err != nil {
 			return err
 		}
@@ -78,6 +93,11 @@ func AtomicMove(src, dest string, keepDestAttrs bool) error {
 			}
 		}
 		os.Chown(dest, os.Geteuid(), gid) // best effort, as in Ansible
+	}
+	if SELinuxEnabled() {
+		if _, err := SetSELinuxContextIfDifferent(dest, context, false); err != nil {
+			return err
+		}
 	}
 	return nil
 }
