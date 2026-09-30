@@ -41,9 +41,8 @@ func bootRockyKeyAuth(t *testing.T) (port, keyFile string) {
 	// Build the image if it isn't already present (Dockerfile lives in
 	// rhel_test.go; rebuild here so this test is independent of test order).
 	dir := t.TempDir()
-	// procps-ng provides the `sysctl` binary that ansible.posix.sysctl shells
-	// out to (understudy writes /proc directly, but a fair comparison needs
-	// both tools able to run). A distinct image tag avoids clashing with
+	// procps-ng provides the `sysctl` binary that the sysctl module (in
+	// both tools) shells out to. A distinct image tag avoids clashing with
 	// rhel_test.go's image.
 	dockerfile := `FROM rockylinux:9
 RUN dnf -y install openssh-server sudo systemd procps-ng && dnf clean all && ssh-keygen -A && \
@@ -131,7 +130,7 @@ func TestRHELGoldenDifferential(t *testing.T) {
 			// Reset all state the corpus mutates so both tools start from an
 			// identical clean slate (ansible runs first, then understudy).
 			// Covers every mutation across the RHEL corpus files.
-			resetCmd := "rm -rf /etc/understudy-golden; rm -f /tmp/understudy-golden*; " +
+			resetCmd := "rm -rf /etc/understudy-golden /tmp/understudy-golden*; " +
 				"userdel -r uduser 2>/dev/null; groupdel udgrp 2>/dev/null; " +
 				"userdel -r deploy 2>/dev/null; groupdel deploy 2>/dev/null; groupdel wheel2 2>/dev/null; " +
 				"systemctl disable --now chronyd 2>/dev/null; " +
@@ -144,6 +143,9 @@ func TestRHELGoldenDifferential(t *testing.T) {
 			exec.Command("docker", "exec", "understudy-rhelgolden", "sh", "-c", resetCmd).Run()
 			uOut := runTool(t, understudy, []string{"playbook", "-i", invB, pb}, env, 1)
 
+			if os.Getenv("UNDERSTUDY_GOLDEN_LOG") != "" {
+				t.Logf("--- ansible ---\n%s\n--- understudy ---\n%s", aOut, uOut)
+			}
 			aStatus, aRecap := parseRun(aOut)
 			uStatus, uRecap := parseRun(uOut)
 			if !reflect.DeepEqual(aRecap, uRecap) {
