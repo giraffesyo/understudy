@@ -156,7 +156,16 @@ func TestMathAndStringPadFilters(t *testing.T) {
 	}
 }
 
+// withCryptGensalt pins whether password_hash emulates libxcrypt's
+// crypt_gensalt (see cryptGensalt) for the duration of a test.
+func withCryptGensalt(t *testing.T, on bool) {
+	saved := cryptGensalt
+	cryptGensalt = func() bool { return on }
+	t.Cleanup(func() { cryptGensalt = saved })
+}
+
 func TestPasswordHash(t *testing.T) {
+	withCryptGensalt(t, false)
 	// Oracle values from real ansible-playbook (passlib), with pinned salt and
 	// rounds so the result is deterministic.
 	cases := []struct {
@@ -169,6 +178,28 @@ func TestPasswordHash(t *testing.T) {
 			"$5$abcdefghijklmnop$oZAI4Z3YFTVIrKPkvxU2vFozcTT4/RqEMnF1aR4uWP3"},
 		{"'secret' | password_hash('sha512', 'saltsalt', rounds=10000)",
 			"$6$rounds=10000$saltsalt$WowrPBpEDVlCoruBosYlrZycTCx3//TyDHYqEhX9DUHHt0XTztUqzQDDUuvUGRA8aUe9p55hcAxeGcu58sm3u."},
+	}
+	for _, c := range cases {
+		expectEq(t, evalExpr(t, c.expr, nil), c.want, c.expr)
+	}
+}
+
+func TestPasswordHashGensalt(t *testing.T) {
+	withCryptGensalt(t, true)
+	// Oracle values from ansible-core 2.21 on glibc Linux (libxcrypt): the
+	// given salt is crypt_gensalt's random input, not the salt itself.
+	cases := []struct {
+		expr string
+		want any
+	}{
+		{"'mypassword' | password_hash('sha512', 'abcdefghijklmnop')",
+			"$6$rounds=656000$V7qMYJaNbVKOeh4P$Bw7twflTtNzN63J28ZPlFpgy6I8ze13f5FcXiATdX1Qrs/QXsWaYXZKF6QPqamwtSvQZ0Ei5NK970D5Sm7lN2."},
+		{"'mypassword' | password_hash('sha512', 'abcdefghijklmnop', rounds=5000)",
+			"$6$V7qMYJaNbVKOeh4P$wBeDZdD1X0zRkWwOc..unOHiRrDYJU1TADvPNX2f3zS0zTorB8eowFCyDI7qYifCMYdB4dQHKrsfwjgafYgjk1"},
+		{"'mypassword' | password_hash('sha512', 'saltsalt', rounds=10000)",
+			"$6$rounds=10000$n34PoBLM$kWnIfXbGjJL7RrDYsokap4W7J8amDeEMYv8rYdOpIII1423Y08xThs2CZT8vgY52iCwu8BRRKI.sxkBydu8Vr1"},
+		{"'mypassword' | password_hash('sha512', 'abcd')",
+			"$6$rounds=656000$V7qM$oPJphU8zLNCxVF7mysypeUveskFj3aGkeJzJgVp00D.3aGBBiwCaP/i9Bqt8yIY4J3.Jjc0kbUIql3Xm4arBf/"},
 	}
 	for _, c := range cases {
 		expectEq(t, evalExpr(t, c.expr, nil), c.want, c.expr)

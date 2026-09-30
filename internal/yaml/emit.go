@@ -177,13 +177,21 @@ func formatFloat(f float64) string {
 	case math.IsNaN(f):
 		return ".nan"
 	}
-	s := strconv.FormatFloat(f, 'g', -1, 64)
-	// Ensure re-parsing yields a float, not an int.
-	if !strings.ContainsAny(s, ".eE") {
+	// PyYAML's represent_float: repr(f), positional unless the decimal
+	// exponent is below -4 or at least 16, with ".0" kept in the mantissa
+	// so re-parsing yields a float (2.0, 1790738388.92, 1.0e+16).
+	e := strconv.FormatFloat(f, 'e', -1, 64)
+	exp, _ := strconv.Atoi(e[strings.LastIndexByte(e, 'e')+1:])
+	if exp < -4 || exp >= 16 {
+		if !strings.Contains(e, ".") {
+			e = strings.Replace(e, "e", ".0e", 1)
+		}
+		return e
+	}
+	s := strconv.FormatFloat(f, 'f', -1, 64)
+	if !strings.Contains(s, ".") {
 		s += ".0"
 	}
-	// PyYAML-quirk safety: "1e+05" style already carries a sign; bare "1e5"
-	// forms cannot come out of FormatFloat's 'g' verb.
 	return s
 }
 

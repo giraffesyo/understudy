@@ -455,6 +455,10 @@ func registerAnsibleFilters(e *Engine) {
 		} else if n, ok := asInt(args1(args, 2)); ok {
 			rounds = int(n)
 		}
+		salt, err = cryptSalt(salt)
+		if err != nil {
+			return nil, fmt.Errorf("password_hash: %v", err)
+		}
 		return shaCrypt(pw, salt, rounds, use512), nil
 	}
 

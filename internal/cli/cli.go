@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,7 +28,19 @@ import (
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
-const version = "0.1.0-dev"
+// version is stamped at build time by the Makefile and the release
+// workflow: -ldflags "-X github.com/giraffesyo/understudy/internal/cli.version=v1.2.3".
+// Unstamped builds fall back to the module version `go install` records.
+var version = "0.1.0-dev"
+
+func init() {
+	if version != "0.1.0-dev" {
+		return
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		version = bi.Main.Version
+	}
+}
 
 // Main dispatches on argv[0] (multicall) then subcommands.
 func Main() int {

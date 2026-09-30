@@ -44,9 +44,14 @@ func bootRockyKeyAuth(t *testing.T) (port, keyFile string) {
 	// procps-ng provides the `sysctl` binary that ansible.posix.sysctl shells
 	// out to (understudy writes /proc directly, but a fair comparison needs
 	// both tools able to run). A distinct image tag avoids clashing with
-	// rhel_test.go's image.
+	// rhel_test.go's image. The corpus's packages (zip, chrony) and the repo
+	// metadata are cached in the image and never expire, so the runs don't
+	// depend on mirrors: a mirror hiccup during one tool's run (and not the
+	// other's) would fail the comparison.
 	dockerfile := `FROM rockylinux:9
-RUN dnf -y install openssh-server sudo systemd procps-ng && dnf clean all && ssh-keygen -A && \
+RUN printf 'keepcache=1\nmetadata_expire=-1\n' >> /etc/dnf/dnf.conf && \
+    dnf -y install openssh-server sudo systemd procps-ng && \
+    dnf -y install --downloadonly zip chrony && ssh-keygen -A && \
     useradd -m ` + rgUser + ` && \
     echo '` + rgUser + ` ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/` + rgUser + ` && \
     systemctl enable sshd
@@ -77,10 +82,13 @@ CMD ["/usr/sbin/init"]`
 	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
 
 	// Wait for sshd, then install the authorized key.
-	for i := 0; i < 60; i++ {
+	for i := 0; ; i++ {
 		out, _ := exec.Command("docker", "exec", name, "systemctl", "is-active", "sshd").Output()
 		if strings.TrimSpace(string(out)) == "active" {
 			break
+		}
+		if i == 60 {
+			t.Fatalf("sshd not active in the container after 60s: %s", out)
 		}
 		time.Sleep(time.Second)
 	}

@@ -16,7 +16,15 @@ import (
 // (forks=1 so multi-host result order is deterministic). Only values that
 // can never match are normalized: per-run work directories and command
 // timings.
-func TestGoldenOutput(t *testing.T) {
+func TestGoldenOutput(t *testing.T) { testGoldenOutput(t) }
+
+// TestGoldenOutputVerbose is TestGoldenOutput at -v, where every task
+// result is printed, including values the corpus keeps out of its debug
+// output because they differ on every run (see normalizeVerbose).
+func TestGoldenOutputVerbose(t *testing.T) { testGoldenOutput(t, "-v") }
+
+func testGoldenOutput(t *testing.T, flags ...string) {
+	verbose := len(flags) > 0
 	ansible := ansiblePlaybookBin(t)
 	understudy := understudyBin(t)
 
@@ -50,12 +58,16 @@ func TestGoldenOutput(t *testing.T) {
 			run := func(bin string, pre ...string) string {
 				work := t.TempDir()
 				inv := writeGoldenInventory(t, work, invSrc)
-				args := append(append(pre, "-f", "1", "-i", inv, "-c", "local", "-e", "workdir="+work), extra...)
+				args := append(append(append(pre, flags...), "-f", "1", "-i", inv, "-c", "local", "-e", "workdir="+work), extra...)
 				cmd := exec.Command(bin, append(args, abs)...)
 				cmd.Env = append(os.Environ(), env...)
 				cmd.Stdin = nil
 				out, _ := cmd.Output() // stdout only; stderr carries warnings
-				return normalizeOutput(string(out), work)
+				s := normalizeOutput(string(out), work)
+				if verbose {
+					s = normalizeVerbose(s)
+				}
+				return s
 			}
 			want := run(ansible)
 			got := run(understudy, "playbook")
@@ -71,6 +83,34 @@ var timingRe = regexp.MustCompile(`"(delta|start|end)": "[^"]*"`)
 func normalizeOutput(s, work string) string {
 	s = strings.ReplaceAll(s, work, "WORK")
 	return timingRe.ReplaceAllString(s, `"$1": "T"`)
+}
+
+// Values only -v shows that differ on every run. Each pattern masks just
+// the per-run part, so the surrounding shape (and number formatting) is
+// still compared.
+var verboseMasks = []struct {
+	re   *regexp.Regexp
+	repl string
+}{
+	// A transfer's staging dir: <remote_tmp>/ansible-tmp-<time>-<pid>-<random>/.
+	{regexp.MustCompile(`/ansible-tmp-[0-9.]+-[0-9]+-[0-9]+/`), "/ansible-tmp-X/"},
+	// The controller's per-run temp dir, ~/.ansible/tmp/ansible-local-<pid><random>,
+	// and the tempfile-named content/template renders inside it.
+	{regexp.MustCompile(`/ansible-local-[0-9]+[a-z0-9_]{8}/(\.|tmp)[a-z0-9_]{8}`), "/ansible-local-X/${1}X"},
+	// Backup files: <dest>.<pid>.<timestamp>~.
+	{regexp.MustCompile(`\.[0-9]+\.[0-9]{4}-[0-9]{2}-[0-9]{2}@[0-9]{2}:[0-9]{2}:[0-9]{2}~"`), `.PID.TIME~"`},
+	// tempfile's random names (the corpus uses the default and "work_" prefixes).
+	{regexp.MustCompile(`/(ansible\.|work_)[a-z0-9_]{8}`), "/${1}X"},
+	// stat/find timestamps (positional Python floats) and inode numbers.
+	{regexp.MustCompile(`"(atime|mtime|ctime|birthtime)": [0-9]+\.[0-9]+([,}])`), `"$1": T$2`},
+	{regexp.MustCompile(`"inode": [0-9]+`), `"inode": N`},
+}
+
+func normalizeVerbose(s string) string {
+	for _, m := range verboseMasks {
+		s = m.re.ReplaceAllString(s, m.repl)
+	}
+	return s
 }
 
 // lineDiff shows the first differing lines with a little context.
