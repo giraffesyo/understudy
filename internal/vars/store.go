@@ -31,7 +31,7 @@ const (
 	LFacts
 	LIncludeVars // include_vars: raw (templated on use); persists across plays
 	LHostFacts   // set_fact + register; persists across plays
-	LExtraVars // -e always wins
+	LExtraVars   // -e always wins
 	layerCount
 )
 

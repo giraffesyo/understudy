@@ -26,9 +26,9 @@ type forNode struct {
 
 type setNode struct {
 	names []string // tuple unpack targets (name unused), or nil
-	name string
-	attr string // {% set ns.attr = ... %}
-	val  Expr
+	name  string
+	attr  string // {% set ns.attr = ... %}
+	val   Expr
 }
 
 func (ifNode) tmplNode()  {}
