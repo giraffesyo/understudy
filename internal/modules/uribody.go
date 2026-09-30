@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf16"
 )
 
@@ -282,8 +283,9 @@ func (e *uriTypeError) Error() string { return e.msg }
 // form-multipart field whose filename the uri action resolved locally.
 const multipartFileKey = "_understudy_content_b64"
 
-// pyMimeTypes is mimetypes' default table (types_map plus the common
-// non-strict entries) for the extensions prepare_multipart guesses from.
+// pyMimeTypes is mimetypes' default types_map (strict) for the
+// extensions prepare_multipart guesses from; pyCommonTypes holds the
+// non-strict common_types it does not shadow.
 var pyMimeTypes = map[string]string{
 	".js": "text/javascript", ".mjs": "text/javascript", ".json": "application/json",
 	".webmanifest": "application/manifest+json", ".doc": "application/msword", ".dot": "application/msword",
@@ -345,8 +347,67 @@ var pyMimeTypes = map[string]string{
 	".mk3d": "video/matroska-3d", ".mp4": "video/mp4", ".mpeg": "video/mpeg", ".m1v": "video/mpeg",
 	".mpa": "video/mpeg", ".mpe": "video/mpeg", ".mpg": "video/mpeg", ".mov": "video/quicktime",
 	".qt": "video/quicktime", ".webm": "video/webm", ".avi": "video/vnd.avi", ".movie": "video/x-sgi-movie",
-	".mid": "audio/midi", ".midi": "audio/midi", ".pct": "image/pict", ".pic": "image/pict",
-	".pict": "image/pict", ".xul": "text/xul",
+}
+
+var pyCommonTypes = map[string]string{
+	".rtf": "application/rtf", ".mid": "audio/midi", ".midi": "audio/midi", ".jpg": "image/jpg",
+	".pct": "image/pict", ".pic": "image/pict", ".pict": "image/pict", ".xul": "text/xul",
+}
+
+// pyMimeKnownFiles is mimetypes.knownfiles: mimetypes.init() reads each
+// that exists, in order, into the strict table, so the target's
+// mime.types (/etc/mime.types on most Linux, /etc/apache2/mime.types on
+// macOS) overrides and extends the defaults.
+var pyMimeKnownFiles = []string{
+	"/etc/mime.types",
+	"/etc/httpd/mime.types",
+	"/etc/httpd/conf/mime.types",
+	"/etc/apache/mime.types",
+	"/etc/apache2/mime.types",
+	"/usr/local/etc/httpd/conf/mime.types",
+	"/usr/local/lib/netscape/mime.types",
+	"/usr/local/etc/httpd/conf/mime.types",
+	"/usr/local/etc/mime.types",
+}
+
+var pyMimeStrict struct {
+	once  sync.Once
+	types map[string]string
+}
+
+// pyStrictTypes is the strict table after mimetypes.init().
+func pyStrictTypes() map[string]string {
+	pyMimeStrict.once.Do(func() {
+		t := make(map[string]string, len(pyMimeTypes))
+		for k, v := range pyMimeTypes {
+			t[k] = v
+		}
+		for _, f := range pyMimeKnownFiles {
+			data, err := os.ReadFile(f)
+			if err != nil {
+				continue
+			}
+			// MimeTypes.readfp: words up to a '#'-word; the first is
+			// the type, the rest its extensions.
+			for _, line := range strings.Split(string(data), "\n") {
+				words := strings.Fields(line)
+				for i, w := range words {
+					if strings.HasPrefix(w, "#") {
+						words = words[:i]
+						break
+					}
+				}
+				if len(words) < 2 {
+					continue
+				}
+				for _, suff := range words[1:] {
+					t["."+suff] = words[0]
+				}
+			}
+		}
+		pyMimeStrict.types = t
+	})
+	return pyMimeStrict.types
 }
 
 // pyGuessType is mimetypes.guess_type(name, strict=False)[0] ("" if
@@ -373,11 +434,13 @@ func pyGuessType(name string) string {
 	case ".gz", ".Z", ".bz2", ".xz", ".br", ".zst":
 		ext = path.Ext(root)
 	}
-	if t, ok := pyMimeTypes[ext]; ok {
-		return t
-	}
-	if t, ok := pyMimeTypes[strings.ToLower(ext)]; ok {
-		return t
+	for _, table := range []map[string]string{pyStrictTypes(), pyCommonTypes} {
+		if t, ok := table[ext]; ok {
+			return t
+		}
+		if t, ok := table[strings.ToLower(ext)]; ok {
+			return t
+		}
 	}
 	return ""
 }
