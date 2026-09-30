@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -37,25 +38,31 @@ type pyTarget struct {
 	build     string // "3.12.3" (see targetPythonBuild)
 }
 
-var pyTargets sync.Map // interpreter setting -> *pyTarget
+var pyTargets sync.Map // interpreter setting + discovery inputs -> *pyTarget
 
 // targetPython resolves the interpreter the task's
-// ansible_python_interpreter names, or the one discovery would find.
+// ansible_python_interpreter names, or the one discovery would find:
+// the first of the fallback list `command -v` finds in the login user's
+// PATH (discovery runs without become).
 func targetPython(env *RunEnv) *pyTarget {
-	interp := ""
+	var interp, pathEnv string
+	candidates := pyDiscoveryFallback
 	if env != nil {
-		interp = env.PythonInterpreter
+		interp, pathEnv = env.PythonInterpreter, env.DiscoveryPath
+		if len(env.PythonFallback) > 0 {
+			candidates = env.PythonFallback
+		}
 	}
-	if t, ok := pyTargets.Load(interp); ok {
+	key := interp + "\x00" + pathEnv + "\x00" + strings.Join(candidates, "\x00")
+	if t, ok := pyTargets.Load(key); ok {
 		return t.(*pyTarget)
 	}
 	t := &pyTarget{}
-	candidates := pyDiscoveryFallback
 	if interp != "" {
 		candidates = []string{interp}
 	}
 	for _, name := range candidates {
-		p, err := exec.LookPath(name)
+		p, err := lookPathIn(name, pathEnv)
 		if err != nil {
 			continue
 		}
@@ -70,27 +77,87 @@ func targetPython(env *RunEnv) *pyTarget {
 		}
 		break
 	}
-	v, _ := pyTargets.LoadOrStore(interp, t)
+	v, _ := pyTargets.LoadOrStore(key, t)
 	return v.(*pyTarget)
+}
+
+// lookPathIn is exec.LookPath against a PATH value ("" for this
+// process's).
+func lookPathIn(name, pathEnv string) (string, error) {
+	if pathEnv == "" || strings.Contains(name, "/") {
+		return exec.LookPath(name)
+	}
+	for _, dir := range filepath.SplitList(pathEnv) {
+		if dir == "" {
+			dir = "."
+		}
+		p := filepath.Join(dir, name)
+		if info, err := os.Stat(p); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return p, nil
+		}
+	}
+	return "", exec.ErrNotFound
 }
 
 // targetHasPython reports whether the task has a Python ansible could
 // run its module with.
 func targetHasPython(env *RunEnv) bool { return len(targetPython(env).paths) > 0 }
 
-// targetPythonExecutable is the module's sys.executable, for messages.
+// targetPythonExecutable is the module's sys.executable, for messages:
+// the interpreter as invoked (discovery falls back to /usr/bin/python3),
+// as that Python reports itself.
 func targetPythonExecutable(env *RunEnv) string {
 	if t := targetPython(env); len(t.paths) > 0 {
-		return t.paths[0]
+		return pySysExecutable(t.paths[0])
 	}
-	return "/usr/bin/python3"
+	return pySysExecutable("/usr/bin/python3")
 }
 
-// missingRequiredLibFor is missing_required_lib naming the task's Python.
-func missingRequiredLibFor(env *RunEnv, library string) string {
+// brewPythonRe matches a Homebrew Python's real location.
+var brewPythonRe = regexp.MustCompile(`^(.+)/Cellar/python@(3\.\d+)/[^/]+/`)
+
+// pySysExecutable is sys.executable of the Python at path: the path
+// itself, except where the interpreter reports another one. macOS's
+// /usr/bin/python3 is a shim running the active developer directory's
+// python3, and Homebrew's framework Pythons name their opt link (a
+// virtual environment's interpreter keeps its own path).
+func pySysExecutable(path string) string {
+	if path == "/usr/bin/python3" && runtime.GOOS == "darwin" {
+		dev := os.Getenv("DEVELOPER_DIR")
+		if dev == "" {
+			dev, _ = os.Readlink("/var/db/xcode_select_link")
+		}
+		if dev == "" {
+			dev = "/Library/Developer/CommandLineTools"
+		}
+		if p := filepath.Join(dev, "usr/bin/python3"); isFile(p) {
+			return p
+		}
+		return path
+	}
+	if isFile(filepath.Join(filepath.Dir(filepath.Dir(path)), "pyvenv.cfg")) {
+		return path
+	}
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		if m := brewPythonRe.FindStringSubmatch(real); m != nil {
+			return m[1] + "/opt/python@" + m[2] + "/bin/python" + m[2]
+		}
+	}
+	return path
+}
+
+// missingRequiredLib is basic.missing_required_lib() naming the task's
+// Python; reason and url are optional.
+func missingRequiredLib(env *RunEnv, library, reason, url string) string {
 	host, _ := os.Hostname()
-	return fmt.Sprintf("Failed to import the required Python library (%s) on %s's Python %s.", library, host, targetPythonExecutable(env)) +
-		" Please read the module documentation and install it in the appropriate location." +
+	msg := fmt.Sprintf("Failed to import the required Python library (%s) on %s's Python %s.", library, host, targetPythonExecutable(env))
+	if reason != "" {
+		msg += " This is required " + reason + "."
+	}
+	if url != "" {
+		msg += " See " + url + " for more info."
+	}
+	return msg + " Please read the module documentation and install it in the appropriate location." +
 		" If the required library is installed, but Ansible is using the wrong Python interpreter," +
 		" please consult the documentation on ansible_python_interpreter"
 }

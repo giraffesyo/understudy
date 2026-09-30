@@ -40,6 +40,24 @@ type TaskRequest struct {
 
 	// PythonInterpreter is ansible_python_interpreter ("" for discovery).
 	PythonInterpreter string `json:"python_interpreter,omitempty"`
+	// PythonFallback is ansible_interpreter_python_fallback, the list
+	// interpreter discovery tries (nil for ansible's default).
+	PythonFallback []string `json:"python_fallback,omitempty"`
+	// DiscoveryPath is the login user's PATH, which interpreter discovery
+	// searches ("" when the module runs as that user).
+	DiscoveryPath string `json:"discovery_path,omitempty"`
+
+	// LoginHome, LoginUID and LoginGID describe the login user when the
+	// module runs as another one: remote_tmp's ~ is the login user's
+	// home, and directories made there belong to that user (a negative
+	// id: unknown).
+	LoginHome string `json:"login_home,omitempty"`
+	LoginUID  int    `json:"login_uid,omitempty"`
+	LoginGID  int    `json:"login_gid,omitempty"`
+	// StageDir is the temporary directory a transferred file is reported
+	// in when an unprivileged become user runs the module (made by the
+	// login user in a system temp dir), "" otherwise.
+	StageDir string `json:"stage_dir,omitempty"`
 }
 
 // Result is the outcome of one module invocation. Its shape mirrors
@@ -99,6 +117,22 @@ const causeKey = "_understudy_cause"
 // performs action-plugin work (copy) reports action-level failures.
 const originKey = "_understudy_origin"
 
+// msgTextKey carries Msg across the wire when the result's msg is not a
+// string (Extra["msg"] holds it): Msg is then its Python str(), which
+// the error display shows.
+const msgTextKey = "_understudy_msg_text"
+
+// structuredMsg reports whether Extra carries a non-string msg, which
+// then is the result's msg (Msg only being its display text).
+func (r *Result) structuredMsg() bool {
+	v, ok := r.Extra["msg"]
+	if !ok || v == nil {
+		return false
+	}
+	_, isStr := v.(string)
+	return !isStr
+}
+
 // Fail builds a failed result with a formatted message.
 func Fail(format string, args ...any) *Result {
 	return &Result{Failed: true, Msg: fmt.Sprintf(format, args...)}
@@ -138,7 +172,11 @@ func (r *Result) fields() map[string]any {
 	if r.Skipped {
 		m["skipped"] = true
 	}
-	if r.Msg != "" {
+	if r.structuredMsg() {
+		if r.Msg != "" {
+			m[msgTextKey] = r.Msg
+		}
+	} else if r.Msg != "" {
 		m["msg"] = r.Msg
 	}
 	if r.Cause != "" {
@@ -199,12 +237,23 @@ func (r *Result) fromFields(m map[string]any) {
 		r.Skipped, _ = v.(bool)
 	}
 	if v, ok := take("msg"); ok {
-		r.Msg = fmt.Sprintf("%v", v)
-		if v == "" {
-			// An explicitly empty msg (command's success result) is part
-			// of the result shape; keep it visible through Extra.
-			m["msg"] = ""
+		switch v.(type) {
+		case string, nil:
+			r.Msg = fmt.Sprintf("%v", v)
+			if v == "" {
+				// An explicitly empty msg (command's success result) is part
+				// of the result shape; keep it visible through Extra.
+				m["msg"] = ""
+			}
+		default:
+			// A structured msg stays as it is; its display text travels
+			// separately.
+			m["msg"] = v
+			r.Msg = fmt.Sprintf("%v", v)
 		}
+	}
+	if v, ok := take(msgTextKey); ok {
+		r.Msg, _ = v.(string)
 	}
 	if v, ok := take(causeKey); ok {
 		r.Cause, _ = v.(string)
@@ -262,7 +311,7 @@ func (r *Result) ToVars() map[string]any {
 	if r.Skipped {
 		m["skipped"] = true // absent unless true, as in Ansible
 	}
-	if r.Msg != "" {
+	if r.Msg != "" && !r.structuredMsg() {
 		m["msg"] = r.Msg
 	}
 	if r.RC != nil {
@@ -275,12 +324,14 @@ func (r *Result) ToVars() map[string]any {
 		// A module's stdout/stderr without rc: the action layer still
 		// pre-splits them into lines.
 		for _, s := range [][2]string{{"stdout", r.Stdout}, {"stderr", r.Stderr}} {
-			if s[1] == "" {
-				continue
+			if s[1] != "" {
+				m[s[0]] = s[1]
 			}
-			m[s[0]] = s[1]
-			if _, ok := m[s[0]+"_lines"]; !ok {
-				m[s[0]+"_lines"] = splitLines(s[1])
+			// An explicitly empty one (in Extra) is split too.
+			if v, ok := m[s[0]].(string); ok {
+				if _, ok := m[s[0]+"_lines"]; !ok {
+					m[s[0]+"_lines"] = splitLines(v)
+				}
 			}
 		}
 	}

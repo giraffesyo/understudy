@@ -19,8 +19,14 @@ type Config struct {
 	PrivateKeyFile  string
 	Timeout         time.Duration
 	RemoteTmp       string
-	Source          string   // which file was loaded ("" = defaults)
-	RolesPath       []string // roles_path / ANSIBLE_ROLES_PATH
+	// Shell plugin options for become users' temporary files (nil / ""
+	// / false: the defaults).
+	AdminUsers        []string // admin_users / ANSIBLE_ADMIN_USERS
+	SystemTmpdirs     []string // system_tmpdirs / ANSIBLE_SYSTEM_TMPDIRS
+	CommonRemoteGroup string   // common_remote_group / ANSIBLE_COMMON_REMOTE_GROUP
+	WorldReadableTemp bool     // allow_world_readable_tmpfiles / ANSIBLE_SHELL_ALLOW_WORLD_READABLE_TEMP
+	Source            string   // which file was loaded ("" = defaults)
+	RolesPath         []string // roles_path / ANSIBLE_ROLES_PATH
 
 	StdoutCallback      string
 	CallbackPlugins     []string // callback_plugins / ANSIBLE_CALLBACK_PLUGINS
@@ -154,6 +160,14 @@ func applyINI(cfg *Config, content string) {
 				}
 			case "remote_tmp":
 				cfg.RemoteTmp = val
+			case "admin_users":
+				cfg.AdminUsers = splitList(val)
+			case "system_tmpdirs":
+				cfg.SystemTmpdirs = splitList(val)
+			case "common_remote_group":
+				cfg.CommonRemoteGroup = val
+			case "allow_world_readable_tmpfiles":
+				cfg.WorldReadableTemp = iniBool(val, cfg.WorldReadableTemp)
 			case "callback_plugins":
 				cfg.CallbackPlugins = splitColonList(val)
 			case "stdout_callback":
@@ -263,6 +277,18 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ANSIBLE_REMOTE_TMP"); v != "" {
 		cfg.RemoteTmp = v
+	}
+	if v := os.Getenv("ANSIBLE_ADMIN_USERS"); v != "" {
+		cfg.AdminUsers = splitList(v)
+	}
+	if v := os.Getenv("ANSIBLE_SYSTEM_TMPDIRS"); v != "" {
+		cfg.SystemTmpdirs = splitList(v)
+	}
+	if v := os.Getenv("ANSIBLE_COMMON_REMOTE_GROUP"); v != "" {
+		cfg.CommonRemoteGroup = v
+	}
+	if v := os.Getenv("ANSIBLE_SHELL_ALLOW_WORLD_READABLE_TEMP"); v != "" {
+		cfg.WorldReadableTemp = iniBool(v, cfg.WorldReadableTemp)
 	}
 	if v := os.Getenv("ANSIBLE_CALLBACK_PLUGINS"); v != "" {
 		cfg.CallbackPlugins = splitColonList(v)

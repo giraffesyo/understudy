@@ -215,8 +215,13 @@ func uriModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	elapsed := int64(time.Since(start) / time.Second)
 	if info.fatal != "" {
 		// fetch_url's fail_json(msg=..., **info) for ValueErrors.
-		return &agentproto.Result{Failed: true, Msg: info.fatal,
-			Extra: map[string]any{"url": info.fields["url"], "status": info.fields["status"]}}
+		extra := map[string]any{}
+		for _, k := range []string{"url", "status"} {
+			if v, ok := info.fields[k]; ok {
+				extra[k] = v
+			}
+		}
+		return &agentproto.Result{Failed: true, Msg: info.fatal, Extra: extra}
 	}
 
 	if info.crash != "" {

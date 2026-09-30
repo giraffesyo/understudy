@@ -1,0 +1,41 @@
+# distros: ubuntu alpine
+---
+# The dnf action on hosts without dnf: detecting the backend reports the
+# pkg_mgr fact setup finds and fails with the action's tuple message
+# (facts from a failed task are not kept, so each task detects again),
+# yum is only a redirect, and the dnf4 / dnf5 modules fail looking for
+# their Python bindings. setup's facts stay out of -v output.
+- hosts: target
+  gather_facts: false
+  tasks:
+    - name: dnf detects the backend
+      dnf: {name: tree}
+      become: true
+      ignore_errors: true
+    - name: use_backend auto detects again
+      dnf: {name: tree, use_backend: auto}
+      ignore_errors: true
+    - name: yum is the dnf action
+      yum: {name: tree}
+      ignore_errors: true
+    - name: the dnf4 backend
+      dnf: {name: tree, use_backend: dnf4}
+      ignore_errors: true
+    - name: the dnf5 backend installs its bindings first
+      dnf: {name: tree, use_backend: dnf5}
+      ignore_errors: true
+    - name: the dnf5 backend in check mode
+      dnf: {name: tree, use_backend: dnf5}
+      check_mode: true
+      ignore_errors: true
+    - name: a yum backend
+      dnf: {name: tree, use_backend: yum}
+      ignore_errors: true
+    - name: gather the pkg_mgr fact
+      setup: {gather_subset: [min]}
+    - name: a known pkg_mgr is still reported
+      dnf: {name: tree}
+      ignore_errors: true
+    - name: yum with the fact known
+      dnf: {name: tree, use_backend: yum}
+      ignore_errors: true

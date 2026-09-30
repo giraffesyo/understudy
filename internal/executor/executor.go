@@ -1625,27 +1625,38 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 	}
 	connecting := r.connectingNote(ctx, inProcess, vctx, host, target)
 	return &actions.Context{
-		Host:         host,
-		Vars:         vctx,
-		Conn:         conn,
-		Become:       become,
-		CheckMode:    r.effectiveCheckMode(play, task),
-		Diff:         r.effectiveDiff(play, task),
-		Background:   task.Async > 0,
-		AsyncTimeout: task.Async,
-		BaseDir:      r.Opts.BaseDir,
-		SrcDir:       task.SrcDir,
-		TaskDir:      taskDir(task),
-		Verbosity:    r.Opts.Verbosity,
-		RemoteTmp:    r.remoteTmp(vctx),
-		ArgPos:       argPositions(task),
+		Host:          host,
+		Vars:          vctx,
+		Conn:          conn,
+		Become:        become,
+		CheckMode:     r.effectiveCheckMode(play, task),
+		Diff:          r.effectiveDiff(play, task),
+		Background:    task.Async > 0,
+		AsyncTimeout:  task.Async,
+		BaseDir:       r.Opts.BaseDir,
+		SrcDir:        task.SrcDir,
+		TaskDir:       taskDir(task),
+		Verbosity:     r.Opts.Verbosity,
+		RemoteTmp:     r.remoteTmp(vctx),
+		Delegated:     target != host,
+		DelegateFacts: task.DelegateFacts,
+		ArgPos:        argPositions(task),
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
 			if req.PythonInterpreter == "" {
 				req.PythonInterpreter = pythonInterpreter(vctx)
 			}
+			if req.PythonFallback == nil {
+				req.PythonFallback = varList(vctx, "ansible_interpreter_python_fallback")
+			}
+			b := become
+			if b != nil && !inProcess {
+				bs := *b
+				bs.Shell = r.shellOptions(target, kw, vctx)
+				b = &bs
+			}
 			connecting()
 			r.displayModuleRedirect(task, req.Module)
-			return r.runModule(ctx, host, target, kw, inProcess, become, task, envKeys, env, req, payload)
+			return r.runModule(ctx, host, target, kw, inProcess, b, task, envKeys, env, req, payload)
 		},
 		Connecting: connecting,
 		SetFact: func(name string, value any) {
@@ -1659,6 +1670,67 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 			}
 		},
 	}, target, nil
+}
+
+// shellOptions are the shell plugin options for a task's temporary files
+// on target: the ansible_admin_users, ansible_system_tmpdirs,
+// ansible_common_remote_group and ansible_shell_allow_world_readable_temp
+// variables over the configuration.
+func (r *Runner) shellOptions(target string, kw connection.Keywords, vctx *vars.Context) *connection.ShellOptions {
+	sh := r.Conns.Opts.Shell
+	sh.RemoteUser = r.Conns.RemoteUser(target, kw)
+	sh.RemoteTmp = r.remoteTmp(vctx)
+	sh.Warn = r.Conns.Opts.Warn
+	if l := varList(vctx, "ansible_admin_users"); l != nil {
+		sh.AdminUsers = l
+	}
+	if l := varList(vctx, "ansible_system_tmpdirs"); l != nil {
+		sh.SystemTmpdirs = l
+	}
+	if v, ok := vctx.Get("ansible_common_remote_group"); ok && v != nil {
+		if tv, err := vctx.TemplateValue(v); err == nil {
+			v = tv
+		}
+		sh.CommonRemoteGroup = fmt.Sprint(v)
+	}
+	if v, ok := vctx.Get("ansible_shell_allow_world_readable_temp"); ok && v != nil {
+		if tv, err := vctx.TemplateValue(v); err == nil {
+			v = tv
+		}
+		sh.WorldReadableTemp = template.Truthy(v) && !strings.EqualFold(fmt.Sprint(v), "false") && !strings.EqualFold(fmt.Sprint(v), "no")
+	}
+	return &sh
+}
+
+// varList is a list-typed variable (a list, or a comma-separated
+// string), nil when unset.
+func varList(vctx *vars.Context, name string) []string {
+	v, ok := vctx.Get(name)
+	if !ok || v == nil {
+		return nil
+	}
+	if tv, err := vctx.TemplateValue(v); err == nil {
+		v = tv
+	}
+	var out []string
+	switch t := v.(type) {
+	case []any:
+		for _, e := range t {
+			out = append(out, fmt.Sprint(e))
+		}
+	case string:
+		for _, e := range strings.Split(t, ",") {
+			if e = strings.TrimSpace(e); e != "" {
+				out = append(out, e)
+			}
+		}
+	default:
+		return nil
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out
 }
 
 // pythonInterpreter is the interpreter ansible would run the task's module
@@ -2005,7 +2077,9 @@ func (r *Runner) runModule(ctx context.Context, host, target string, kw connecti
 		if err != nil {
 			return nil, err
 		}
-		client := &connection.AgentClient{Conn: connection.NewLocal(), AgentPath: connection.ShellQuote(exe) + " " + modules.LocalAgentArg}
+		login := &connection.LoginInfo{Path: os.Getenv("PATH"), UID: os.Getuid(), GID: os.Getgid()}
+		login.Home, _ = os.UserHomeDir()
+		client := &connection.AgentClient{Conn: connection.NewLocal(), AgentPath: connection.ShellQuote(exe) + " " + modules.LocalAgentArg, Login: login}
 		res, err := client.Run(ctx, req, payload, become)
 		if bf := actions.BecomeFailure(err); bf != nil {
 			return bf, nil
@@ -2142,7 +2216,9 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	// Gathered facts land in the facts layer, both prefixed at top level
 	// (inject_facts_as_vars) and under the ansible_facts dict. set_fact
 	// writes its own layer via the SetFact hook.
-	if len(res.AnsibleFacts) > 0 && task.Module != "set_fact" {
+	// Only a successful result's facts are kept (a failed task's are
+	// reported but not applied).
+	if len(res.AnsibleFacts) > 0 && task.Module != "set_fact" && !res.Failed {
 		target := host
 		if res.DelegatedTo != "" {
 			target = res.DelegatedTo

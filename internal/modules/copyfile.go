@@ -152,7 +152,7 @@ func copyAction(env *RunEnv, user map[string]any, a map[string]any) *agentproto.
 			return &agentproto.Result{Changed: true, Diff: diffs}
 		}
 		remoteTmp, _ := a["remote_tmp"].(string)
-		tmpDir, tmpSrc, err := stagePayload(payload, pySplitExt(destFile), remoteTmp)
+		tmpDir, reportSrc, tmpSrc, err := stagePayload(env, payload, pySplitExt(destFile), remoteTmp)
 		if err != nil {
 			return agentproto.Fail("staging the source file: %v", err)
 		}
@@ -171,6 +171,9 @@ func copyAction(env *RunEnv, user map[string]any, a map[string]any) *agentproto.
 			margs["checksum"] = localSum
 		}
 		mr = copyCore(env, margs)
+		if mr != nil && mr.Extra != nil && mr.Extra["src"] == tmpSrc {
+			mr.Extra["src"] = reportSrc
+		}
 	} else {
 		if follow {
 			if nf := statForCopy(destFile, false); nf.islnk && nf.lnkSource != "" {
@@ -264,28 +267,81 @@ func pyToText(b []byte) string {
 }
 
 // stagePayload writes the transferred content where Ansible's transfer
-// would: <remote_tmp>/ansible-tmp-<time>-<pid>-<random>/.source<ext>, with
-// remote_tmp ("~/.ansible/tmp" by default) created 0700 as the shell
-// plugin's mkdir does. An unusable remote_tmp falls back to the system
-// temp directory.
-func stagePayload(content []byte, ext, remoteTmp string) (string, string, error) {
+// would: <tmpdir>/.source<ext> (see transferDir). It returns the staging
+// directory to remove afterwards, the path the file is reported at and
+// the path it was written to (the same unless an unprivileged become
+// user runs the module).
+func stagePayload(env *RunEnv, content []byte, ext, remoteTmp string) (dir, report, actual string, err error) {
+	reportDir, dir, err := transferDir(env, remoteTmp)
+	if err != nil {
+		return "", "", "", err
+	}
+	actual = filepath.Join(dir, ".source"+ext)
+	if err := os.WriteFile(actual, content, 0o600); err != nil {
+		os.RemoveAll(dir)
+		return "", "", "", err
+	}
+	return dir, filepath.Join(reportDir, ".source"+ext), actual, nil
+}
+
+// transferDir makes the directory a transferred file lands in, as the
+// action's _make_tmp_path does: <remote_tmp>/ansible-tmp-<time>-<pid>-<random>,
+// remote_tmp ("~/.ansible/tmp" by default, its ~ the login user's home)
+// made 0700 like the shell plugin's mkdir, and owned by the login user
+// when made under become. An unusable remote_tmp falls back to the
+// system temp directory. When an unprivileged become user runs the
+// module, the login user made the directory (env.StageDir), which the
+// module cannot write to: files are reported there but written to a
+// private directory. It returns the directory to report and the one
+// made (to write to and remove afterwards).
+func transferDir(env *RunEnv, remoteTmp string) (report, dir string, err error) {
+	if env != nil && env.StageDir != "" {
+		dir, err := os.MkdirTemp("", "ansible-stage-")
+		return env.StageDir, dir, err
+	}
 	name := fmt.Sprintf("ansible-tmp-%s-%d-%d", pyFloat(float64(time.Now().UnixNano())/1e9), os.Getpid(), rand.Int63n(1<<48))
 	base := os.TempDir()
 	if remoteTmp != "" {
-		if rt := pyExpandUser(remoteTmp); os.MkdirAll(rt, 0o700) == nil {
+		if rt := loginExpandUser(env, remoteTmp); mkdirAllAsLogin(env, rt) == nil {
 			base = rt
 		}
 	}
-	dir := filepath.Join(base, name)
+	dir = filepath.Join(base, name)
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return "", "", err
 	}
-	src := filepath.Join(dir, ".source"+ext)
-	if err := os.WriteFile(src, content, 0o600); err != nil {
-		os.RemoveAll(dir)
-		return "", "", err
+	return dir, dir, nil
+}
+
+// loginExpandUser expands a leading ~ to the login user's home: the
+// action plugin expands remote_tmp without become.
+func loginExpandUser(env *RunEnv, p string) string {
+	if env != nil && env.LoginHome != "" && (p == "~" || strings.HasPrefix(p, "~/")) {
+		return env.LoginHome + p[1:]
 	}
-	return dir, src, nil
+	return pyExpandUser(p)
+}
+
+// mkdirAllAsLogin is os.MkdirAll(p, 0700), giving the directories it
+// makes to the login user when running as root under become (the login
+// user would have made them).
+func mkdirAllAsLogin(env *RunEnv, p string) error {
+	var made []string
+	for d := filepath.Clean(p); ; d = filepath.Dir(d) {
+		if _, err := os.Stat(d); err == nil || d == filepath.Dir(d) {
+			break
+		}
+		made = append(made, d)
+	}
+	if err := os.MkdirAll(p, 0o700); err != nil {
+		return err
+	}
+	if env != nil && env.LoginHome != "" && env.LoginUID > 0 && os.Geteuid() == 0 {
+		for _, d := range made {
+			os.Chown(d, env.LoginUID, env.LoginGID)
+		}
+	}
+	return nil
 }
 
 // pyFloat is repr(float) for ordinary magnitudes.

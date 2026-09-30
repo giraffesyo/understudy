@@ -93,3 +93,45 @@ func TestPyVersionTriple(t *testing.T) {
 		}
 	}
 }
+
+// sys.executable: Homebrew's framework Pythons report their opt link, a
+// virtual environment's interpreter its own path.
+func TestPySysExecutable(t *testing.T) {
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	real := filepath.Join(root, "Cellar/python@3.12/3.12.1/bin/python3.12")
+	os.MkdirAll(filepath.Dir(real), 0o755)
+	os.WriteFile(real, []byte("#!/bin/sh\n"), 0o755)
+	os.MkdirAll(filepath.Join(root, "bin"), 0o755)
+	os.Symlink(real, filepath.Join(root, "bin/python3"))
+	if got, want := pySysExecutable(filepath.Join(root, "bin/python3")), filepath.Join(root, "opt/python@3.12/bin/python3.12"); got != want {
+		t.Errorf("brew: %q, want %q", got, want)
+	}
+	venv := filepath.Join(root, "venv")
+	os.MkdirAll(filepath.Join(venv, "bin"), 0o755)
+	os.WriteFile(filepath.Join(venv, "pyvenv.cfg"), []byte("home = "+filepath.Dir(real)+"\n"), 0o644)
+	os.Symlink(real, filepath.Join(venv, "bin/python"))
+	if got := pySysExecutable(filepath.Join(venv, "bin/python")); got != filepath.Join(venv, "bin/python") {
+		t.Errorf("venv: %q", got)
+	}
+	plain := filepath.Join(root, "plain/bin/python3.11")
+	os.MkdirAll(filepath.Dir(plain), 0o755)
+	os.WriteFile(plain, []byte("#!/bin/sh\n"), 0o755)
+	if got := pySysExecutable(plain); got != plain {
+		t.Errorf("plain: %q", got)
+	}
+}
+
+// Discovery walks the fallback list through the login user's PATH.
+func TestTargetPythonDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	py := filepath.Join(dir, "python3.11")
+	os.WriteFile(py, []byte("#!/bin/sh\n"), 0o755)
+	env := &RunEnv{DiscoveryPath: dir, PythonFallback: []string{"python3.99", "python3.11", "/nonexistent/python3"}}
+	if got := targetPython(env); len(got.paths) == 0 || got.paths[0] != py || got.version != "3.11" {
+		t.Errorf("discovered %+v, want %s", got, py)
+	}
+	env.PythonInterpreter = "/nonexistent/python3"
+	if targetHasPython(env) {
+		t.Errorf("a missing ansible_python_interpreter has no Python")
+	}
+}

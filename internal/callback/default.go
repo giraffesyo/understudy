@@ -337,15 +337,6 @@ func (d *Default) runIsVerbose(task *playbook.Task, res *agentproto.Result, verb
 	return (d.Verbosity > verbosity || res.VerboseAlways) && !verboseOverride(task.Module)
 }
 
-func verboseOverride(module string) bool {
-	switch module {
-	case "setup", "ansible.builtin.setup", "ansible.legacy.setup",
-		"gather_facts", "ansible.builtin.gather_facts", "ansible.legacy.gather_facts":
-		return true
-	}
-	return false
-}
-
 func (d *Default) indent(verboseAlways bool) int {
 	if verboseAlways || d.Verbosity > 2 {
 		return 4
@@ -412,6 +403,17 @@ func (d *Default) dumpRaw(task *playbook.Task, res *agentproto.Result, clean boo
 }
 
 const censoredMsg = "the output has been hidden due to the fact that 'no_log: true' was specified for this result"
+
+// verboseOverride reports whether a module's results carry
+// _ansible_verbose_override: setup and gather_facts keep -v from dumping
+// the facts they gathered.
+func verboseOverride(module string) bool {
+	switch strings.TrimPrefix(strings.TrimPrefix(module, "ansible.builtin."), "ansible.legacy.") {
+	case "setup", "gather_facts":
+		return true
+	}
+	return false
+}
 
 func isDebug(module string) bool {
 	return module == "debug" || module == "ansible.builtin.debug" || module == "ansible.legacy.debug"
