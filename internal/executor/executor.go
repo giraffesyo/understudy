@@ -94,6 +94,7 @@ type Runner struct {
 	failed         map[string]bool
 	notified       map[string]map[string]bool // handler name -> hosts to run on
 	blockFailed    map[string]map[int]bool    // host -> block ID -> failure caught by rescue
+	nextBlockID    int                        // fresh IDs for blocks of included files
 	failedIn       map[string]map[int]bool    // host -> blocks it was inside when it failed hard
 	ended          map[string]bool            // meta: end_host (per play)
 	runOnceHosts   []string                   // hosts a running run_once task fans out to
@@ -312,6 +313,9 @@ func (r *Runner) runPlayBatch(ctx context.Context, play *playbook.Play, playHost
 	r.resetNotified()
 	r.mu.Lock()
 	r.blockFailed = map[string]map[int]bool{}
+	if r.nextBlockID < 1<<20 {
+		r.nextBlockID = 1 << 20 // above any parse-time block ID
+	}
 	r.failedIn = map[string]map[int]bool{}
 	r.mu.Unlock()
 	if play.GatherFacts == nil || *play.GatherFacts {
@@ -541,6 +545,7 @@ func (r *Runner) runImportRole(ctx context.Context, play *playbook.Play, task *p
 		}
 		return nil
 	}
+	r.adoptBlocks(task, tasks)
 	for _, t := range tasks {
 		if len(task.Vars) > 0 {
 			merged := maps.Clone(task.Vars)

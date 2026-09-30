@@ -183,6 +183,7 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 			}
 			tasks = loaded
 		}
+		r.adoptBlocks(task, tasks)
 		for _, t := range tasks {
 			if !isRole && t.RoleName == "" {
 				// Tasks included from a role belong to that role.
@@ -200,6 +201,32 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 		}
 	}
 	return nil
+}
+
+// adoptBlocks places included tasks inside the include's enclosing blocks,
+// so a failure in an included file or role is rescued (and its always
+// runs) like any task of the block. The included file's own block IDs
+// are renumbered: each file numbers its blocks from 0, which would
+// otherwise collide with the including file's blocks.
+func (r *Runner) adoptBlocks(include *playbook.Task, tasks []*playbook.Task) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	remap := map[int]int{}
+	for _, t := range tasks {
+		refs := make([]playbook.BlockRef, 0, len(include.Blocks)+len(t.Blocks))
+		refs = append(refs, include.Blocks...)
+		for _, b := range t.Blocks {
+			id, ok := remap[b.ID]
+			if !ok {
+				r.nextBlockID++
+				id = r.nextBlockID
+				remap[b.ID] = id
+			}
+			b.ID = id
+			refs = append(refs, b)
+		}
+		t.Blocks = refs
+	}
 }
 
 // loadIncludedRole loads a role for include_role, layering its defaults and

@@ -1,0 +1,50 @@
+---
+# Failures inside include_role / import_role / include_tasks are rescued by
+# the enclosing block, and blocks inside included files keep their own
+# rescue semantics (block IDs must not collide with the includer's).
+- name: include rescue
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: a block whose first task fails is rescued first
+      block:
+        - name: fail in the includer
+          fail:
+            msg: outer boom
+      rescue:
+        - name: outer rescue ran
+          debug:
+            msg: outer rescued
+
+    - name: include_role failure is rescued
+      block:
+        - include_role:
+            name: failrole
+        - name: not reached
+          debug:
+            msg: unreachable
+      rescue:
+        - name: rescued include_role
+          debug:
+            msg: "{{ ansible_failed_result.msg }}"
+      always:
+        - name: always after include_role
+          debug:
+            msg: always ran
+
+    - name: import_role failure is rescued
+      block:
+        - import_role:
+            name: failrole
+      rescue:
+        - name: rescued import_role
+          debug:
+            msg: rescued import
+
+    - name: include_tasks failure is rescued
+      block:
+        - include_tasks: includes/inc_fail.yml
+      rescue:
+        - name: rescued include_tasks
+          debug:
+            msg: rescued include
