@@ -226,6 +226,7 @@ func forwardToCopy(ctx context.Context, actx *Context, args map[string]any, cont
 	}
 	fwd["_copy_action"] = map[string]any{
 		"source": source, "source_rel": sourceRel, "content": isContent,
+		"remote_tmp": actx.RemoteTmp,
 	}
 	req := &agentproto.TaskRequest{
 		Proto:      agentproto.ProtoVersion,

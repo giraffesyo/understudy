@@ -1185,6 +1185,20 @@ func registerOverlay(task *playbook.Task, res *agentproto.Result) map[string]any
 	return map[string]any{name: m}
 }
 
+// remoteTmp is the shell plugin's remote_tmp option: the ansible_remote_tmp
+// variable, else ansible.cfg/ANSIBLE_REMOTE_TMP, else Ansible's default.
+func (r *Runner) remoteTmp(vctx *vars.Context) string {
+	if v, ok := vctx.Get("ansible_remote_tmp"); ok {
+		if s, ok := v.(string); ok && s != "" {
+			return s
+		}
+	}
+	if r.Conns != nil && r.Conns.Opts.RemoteTmp != "" {
+		return r.Conns.Opts.RemoteTmp
+	}
+	return "~/.ansible/tmp"
+}
+
 // actionContext builds the execution context for one occurrence of a task
 // on host. With delegate_to, the task keeps host's variables but runs over
 // the delegate's connection (its own connection vars); the returned target
@@ -1228,6 +1242,7 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		SrcDir:       task.SrcDir,
 		TaskDir:      taskDir(task),
 		Verbosity:    r.Opts.Verbosity,
+		RemoteTmp:    r.remoteTmp(vctx),
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
 			return r.runModule(ctx, host, target, kw, inProcess, become, task, req, payload)
 		},
