@@ -308,16 +308,30 @@ func setMode(env *RunEnv, path string, mode any, changed bool, diff *fileDiff) (
 	if env.CheckMode {
 		return true, nil
 	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		if err := syscall.Chmod(path, uint32(want)); err != nil {
-			if err != syscall.ENOENT && err != syscall.ELOOP {
-				// Re-raised from the except-OSError handler: a module crash.
-				return changed, moduleCrash(&os.PathError{Op: "chmod", Path: path, Err: err})
+	isLink := info.Mode()&os.ModeSymlink != 0
+	var err2 error
+	switch {
+	case haveLchmod:
+		err2 = lchmod(path, uint32(want))
+	case !isLink:
+		err2 = syscall.Chmod(path, uint32(want))
+	}
+	// Symlinks without lchmod (Linux): Ansible's chmod-then-restore leaves
+	// the target unchanged, so nothing changes.
+	if err2 != nil {
+		errno, _ := err2.(syscall.Errno)
+		switch {
+		case isLink && (errno == syscall.EACCES || errno == syscall.EPERM || errno == syscall.EROFS):
+		case errno == syscall.ENOENT || errno == syscall.ELOOP:
+		default:
+			// Re-raised from the except-OSError handler: a module crash.
+			op := "chmod"
+			if haveLchmod {
+				op = "lchmod"
 			}
+			return changed, moduleCrash(&os.PathError{Op: op, Path: path, Err: err2})
 		}
 	}
-	// Symlinks: Linux has no lchmod, and Ansible's chmod-then-restore
-	// leaves the target unchanged, so nothing changes.
 	if after, err := os.Lstat(path); err == nil && int64(sIMode(after.Mode())) != prev {
 		changed = true
 	}

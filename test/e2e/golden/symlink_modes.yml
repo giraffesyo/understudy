@@ -1,0 +1,42 @@
+# mode on symlinks: the file module with follow (default yes) acts on the
+# link target; follow: false and state: link act on the link itself, where
+# a platform without lchmod (Linux) leaves everything unchanged.
+- hosts: all
+  gather_facts: false
+  tasks:
+    - copy: {content: "t\n", dest: "{{ workdir }}/target", mode: "0644"}
+    - file: {src: "{{ workdir }}/target", dest: "{{ workdir }}/link", state: link}
+    - name: follow (default) changes the target's mode
+      file: {path: "{{ workdir }}/link", mode: "0600"}
+      register: r1
+    - debug: {var: r1}
+    - name: follow false on the link
+      file: {path: "{{ workdir }}/link", mode: "0640", follow: false}
+      register: r2
+    - debug: {var: r2.changed}
+    - name: state link with mode
+      file: {src: "{{ workdir }}/target", dest: "{{ workdir }}/link", state: link, mode: "0700"}
+      register: r3
+    - debug: {var: r3.changed}
+    - name: state link with mode and follow false
+      file: {src: "{{ workdir }}/target", dest: "{{ workdir }}/link", state: link, mode: "0750", follow: false}
+      register: r3b
+    - debug: {var: r3b.changed}
+    - stat: {path: "{{ workdir }}/target"}
+      register: st
+    - debug: {var: st.stat.mode}
+    - name: broken symlink with mode
+      file: {src: "{{ workdir }}/missing", dest: "{{ workdir }}/broken", state: link, force: true, mode: "0600"}
+      register: r4
+    - debug: {var: r4.changed}
+    - name: state file through a link
+      file: {path: "{{ workdir }}/link", state: file, mode: "0444"}
+      register: r5
+    - debug: {var: r5.changed}
+    - name: touch through a link
+      file: {path: "{{ workdir }}/link", state: touch, mode: "0644"}
+      register: r6
+    - debug: {msg: "{{ r6.changed }} {{ r6.mode }}"}
+    - stat: {path: "{{ workdir }}/target"}
+      register: st2
+    - debug: {var: st2.stat.mode}

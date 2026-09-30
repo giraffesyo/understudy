@@ -1,0 +1,32 @@
+---
+# mode on symlinks on Linux, where Python has no os.lchmod: acting on the
+# link itself (follow: false, or state: link with follow: false) changes
+# nothing, while follow (the default) acts on the target.
+- name: symlink modes on RHEL
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    root: /etc/understudy-golden
+  tasks:
+    - file: {path: "{{ root }}", state: directory}
+    - copy: {content: "t\n", dest: "{{ root }}/target", mode: "0644"}
+    - file: {src: "{{ root }}/target", dest: "{{ root }}/link", state: link}
+    - name: follow changes the target
+      file: {path: "{{ root }}/link", mode: "0600"}
+    - name: follow false is a no-op on Linux
+      file: {path: "{{ root }}/link", mode: "0640", follow: false}
+    - name: state link, follow false
+      file: {src: "{{ root }}/target", dest: "{{ root }}/link", state: link, mode: "0750", follow: false}
+    - name: state link, follow
+      file: {src: "{{ root }}/target", dest: "{{ root }}/link", state: link, mode: "0700"}
+    - name: broken symlink with mode
+      file: {src: "{{ root }}/missing", dest: "{{ root }}/broken", state: link, force: true, mode: "0600"}
+    - name: check mode predicts a change on the link
+      file: {path: "{{ root }}/link", mode: "0640", follow: false}
+      check_mode: true
+    - stat: {path: "{{ root }}/target"}
+      register: st
+    - name: target mode is the followed one
+      assert: {that: st.stat.mode == '0700'}
+      # status-only comparison: fail both ways if the target moved
