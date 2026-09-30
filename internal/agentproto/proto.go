@@ -195,11 +195,19 @@ func (r *Result) UnmarshalJSON(data []byte) error {
 			r.RC = IntPtr(int(n))
 		}
 	}
+	// An explicitly empty stdout/stderr (a failed validate) is part of the
+	// result shape even without rc; keep it visible through Extra.
 	if v, ok := take("stdout"); ok {
 		r.Stdout, _ = v.(string)
+		if v == "" {
+			m["stdout"] = ""
+		}
 	}
 	if v, ok := take("stderr"); ok {
 		r.Stderr, _ = v.(string)
+		if v == "" {
+			m["stderr"] = ""
+		}
 	}
 	if v, ok := take("diff"); ok {
 		r.Diff = v
