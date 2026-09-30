@@ -175,7 +175,7 @@ understudy vault view group_vars/all/vault.yml --vault-password-file .vault-pass
 ## What's supported
 
 **Language & structure** — plays, roles (with `meta` dependencies, defaults,
-and vars), `import_tasks`/`import_role` (static) and
+and vars, argument-spec validation, `roles_path`), `import_tasks`/`import_role` (static) and
 `include_tasks`/`include_role` (dynamic: per-host targets, loops, `when`),
 handlers with `notify`/`listen`, `block`/`rescue`/`always`, tags, `vars_prompt`, the `linear`, `free` and
 `host_pinned` strategies, `serial`
@@ -199,21 +199,22 @@ filters (`default`, `combine`, `selectattr`, `regex_replace`, `to_json`,
 tests, …), chainable strict `Undefined`, and the native-types rule for
 `when:`/`loop:`.
 
-**Modules** — ~30 target-side plus control-side actions, covering the common
+**Modules** — ~45 target-side plus control-side actions, covering the common
 system-administration surface:
 
 | Area        | Modules |
 |-------------|---------|
 | Commands    | `command`, `shell`, `raw`, `script` |
-| Files       | `copy`, `template`, `file`, `stat`, `lineinfile`, `blockinfile`, `get_url`, `find`, `tempfile` |
-| Packages    | `package`, `apt`, `yum`, `dnf`, `apk`, `pip` |
-| Services    | `service`, `systemd` |
+| Files       | `copy`, `template`, `file`, `stat`, `lineinfile`, `blockinfile`, `ini_file`, `get_url`, `unarchive`, `find`, `slurp`, `tempfile` |
+| Packages    | `package`, `apt`, `yum`, `dnf`, `apk`, `pip`, `package_facts` |
+| Repos/keys  | `apt_repository`, `deb822_repository`, `yum_repository`, `rpm_key` |
+| Services    | `service`, `systemd`, `service_facts` |
 | Users       | `user`, `group` |
 | Storage     | `mount`, `parted`, `filesystem` |
 | Network/sec | `firewalld`, `iptables`, `selinux`, `sysctl`, `modprobe` |
-| Config      | `yum_repository`, `sudoers`, `openssh_keypair` |
+| Config      | `sudoers`, `openssh_keypair`, `timezone`, `getent` |
 | Databases   | `mysql_db`, `mysql_user` |
-| Facts/util  | `setup`, `ping`, `debug`, `set_fact`, `assert`, `fail`, `meta` |
+| Facts/util  | `setup`, `ping`, `debug`, `set_fact`, `assert`, `fail`, `meta`, `include_vars`, `validate_argument_spec` |
 
 All modules are idempotent (query-before-mutate) and honor `--check` and,
 where meaningful, `--diff`.
