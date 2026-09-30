@@ -521,30 +521,6 @@ func (c *crontab) jobLine(minute, hour, day, month, weekday, job, special string
 	return fmt.Sprintf("%s%s %s %s %s %s %s", prefix, minute, hour, day, month, weekday, job)
 }
 
-// pyStrSplitlines is str.splitlines(): every Unicode line boundary.
-func pyStrSplitlines(s string) []string {
-	var out []string
-	start := 0
-	rs := []rune(s)
-	for i := 0; i < len(rs); i++ {
-		switch rs[i] {
-		case '\n', '\v', '\f', '\x1c', '\x1d', '\x1e', '\u0085', ' ', ' ':
-			out = append(out, string(rs[start:i]))
-			start = i + 1
-		case '\r':
-			out = append(out, string(rs[start:i]))
-			if i+1 < len(rs) && rs[i+1] == '\n' {
-				i++
-			}
-			start = i + 1
-		}
-	}
-	if start < len(rs) {
-		out = append(out, string(rs[start:]))
-	}
-	return out
-}
-
 // pyMkstemp is tempfile.mkstemp(prefix=prefix, dir=dir): a new 0600 file
 // with a Python-style random name, in the temp dir when dir is "".
 func pyMkstemp(dir, prefix string) (*os.File, error) {

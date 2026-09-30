@@ -263,7 +263,7 @@ system-administration surface:
 | Network/sec | `firewalld`, `iptables`, `selinux`, `sysctl`, `modprobe` |
 | Config      | `sudoers`, `openssh_keypair`, `timezone`, `hostname`, `alternatives`, `getent`, `cron` |
 | Web & VCS   | `uri`, `git` |
-| Databases   | `mysql_db`, `mysql_user` |
+| Databases   | `mysql_db`, `mysql_user`, `mysql_query`, `mysql_variables`, `mysql_info` (native MySQL/MariaDB protocol client, no Python driver) |
 | Facts/util  | `setup`, `ping`, `debug`, `set_fact`, `assert`, `fail`, `meta`, `include_vars`, `validate_argument_spec` |
 
 All modules are idempotent (query-before-mutate) and honor `--check` and,

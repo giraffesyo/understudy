@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf16"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/fsutil"
@@ -186,9 +187,18 @@ func runTemplate(ctx context.Context, actx *Context, args map[string]any, _ stri
 		searchPath = append(searchPath, filepath.Join(actx.SrcDir, "templates"), actx.SrcDir)
 	}
 	searchPath = append(searchPath, filepath.Join(actx.BaseDir, "templates"), actx.BaseDir)
-	rendered, err := tvars.RenderFile(string(raw), pos, searchPath...)
+	opts, fail := templateOptions(args)
+	if fail != nil {
+		return fail
+	}
+	rendered, err := tvars.RenderFileWith(string(raw), pos, opts, searchPath...)
 	if err != nil {
 		return actionFail("template: error rendering %s: %v", src, err)
+	}
+	encoding, _ := args["output_encoding"].(string)
+	content, err := encodeOutput(rendered, encoding)
+	if err != nil {
+		return actionFail("%v", err)
 	}
 
 	fwd := make(map[string]any, len(args))
@@ -208,7 +218,7 @@ func runTemplate(ctx context.Context, actx *Context, args map[string]any, _ stri
 	}
 	_ = dest
 	local := filepath.Join(localTmp(), "tmp"+randomName(), filepath.Base(resolved))
-	return stripNone(forwardToCopy(ctx, actx, fwd, []byte(rendered), local, filepath.Base(resolved), false))
+	return stripNone(forwardToCopy(ctx, actx, fwd, content, local, filepath.Base(resolved), false))
 }
 
 // forwardToCopy sends one file's content to the target's copy module,
@@ -383,13 +393,17 @@ var forwardedFileArgs = map[string]bool{
 	"src": true, "dest": true, "mode": true, "owner": true, "group": true,
 	"backup": true, "force": true, "directory_mode": true, "validate": true,
 	"follow": true, "unsafe_writes": true, "remote_src": true,
+	"attributes": true, "attr": true, "seuser": true, "serole": true, "setype": true, "selevel": true,
 }
 
 // fileActionArgs lists what each action accepts; anything else fails like
 // Ansible's "Unsupported parameters" rather than being silently dropped.
 var fileActionArgs = map[string]map[string]bool{
-	"copy":     {"content": true, "local_follow": true, "decrypt": true},
-	"template": {"newline_sequence": true, "trim_blocks": true, "lstrip_blocks": true},
+	"copy": {"content": true, "local_follow": true, "decrypt": true},
+	"template": {"newline_sequence": true, "trim_blocks": true, "lstrip_blocks": true,
+		"block_start_string": true, "block_end_string": true, "variable_start_string": true,
+		"variable_end_string": true, "comment_start_string": true, "comment_end_string": true,
+		"output_encoding": true},
 }
 
 func checkFileArgs(action string, args map[string]any) error {
@@ -403,20 +417,83 @@ func checkFileArgs(action string, args map[string]any) error {
 		sort.Strings(bad)
 		return fmt.Errorf("Unsupported parameters for (%s) module: %s", action, strings.Join(bad, ", "))
 	}
-	if action == "template" {
-		// Ansible's defaults (trim_blocks on, lstrip_blocks off, \n) are the
-		// engine's behavior; other values would silently render differently.
-		if v, ok := args["trim_blocks"]; ok && !isTruthy(v) {
-			return fmt.Errorf("template: trim_blocks: false is not supported yet")
-		}
-		if v, ok := args["lstrip_blocks"]; ok && isTruthy(v) {
-			return fmt.Errorf("template: lstrip_blocks: true is not supported yet")
-		}
-		if v, ok := args["newline_sequence"]; ok && v != "\n" {
-			return fmt.Errorf("template: newline_sequence other than \\n is not supported yet")
-		}
-	}
 	return nil
+}
+
+// templateOptions reads the template action's Jinja environment
+// overrides (ActionModule.run's overrides dict).
+func templateOptions(args map[string]any) (template.Options, *agentproto.Result) {
+	opts := template.DefaultOptions()
+	str := func(k, def string) string {
+		v, ok := args[k]
+		if !ok || v == nil {
+			return def
+		}
+		if s, isStr := v.(string); isStr {
+			return s
+		}
+		return template.PyStr(v)
+	}
+	opts.TrimBlocks = isTruthy(args["trim_blocks"]) || args["trim_blocks"] == nil
+	opts.LstripBlocks = args["lstrip_blocks"] != nil && isTruthy(args["lstrip_blocks"])
+	opts.BlockStart, opts.BlockEnd = str("block_start_string", "{%"), str("block_end_string", "%}")
+	opts.VariableStart, opts.VariableEnd = str("variable_start_string", "{{"), str("variable_end_string", "}}")
+	opts.CommentStart, opts.CommentEnd = str("comment_start_string", "{#"), str("comment_end_string", "#}")
+	nl := str("newline_sequence", "\n")
+	switch nl {
+	case `\n`:
+		nl = "\n"
+	case `\r`:
+		nl = "\r"
+	case `\r\n`:
+		nl = "\r\n"
+	}
+	if nl != "\n" && nl != "\r" && nl != "\r\n" {
+		// AnsibleActionFail's message is displayed and recorded stripped.
+		return opts, actionRaise("newline_sequence needs to be one of: \n, \r or")
+	}
+	opts.NewlineSequence = nl
+	return opts, nil
+}
+
+// encodeOutput is to_bytes(resultant, encoding=output_encoding) for the
+// common codecs.
+func encodeOutput(s, encoding string) ([]byte, error) {
+	norm := strings.ReplaceAll(strings.ToLower(encoding), "_", "-")
+	switch norm {
+	case "", "utf-8", "utf8", "u8", "utf":
+		return []byte(s), nil
+	case "latin-1", "latin1", "iso-8859-1", "iso8859-1", "l1", "8859", "cp819", "ascii", "us-ascii", "646":
+		limit := rune(0xff)
+		name := "latin-1"
+		if strings.Contains(norm, "ascii") || norm == "646" {
+			limit, name = 0x7f, "ascii"
+		}
+		out := make([]byte, 0, len(s))
+		for i, r := range []rune(s) {
+			if r > limit {
+				return nil, fmt.Errorf("'%s' codec can't encode character '\\u%04x' in position %d: ordinal not in range(%d)", name, r, i, limit+1)
+			}
+			out = append(out, byte(r))
+		}
+		return out, nil
+	case "utf-16", "utf16", "utf-16-le", "utf-16le", "utf-16-be", "utf-16be":
+		units := utf16.Encode([]rune(s))
+		var out []byte
+		be := strings.HasSuffix(norm, "be")
+		if norm == "utf-16" || norm == "utf16" {
+			out = append(out, 0xff, 0xfe)
+		}
+		for _, u := range units {
+			if be {
+				out = append(out, byte(u>>8), byte(u))
+			} else {
+				out = append(out, byte(u), byte(u>>8))
+			}
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("unknown encoding: %s", encoding)
 }
 
 func isTruthy(v any) bool {
