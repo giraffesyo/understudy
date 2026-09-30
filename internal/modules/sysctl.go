@@ -382,7 +382,21 @@ func sysctlParseValue(v any) string {
 // getBinPath is module_utils' get_bin_path: PATH, then the sbin
 // directories that exist, first executable file wins.
 func getBinPath(arg string) (string, error) {
-	paths := strings.Split(os.Getenv("PATH"), ":")
+	return getBinPathIn(os.Getenv("PATH"), arg)
+}
+
+// envPATH is the PATH a module process sees: the task environment's, else
+// the agent's own.
+func envPATH(env *RunEnv) string {
+	if p, ok := env.Env["PATH"]; ok {
+		return p
+	}
+	return os.Getenv("PATH")
+}
+
+// getBinPathIn is getBinPath over an explicit PATH value.
+func getBinPathIn(pathVar, arg string) (string, error) {
+	paths := strings.Split(pathVar, ":")
 	for _, d := range []string{"/sbin", "/usr/sbin", "/usr/local/sbin"} {
 		present := false
 		for _, p := range paths {

@@ -1,0 +1,24 @@
+#!/bin/sh
+# A stand-in for crontab(1) so the golden corpus can manage "user
+# crontabs" without touching the real one: the installed table lives in
+# $FAKE_CRONTAB (or $FAKE_CRONTAB.<user> with -u <user>).
+f="${FAKE_CRONTAB:?FAKE_CRONTAB is not set}"
+user=""
+if [ "$1" = "-u" ]; then
+  user=$2
+  shift 2
+  f="$f.$user"
+fi
+if [ "$1" = "-l" ]; then
+  if [ -f "$f" ]; then
+    cat "$f"
+    exit 0
+  fi
+  echo "no crontab for ${user:-$(id -un)}" >&2
+  exit 1
+fi
+if [ "$1" = "-r" ]; then
+  rm -f "$f"
+  exit 0
+fi
+cat "$1" > "$f"
