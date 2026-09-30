@@ -1624,6 +1624,14 @@ func moduleOrigin(res *agentproto.Result) string {
 	if res.Origin != "" {
 		return res.Origin
 	}
+	if res.Failed && res.Msg == "" && res.Cause == "" && res.ErrorChain == nil {
+		// A failure without a msg: ansible-core's error is "Unknown error."
+		// and it becomes the result's msg too.
+		if m, _ := res.Extra["msg"].(string); m == "" {
+			delete(res.Extra, "msg")
+			res.Msg = "Task failed: Module failed: Unknown error."
+		}
+	}
 	if res.Failed && strings.HasPrefix(res.Msg, "Task failed: Module failed: ") {
 		return "verbatim"
 	}
