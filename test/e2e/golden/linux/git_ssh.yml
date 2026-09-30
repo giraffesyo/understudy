@@ -1,0 +1,89 @@
+---
+# git over a real ssh transport: the target's own sshd serves a bare
+# repository (commits with fixed identities and dates, so hashes are
+# stable) to tester, who authenticates with a key only git uses.
+- hosts: target
+  gather_facts: false
+  environment:
+    GIT_CONFIG_GLOBAL: /dev/null
+    GIT_CONFIG_NOSYSTEM: "1"
+    GIT_AUTHOR_NAME: Golden
+    GIT_AUTHOR_EMAIL: golden@example.com
+    GIT_COMMITTER_NAME: Golden
+    GIT_COMMITTER_EMAIL: golden@example.com
+    GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z"
+    GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z"
+  vars:
+    repo: ssh://tester@localhost/home/tester/repo.git
+  tasks:
+    - name: a bare repository with two commits
+      shell: |
+        set -e
+        git init -q --bare -b main ~/repo.git
+        git init -q -b main ~/src
+        cd ~/src
+        echo one > a.txt
+        git add a.txt
+        git commit -q -m c1
+        git tag v1
+        echo two >> a.txt
+        git commit -q -am c2
+        git push -q ~/repo.git main v1
+      args: {creates: ~/repo.git/HEAD}
+
+    - name: a key for git's ssh, authorized for tester
+      shell: |
+        set -e
+        ssh-keygen -q -t ed25519 -N '' -C git -f ~/.ssh/git_key
+        cat ~/.ssh/git_key.pub >> ~/.ssh/authorized_keys
+      args: {creates: ~/.ssh/git_key}
+
+    - name: an unknown host key is refused
+      git: {repo: "{{ repo }}", dest: ~/clone, key_file: ~/.ssh/git_key}
+      register: r
+      ignore_errors: true
+    - debug: {var: r.msg}
+
+    - name: clone over ssh, accepting the host key
+      git: {repo: "{{ repo }}", dest: ~/clone, key_file: ~/.ssh/git_key, accept_hostkey: true}
+      register: r
+    - debug: {var: r}
+
+    - name: clone again (up to date, host key now known)
+      git: {repo: "{{ repo }}", dest: ~/clone, key_file: ~/.ssh/git_key}
+      register: r
+    - debug: {var: r}
+
+    - name: switch to a tag over ssh with ssh_opts
+      git:
+        repo: "{{ repo }}"
+        dest: ~/clone
+        version: v1
+        key_file: ~/.ssh/git_key
+        ssh_opts: "-o ConnectTimeout=10"
+      register: r
+    - debug: {var: r}
+
+    - name: a second clone with accept_newhostkey
+      git: {repo: "{{ repo }}", dest: ~/clone2, key_file: ~/.ssh/git_key, accept_newhostkey: true, depth: 1}
+      register: r
+    - debug: {var: r}
+
+    - name: a new upstream commit is pulled
+      shell: |
+        set -e
+        cd ~/src
+        echo three >> a.txt
+        GIT_COMMITTER_DATE=2026-01-02T00:00:00Z GIT_AUTHOR_DATE=2026-01-02T00:00:00Z git commit -q -am c3
+        git push -q ~/repo.git main
+    - git: {repo: "{{ repo }}", dest: ~/clone2, key_file: ~/.ssh/git_key}
+      register: r
+    - debug: {var: r}
+
+    - name: a key the server does not accept
+      shell: ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/other_key
+      args: {creates: ~/.ssh/other_key}
+    - git: {repo: "{{ repo }}", dest: ~/clone3, key_file: ~/.ssh/other_key, ssh_opts: "-o IdentitiesOnly=yes -o PasswordAuthentication=no"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r.msg}

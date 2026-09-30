@@ -1,0 +1,30 @@
+---
+# uri output that depends on the target's Python: the _ssl.c line in SSL
+# errors, FileHandler's host checks (changed in 3.14) and int(None)'s
+# wording (changed in 3.10).
+- hosts: target
+  gather_facts: false
+  tasks:
+    - name: a ca_path that holds no certificate
+      uri: {url: "http://127.0.0.1:22/", ca_path: /etc/hostname}
+      register: r
+      ignore_errors: true
+    - debug: {var: r.msg}
+
+    - name: a client_cert that is not PEM
+      uri: {url: "http://127.0.0.1:22/", client_cert: /etc/hostname, validate_certs: false}
+      register: r
+      ignore_errors: true
+    - debug: {var: r.msg}
+
+    - name: file:// URLs
+      uri: {url: "{{ item }}"}
+      loop:
+        - file:///etc/hostname
+        - file:///etc/no-such-file
+        - file:///etc
+        - file://example.invalid/etc/hostname
+        - file://example.invalid/etc/no-such-file
+      register: r
+      ignore_errors: true
+    - debug: {msg: "{{ r.results | map(attribute='msg') | list }}"}

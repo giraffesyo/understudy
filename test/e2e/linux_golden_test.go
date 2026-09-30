@@ -31,19 +31,19 @@ const lgUser = "tester"
 // python3 (for ansible) and a passwordless-sudo user.
 var lgImages = map[string]string{
 	"ubuntu": `FROM ubuntu:24.04
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server sudo python3 && \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server sudo python3 git && \
     mkdir -p /run/sshd && ssh-keygen -A && \
     useradd -m -s /bin/bash ` + lgUser + ` && \
     echo '` + lgUser + ` ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/` + lgUser + `
 CMD ["/usr/sbin/sshd", "-D", "-e"]`,
 	"alpine": `FROM alpine:3.20
-RUN apk add --no-cache openssh sudo python3 && ssh-keygen -A && \
+RUN apk add --no-cache openssh sudo python3 git && ssh-keygen -A && \
     adduser -D -s /bin/sh ` + lgUser + ` && \
     sed -i 's/^` + lgUser + `:!/` + lgUser + `:*/' /etc/shadow && \
     echo '` + lgUser + ` ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/` + lgUser + `
 CMD ["/usr/sbin/sshd", "-D", "-e"]`,
 	"rocky": `FROM rockylinux/rockylinux:9
-RUN dnf -y install openssh-server sudo python3 chkconfig && ssh-keygen -A && \
+RUN dnf -y install openssh-server openssh-clients sudo python3 chkconfig git-core && ssh-keygen -A && \
     useradd -m ` + lgUser + ` && \
     echo '` + lgUser + ` ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/` + lgUser + `
 CMD ["/usr/sbin/sshd", "-D", "-e"]`,
