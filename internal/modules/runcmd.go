@@ -29,7 +29,7 @@ func runCommand(env *RunEnv, argv []string, o cmdOpts) (int, string, string) {
 			path = p
 		}
 	}
-	cmd := exec.Command(path, argv[1:]...)
+	cmd := env.Command(path, argv[1:]...)
 	cmd.Dir = o.Cwd
 	if len(env.Env) > 0 || len(o.Env) > 0 {
 		cmd.Env = env.Environ(o.Env)

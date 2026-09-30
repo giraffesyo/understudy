@@ -1821,7 +1821,7 @@ func (r *Runner) runModule(ctx context.Context, host, target string, kw connecti
 			req.Args = m
 		}
 		if become == nil {
-			res := modules.Run(req, payload)
+			res := modules.RunContext(ctx, req, payload)
 			res.Origin = moduleOrigin(res)
 			return res, nil
 		}
