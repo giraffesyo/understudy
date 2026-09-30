@@ -29,25 +29,23 @@ func splitFreeForm(s, module string) (string, map[string]any) {
 	}
 	words := splitWords(s)
 	kv := map[string]any{}
-	// Only LEADING k=v words with known option names are options (Ansible
-	// parses them anywhere, but trailing ones like `echo a=b` must stay in
-	// the command; leading is the documented style and unambiguous).
-	i := 0
-	for ; i < len(words); i++ {
-		eq := strings.IndexByte(words[i], '=')
-		if eq <= 0 || !knownFreeFormOption(words[i][:eq]) {
-			break
+	// Like parse_kv(check_raw=True): k=v words whose key is a known option
+	// (creates=, chdir=, ...) are options wherever they appear
+	// (`iptables -F creates=/etc/x`); anything else (`echo a=b`) stays in
+	// the command.
+	var rest []string
+	for _, w := range words {
+		eq := strings.IndexByte(w, '=')
+		if eq > 0 && knownFreeFormOption(w[:eq]) {
+			kv[w[:eq]] = unquote(w[eq+1:])
+			continue
 		}
-		kv[words[i][:eq]] = unquote(words[i][eq+1:])
-	}
-	rest := strings.Join(words[i:], " ")
-	if i == 0 {
-		rest = strings.TrimSpace(s) // preserve original spacing when no options
+		rest = append(rest, w)
 	}
 	if len(kv) == 0 {
-		return rest, nil
+		return strings.TrimSpace(s), nil // preserve original spacing
 	}
-	return rest, kv
+	return strings.Join(rest, " "), kv
 }
 
 func knownFreeFormOption(key string) bool {
@@ -59,14 +57,38 @@ func knownFreeFormOption(key string) bool {
 	return false
 }
 
-// splitWords tokenizes on whitespace, honoring single/double quotes.
+// splitWords tokenizes on whitespace, honoring single/double quotes and,
+// like Ansible's split_args, Jinja2 blocks: whitespace inside {{ }}, {% %}
+// or {# #} does not split (`name={{ item }} state=present`).
 func splitWords(s string) []string {
 	var out []string
 	var cur strings.Builder
 	inWord := false
 	var quote byte
+	depth := 0 // open Jinja2 delimiters outside quotes
 	for i := 0; i < len(s); i++ {
 		c := s[i]
+		if quote == 0 && i+1 < len(s) {
+			switch pair := s[i : i+2]; pair {
+			case "{{", "{%", "{#":
+				depth++
+				inWord = true
+				cur.WriteString(pair)
+				i++
+				continue
+			case "}}", "%}", "#}":
+				if depth > 0 {
+					depth--
+					cur.WriteString(pair)
+					i++
+					continue
+				}
+			}
+		}
+		if depth > 0 && quote == 0 && (c == ' ' || c == '\t' || c == '\n') {
+			cur.WriteByte(c)
+			continue
+		}
 		switch {
 		case quote != 0:
 			cur.WriteByte(c)

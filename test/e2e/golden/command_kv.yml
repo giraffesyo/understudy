@@ -1,0 +1,22 @@
+---
+# Free-form command/shell options are recognized anywhere in the line
+# (geerlingguy.firewall: `iptables -F creates=/etc/firewall.bash`), while
+# other k=v words stay part of the command.
+- name: command kv options
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: trailing creates skips when the file exists
+      command: echo should-not-run creates={{ workdir }}
+    - name: trailing removes skips when the file is missing
+      shell: echo nope removes={{ workdir }}/missing
+    - name: chdir in the middle
+      command: pwd chdir={{ workdir }}
+      register: pw
+      changed_when: false
+    - name: unknown k=v stays in the command
+      command: echo a=b c=d
+      register: kv
+      changed_when: false
+    - debug:
+        msg: "{{ pw.rc }} {{ pw.cmd }} {{ kv.stdout }} {{ kv.cmd }}"

@@ -12,6 +12,16 @@ import (
 // srcDir carries the including task's role root so nested src resolution
 // keeps working; blocks flatten as usual.
 func LoadTaskFile(path, srcDir string) ([]*Task, error) {
+	return loadTaskFile(path, srcDir, false)
+}
+
+// LoadHandlerFile parses a standalone handler-list file (a role's
+// handlers/*.yml), where listen: is allowed.
+func LoadHandlerFile(path string) ([]*Task, error) {
+	return loadTaskFile(path, "", true)
+}
+
+func loadTaskFile(path, srcDir string, handler bool) ([]*Task, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -23,7 +33,7 @@ func LoadTaskFile(path, srcDir string) ([]*Task, error) {
 	if len(f.Docs) == 0 {
 		return nil, nil
 	}
-	tasks, err := parseTaskListIn(f.Docs[0], path, false, &blockCounter{}, nil)
+	tasks, err := parseTaskListIn(f.Docs[0], path, handler, &blockCounter{}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +71,9 @@ func ResolveRoles(plays []*Play, baseDir string, rolesPath []string) error {
 		seen := map[string]bool{}
 		var roleTasks []*Task
 		for _, ref := range play.Roles {
+			play.PlayRoleNames = append(play.PlayRoleNames, ref.Name)
+		}
+		for _, ref := range play.Roles {
 			if err := resolveRoleRef(play, ref, baseDir, rolesPath, seen, &roleTasks, 0); err != nil {
 				return err
 			}
@@ -87,6 +100,9 @@ func resolveRoleRef(play *Play, ref *RoleRef, baseDir string, rolesPath []string
 	}
 
 	for _, dep := range role.deps {
+		if !containsStr(play.DependentRoleNames, dep.Name) {
+			play.DependentRoleNames = append(play.DependentRoleNames, dep.Name)
+		}
 		if err := resolveRoleRef(play, dep, baseDir, rolesPath, seen, out, depth+1); err != nil {
 			return err
 		}
@@ -120,6 +136,15 @@ func resolveRoleRef(play *Play, ref *RoleRef, baseDir string, rolesPath []string
 	return nil
 }
 
+func containsStr(list []string, s string) bool {
+	for _, e := range list {
+		if e == s {
+			return true
+		}
+	}
+	return false
+}
+
 // loadRole reads a role directory: tasks/main.yml, handlers/main.yml,
 // defaults/main.yml, vars/main.yml, meta/main.yml.
 func loadRole(ref *RoleRef, baseDir string, rolesPath []string) (*roleContent, error) {
@@ -140,6 +165,11 @@ func loadRole(ref *RoleRef, baseDir string, rolesPath []string) (*roleContent, e
 		for _, t := range flattenRole(tasks, dir, ref.Name) {
 			role.tasks = append(role.tasks, t)
 		}
+	}
+	if vt, err := argSpecTask(dir, ref.Name, "main", ref.Params); err != nil {
+		return nil, err
+	} else if vt != nil {
+		role.tasks = append(flattenRole([]*Task{vt}, dir, ref.Name), role.tasks...)
 	}
 
 	if node, path, err := loadYAMLMain(filepath.Join(dir, "handlers")); err != nil {
@@ -193,6 +223,85 @@ func loadRole(ref *RoleRef, baseDir string, rolesPath []string) (*roleContent, e
 		}
 	}
 	return role, nil
+}
+
+// argSpecTask is Role._prepend_validation_task: when the role ships an
+// argument spec for the entry point (meta/argument_specs.yml, else
+// argument_specs in meta/main.yml), a validate_argument_spec task runs
+// before the role's own tasks.
+func argSpecTask(dir, roleName, entry string, params map[string]any) (*Task, error) {
+	var specs map[string]any
+	src := ""
+	found := false
+	for _, ext := range []string{".yml", ".yaml", ".json"} {
+		p := filepath.Join(dir, "meta", "argument_specs"+ext)
+		if _, err := os.Stat(p); err == nil {
+			node, path, err := loadYAMLBase(filepath.Join(dir, "meta"), "argument_specs")
+			if err != nil {
+				return nil, err
+			}
+			found, src = true, path
+			if node != nil {
+				v, err := node.Decode()
+				if err != nil {
+					return nil, err
+				}
+				if m, ok := yaml.PlainMap(v); ok {
+					specs, _ = yaml.PlainMap(m["argument_specs"])
+				}
+			}
+			break
+		}
+	}
+	if !found {
+		node, path, err := loadYAMLMain(filepath.Join(dir, "meta"))
+		if err != nil || node == nil {
+			return nil, err
+		}
+		v, err := node.Decode()
+		if err != nil {
+			return nil, err
+		}
+		if m, ok := yaml.PlainMap(v); ok {
+			specs, _ = yaml.PlainMap(m["argument_specs"])
+		}
+		src = path
+	}
+	if entry == "" {
+		entry = "main"
+	}
+	spec, ok := yaml.PlainMap(specs[entry])
+	if !ok || len(spec) == 0 {
+		return nil, nil
+	}
+	name := fmt.Sprintf("Validating arguments against arg spec '%s'", entry)
+	if sd, ok := spec["short_description"]; ok {
+		name += " - " + fmt.Sprint(sd)
+	}
+	options, _ := spec["options"]
+	if options == nil {
+		options = map[string]any{}
+	}
+	provided := map[string]any{}
+	for k, v := range params {
+		provided[k] = v
+	}
+	return &Task{
+		Name:    name,
+		Module:  "validate_argument_spec",
+		Action:  "ansible.builtin.validate_argument_spec",
+		LoopVar: "item",
+		Poll:    -1,
+		Tags:    []string{"always"},
+		Args: map[string]any{
+			"argument_spec":      options,
+			"provided_arguments": provided,
+			"validate_args_context": map[string]any{
+				"type": "role", "name": roleName, "argument_spec_name": entry, "path": dir,
+			},
+		},
+		Src: Pos{File: src, Line: 1, Col: 1},
+	}, nil
 }
 
 // flattenRole stamps the role's source dir and name onto every task, so src
@@ -253,6 +362,11 @@ func LoadRoleForInclude(name, baseDir string, rolesPath []string, tasksFrom stri
 			return nil, err
 		}
 		ri.Tasks = flattenRole(tasks, dir, name)
+	}
+	if vt, err := argSpecTask(dir, name, tasksFrom, nil); err != nil {
+		return nil, err
+	} else if vt != nil {
+		ri.Tasks = append(flattenRole([]*Task{vt}, dir, name), ri.Tasks...)
 	}
 	if node, path, err := loadYAMLMain(filepath.Join(dir, "handlers")); err != nil {
 		return nil, err

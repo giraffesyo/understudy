@@ -1,0 +1,4 @@
+---
+iv_color: from_file
+iv_list: [1, 2]
+iv_templated: "{{ iv_color }}-t"

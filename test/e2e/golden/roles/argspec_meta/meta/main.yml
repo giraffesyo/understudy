@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  author: test
+argument_specs:
+  main:
+    options:
+      am_value:
+        type: int
+        required: true

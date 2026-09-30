@@ -1,0 +1,9 @@
+---
+- name: included file block
+  block:
+    - name: included ok
+      debug:
+        msg: in include
+- name: included failure
+  fail:
+    msg: include boom

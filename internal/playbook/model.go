@@ -46,6 +46,10 @@ type Play struct {
 	// Filled by ResolveRoles: per-role vars for the store's role layers.
 	RoleDefaults []map[string]any
 	RoleVars     []map[string]any
+	// Role names for the ansible_play_role_names / ansible_dependent_role_names
+	// magic variables (roles: entries, and roles pulled in as dependencies).
+	PlayRoleNames      []string
+	DependentRoleNames []string
 
 	Src Pos
 }
@@ -81,6 +85,7 @@ type BlockRef struct {
 type Task struct {
 	Name           string
 	Module         string
+	Action         string         // module as written (FQCN kept): unnamed task banners
 	Args           map[string]any // raw (untemplated) module args
 	FreeForm       string         // raw params for command/shell/raw
 	When           []string       // list of expressions, ANDed
@@ -119,6 +124,33 @@ type Task struct {
 	RoleName       string     // owning role (for "role : task" banners); "" = play task
 	Src            Pos
 	ArgPos         map[string]Pos // source position of each map-form module arg value
+
+	// KeywordTemplates holds keywords given as templates ("{{ x }}"),
+	// resolved per host at run time: no_log, ignore_errors, become,
+	// check_mode, diff, retries, delay.
+	KeywordTemplates map[string]string
+	// Orig is the parsed task a per-host resolved copy was made from (nil
+	// on parsed tasks); Identity() is stable across copies.
+	Orig *Task
+
+	literalKW map[string]bool // keywords set to literal values (parse time)
+}
+
+// DisplayAction is the action as an unnamed task's banner shows it: the
+// module name as written, FQCN included.
+func (t *Task) DisplayAction() string {
+	if t.Action != "" {
+		return t.Action
+	}
+	return t.Module
+}
+
+// Identity returns the parsed task this one was derived from.
+func (t *Task) Identity() *Task {
+	if t.Orig != nil {
+		return t.Orig
+	}
+	return t
 }
 
 // RoleRef is one entry in a play's roles: list.

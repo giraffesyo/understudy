@@ -248,3 +248,9 @@ func registerRegexFilters(e *Engine) {
 		return regexp.QuoteMeta(s), nil
 	}
 }
+
+// PyRegexCompile is pyRegexCompile for other packages (include_vars'
+// files_matching / ignore_files patterns).
+func PyRegexCompile(pattern string) (*regexp.Regexp, error) {
+	return pyRegexCompile(pattern, false, false)
+}

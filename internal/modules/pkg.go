@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 	"time"
 
@@ -27,6 +28,12 @@ var pkgSpec = args.Spec{
 	"cache_valid_time":   {Type: "int"},
 	"install_recommends": {Type: "bool"},
 	"autoremove":         {Type: "bool", Default: false},
+	"dpkg_options":       {Default: "force-confdef,force-confold"},
+	"purge":              {Type: "bool", Default: false},
+	// allow_downgrade: apt passes --allow-downgrades; with dnf a versioned
+	// request older than the installed one is still refused by the CLI.
+	"allow_downgrade": {Type: "bool", Default: false, Aliases: []string{"allow-downgrade", "allow_downgrades", "allow-downgrades"}},
+	"default_release": {Aliases: []string{"default-release"}},
 
 	// dnf/yum options (Ansible's dnf and yum modules).
 	"enablerepo":        {Type: "list"},
@@ -56,7 +63,7 @@ var (
 	rpmOnlyOpts = []string{"enablerepo", "disablerepo", "use_backend", "disable_gpg_check", "exclude",
 		"skip_broken", "allowerasing", "nobest", "conf_file", "releasever", "installroot",
 		"disable_excludes", "security", "bugfix", "download_only"}
-	aptOnlyOpts = []string{"cache_valid_time", "install_recommends"}
+	aptOnlyOpts = []string{"cache_valid_time", "install_recommends", "dpkg_options", "purge", "default_release"}
 )
 
 // pkgManager abstracts one package manager's query and mutate commands.
@@ -167,7 +174,7 @@ func mkPkg(mgrName string) ModuleFunc {
 		if _, err := exec.LookPath(pkgBinary(mgr.name)); err != nil {
 			return agentproto.Fail("package manager %q is not available on this host", mgr.name)
 		}
-		opts, err := pkgOptions(mgr.name, p, rawArgs)
+		opts, err := pkgOptions(mgr.name, p, rawArgs, rpmRepoMatcher(env, mgr.name))
 		if err != nil {
 			return agentproto.Fail("%v", err)
 		}
@@ -199,7 +206,30 @@ func mkPkg(mgrName string) ModuleFunc {
 
 		res := &agentproto.Result{Extra: map[string]any{}}
 
-		if p.Bool("update_cache") && !aptCacheFresh(mgr.name, int(p.Int("cache_valid_time"))) {
+		wantUpdate := p.Bool("update_cache") || (mgr.name == "apt" && p.Int("cache_valid_time") > 0)
+		if wantUpdate && mgr.name == "apt" {
+			// ansible.builtin.apt: refresh unless the cache is younger than
+			// cache_valid_time; with nothing else to do, changed reports
+			// whether the cache was refreshed.
+			before := aptCacheMtime()
+			updated := false
+			if !aptCacheFresh(mgr.name, int(p.Int("cache_valid_time"))) {
+				if !env.CheckMode {
+					if out, err := mgr.refresh(env, opts.repo); err != nil {
+						return agentproto.Fail("cache update failed: %v: %s", err, tail(out))
+					}
+				}
+				after := aptCacheMtime()
+				updated = env.CheckMode || after != before
+				before = after
+			}
+			res.Extra["cache_updated"] = updated
+			res.Extra["cache_update_time"] = before
+			if len(names) == 0 {
+				res.Changed = updated
+				return res
+			}
+		} else if p.Bool("update_cache") {
 			if !env.CheckMode {
 				if out, err := mgr.refresh(env, opts.repo); err != nil {
 					return agentproto.Fail("cache update failed: %v: %s", err, tail(out))
@@ -339,13 +369,50 @@ func environWith(k, v string) []string {
 	return append(osEnviron(), fmt.Sprintf("%s=%s", k, v))
 }
 
+// rpmRepoMatcher lists the configured repo ids once (dnf repolist --all)
+// and reports whether a glob pattern matches any of them. nil for non-rpm
+// managers or when the list cannot be read (patterns pass through).
+func rpmRepoMatcher(env *RunEnv, mgr string) func(string) bool {
+	if mgr != "dnf" && mgr != "yum" && mgr != "dnf5" {
+		return nil
+	}
+	var ids []string
+	loaded := false
+	return func(pattern string) bool {
+		if !loaded {
+			loaded = true
+			out, err := runOut(env, pkgBinary(mgr), "-q", "repolist", "--all")
+			if err != nil {
+				ids = nil
+			} else {
+				for _, line := range strings.Split(out, "\n") {
+					f := strings.Fields(line)
+					if len(f) == 0 || (len(f) > 1 && f[0] == "repo" && f[1] == "id") {
+						continue
+					}
+					ids = append(ids, f[0])
+				}
+			}
+		}
+		if ids == nil {
+			return true
+		}
+		for _, id := range ids {
+			if ok, _ := path.Match(pattern, id); ok {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 type pkgOpts struct {
 	repo, install, remove []string
 }
 
 // pkgOptions maps module options onto the manager's CLI flags, rejecting
 // options that belong to the other package family.
-func pkgOptions(mgr string, p *args.Parsed, raw map[string]any) (pkgOpts, error) {
+func pkgOptions(mgr string, p *args.Parsed, raw map[string]any, repoKnown func(string) bool) (pkgOpts, error) {
 	var o pkgOpts
 	rpm := mgr == "dnf" || mgr == "yum" || mgr == "dnf5"
 	reject := aptOnlyOpts
@@ -358,11 +425,18 @@ func pkgOptions(mgr string, p *args.Parsed, raw map[string]any) (pkgOpts, error)
 		}
 	}
 	if rpm {
+		// The dnf module enables/disables base.repos.get_matching(pattern):
+		// a pattern matching no configured repo is a no-op, where the dnf
+		// CLI would fail with "Unknown repo".
 		for _, r := range p.List("enablerepo") {
-			o.repo = append(o.repo, "--enablerepo="+fmt.Sprint(r))
+			if repoKnown == nil || repoKnown(fmt.Sprint(r)) {
+				o.repo = append(o.repo, "--enablerepo="+fmt.Sprint(r))
+			}
 		}
 		for _, r := range p.List("disablerepo") {
-			o.repo = append(o.repo, "--disablerepo="+fmt.Sprint(r))
+			if repoKnown == nil || repoKnown(fmt.Sprint(r)) {
+				o.repo = append(o.repo, "--disablerepo="+fmt.Sprint(r))
+			}
 		}
 		for _, x := range p.List("exclude") {
 			o.repo = append(o.repo, "--exclude="+fmt.Sprint(x))
@@ -408,6 +482,15 @@ func pkgOptions(mgr string, p *args.Parsed, raw map[string]any) (pkgOpts, error)
 		return o, nil
 	}
 	if mgr == "apt" {
+		// expand_dpkg_options: every install/remove passes the dpkg
+		// options (default force-confdef,force-confold), so a conffile a
+		// role templated before installing never prompts.
+		for _, opt := range strings.Split(p.Str("dpkg_options"), ",") {
+			if opt = strings.TrimSpace(opt); opt != "" {
+				o.install = append(o.install, "-o", "Dpkg::Options::=--"+opt)
+				o.remove = append(o.remove, "-o", "Dpkg::Options::=--"+opt)
+			}
+		}
 		if _, set := raw["install_recommends"]; set {
 			if p.Bool("install_recommends") {
 				o.install = append(o.install, "--install-recommends")
@@ -418,12 +501,33 @@ func pkgOptions(mgr string, p *args.Parsed, raw map[string]any) (pkgOpts, error)
 		if p.Bool("autoremove") {
 			o.remove = append(o.remove, "--auto-remove")
 		}
+		// apt module: -t <default_release> on installs, --purge on removal.
+		if rel := p.Str("default_release"); rel != "" {
+			o.install = append(o.install, "-t", rel)
+		}
+		if p.Bool("purge") {
+			o.remove = append(o.remove, "--purge")
+		}
+		if p.Bool("allow_downgrade") {
+			o.install = append(o.install, "--allow-downgrades")
+		}
 	}
 	return o, nil
 }
 
 // aptCacheFresh reports whether apt's cache is younger than validSecs
 // (cache_valid_time), letting update_cache skip the refresh.
+// aptCacheMtime is the apt module's get_cache_mtime as an integer
+// timestamp (0 when there is no cache).
+func aptCacheMtime() int64 {
+	for _, stamp := range []string{"/var/lib/apt/periodic/update-success-stamp", "/var/lib/apt/lists"} {
+		if info, err := os.Stat(stamp); err == nil {
+			return info.ModTime().Unix()
+		}
+	}
+	return 0
+}
+
 func aptCacheFresh(mgr string, validSecs int) bool {
 	if mgr != "apt" || validSecs <= 0 {
 		return false
