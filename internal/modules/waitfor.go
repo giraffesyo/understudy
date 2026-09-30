@@ -63,6 +63,11 @@ func waitForModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	msg := p.Str("msg")
 	sleep := time.Duration(p.Int("sleep")) * time.Second
 
+	// invalid is a parameter error: its message stands even with msg set.
+	invalid := func(m string) *agentproto.Result {
+		return &agentproto.Result{Failed: true, Msg: m, Extra: map[string]any{"elapsed": int64(0)}}
+	}
+	// fail is a wait that ended badly: msg replaces the message.
 	fail := func(m string, elapsed int64) *agentproto.Result {
 		if msg != "" {
 			m = msg
@@ -83,22 +88,22 @@ func waitForModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		}
 	}
 	if port != 0 && path != "" {
-		return fail("port and path parameter can not both be passed to wait_for", 0)
+		return invalid("port and path parameter can not both be passed to wait_for")
 	}
 	if path != "" && state == "stopped" {
-		return fail("state=stopped should only be used for checking a port in the wait_for module", 0)
+		return invalid("state=stopped should only be used for checking a port in the wait_for module")
 	}
 	if path != "" && state == "drained" {
-		return fail("state=drained should only be used for checking a port in the wait_for module", 0)
+		return invalid("state=drained should only be used for checking a port in the wait_for module")
 	}
 	if p.Has("exclude_hosts") && state != "drained" {
-		return fail("exclude_hosts should only be with state=drained", 0)
+		return invalid("exclude_hosts should only be with state=drained")
 	}
 	var stateIDs []string
 	for _, s := range p.List("active_connection_states") {
 		id, ok := tcpStateIDs[pyStrValue(s)]
 		if !ok {
-			return fail(fmt.Sprintf("unknown active_connection_state (%s) defined", pyStrValue(s)), 0)
+			return invalid(fmt.Sprintf("unknown active_connection_state (%s) defined", pyStrValue(s)))
 		}
 		stateIDs = append(stateIDs, id)
 	}
@@ -200,8 +205,8 @@ func waitForModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 						n, err := c.Read(buf)
 						if n > 0 {
 							data = append(data, buf[:n]...)
-							if m := re.FindSubmatchIndex(data); m != nil {
-								record(string(data), m)
+							// A port match records no groups.
+							if re.Match(data) {
 								matched = true
 								break
 							}
@@ -219,6 +224,10 @@ func waitForModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 			time.Sleep(sleep)
 		}
 	case state == "drained":
+		if !p.Has("port") {
+			// TCPConnectionInfo's int(module.params['port']) raises.
+			return &agentproto.Result{Failed: true, Msg: "Task failed: Module failed: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'"}
+		}
 		for {
 			if !time.Now().Before(end) {
 				return fail(fmt.Sprintf("Timeout when waiting for %s:%d to drain", host, port), elapsed())
@@ -258,7 +267,9 @@ func waitForModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 // excluding peers in exclude_hosts. Elsewhere Ansible needs psutil.
 func activeTCPConnections(p *args.Parsed, host string, port int64, stateIDs []string) (int, *agentproto.Result) {
 	if runtime.GOOS != "linux" {
-		return 0, agentproto.Fail("%s", missingRequiredLib("psutil", "", ""))
+		res := agentproto.Fail("%s", missingRequiredLib("psutil", "", ""))
+		res.Cause = "No module named 'psutil'" // the ImportError it carries
+		return 0, res
 	}
 	ips, err := hostToProcHex(host)
 	if err != nil {
