@@ -89,3 +89,37 @@ func shown(task *playbook.Task, res *agentproto.Result) *agentproto.Result {
 	c.VerboseAlways = false
 	return &c
 }
+
+// argTemplateError is the failed result for a module argument that did
+// not template (TaskArgsFinalizer): "Finalization of task args for
+// '<action>' failed", caused by the argument's error at its origin.
+func argTemplateError(task *playbook.Task, key string, pos template.Position, err error) *agentproto.Result {
+	cause, ok := template.Cause(err)
+	if !ok {
+		return agentproto.Fail("error templating argument %q: %v", key, err)
+	}
+	mid := fmt.Sprintf("Finalization of task args for '%s' failed.", resolvedAction(task))
+	inner := fmt.Sprintf("Error while resolving value for '%s': %s", key, cause)
+	res := agentproto.Fail("Task failed: %s: %s", strings.TrimSuffix(mid, "."), inner)
+	res.Origin = "verbatim"
+	chain := &agentproto.ErrorChain{Outer: "Task failed.", Inner: inner,
+		InnerFile: pos.File, InnerLine: pos.Line, InnerCol: pos.Col}
+	if a := task.ActionPos; a.Line == 0 || (a.Line == task.Src.Line && a.Col == task.Src.Col) {
+		// The action is where the task starts: one error, one origin.
+		chain.Outer = "Task failed: " + mid
+	} else {
+		chain.Mid, chain.MidFile, chain.MidLine, chain.MidCol = mid, a.File, a.Line, a.Col
+	}
+	res.ErrorChain = chain
+	return res
+}
+
+// resolvedAction is the task's action as ansible-core resolves it: a
+// builtin module's fully qualified name.
+func resolvedAction(task *playbook.Task) string {
+	a := task.DisplayAction()
+	if strings.Count(a, ".") >= 2 && !strings.HasPrefix(a, "ansible.builtin.") && !strings.HasPrefix(a, "ansible.legacy.") {
+		return a
+	}
+	return "ansible.builtin." + task.Module
+}

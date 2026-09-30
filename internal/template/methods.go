@@ -281,6 +281,16 @@ var dictMethods = map[string]func(keys []string, m map[string]any, args []any) (
 		}
 		return out, nil
 	},
+	"copy": func(keys []string, m map[string]any, args []any) (any, error) {
+		if err := arity("copy", args, 0, 0); err != nil {
+			return nil, err
+		}
+		out := yaml.NewOMap()
+		for _, k := range keys {
+			out.Set(k, m[k])
+		}
+		return out, nil
+	},
 	"get": func(_ []string, m map[string]any, args []any) (any, error) {
 		key, err := argStr(args, 0, "")
 		if err != nil {
@@ -325,6 +335,12 @@ var listMethods = map[string]func(l []any, args []any) (any, error){
 			}
 		}
 		return nil, fmt.Errorf("%s is not in list", pyRepr(args[0]))
+	},
+	"copy": func(l []any, args []any) (any, error) {
+		if err := arity("copy", args, 0, 0); err != nil {
+			return nil, err
+		}
+		return append([]any{}, l...), nil
 	},
 	"count": func(l []any, args []any) (any, error) {
 		if len(args) == 0 {

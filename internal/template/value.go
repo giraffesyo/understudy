@@ -319,7 +319,10 @@ func arith(op tokKind, a, b any) (any, error) {
 	af, aNum := asFloat(a)
 	bf, bNum := asFloat(b)
 	if !aNum || !bNum {
-		return nil, fmt.Errorf("unsupported operand type(s) for %s: %s and %s", opName(op), typeName(a), typeName(b))
+		if at := typeName(a); op == tokAdd && (at == "str" || at == "list") {
+			return nil, fmt.Errorf("can only concatenate %s (not \"%s\") to %s", at, typeName(b), at)
+		}
+		return nil, fmt.Errorf("unsupported operand type(s) for %s: '%s' and '%s'", opName(op), typeName(a), typeName(b))
 	}
 
 	if aInt && bInt {
@@ -693,7 +696,7 @@ func iterate(v any) ([]any, error) {
 	case *rangeValue:
 		return t.materialize(), nil
 	}
-	return nil, fmt.Errorf("%s object is not iterable", typeName(v))
+	return nil, fmt.Errorf("'%s' object is not iterable", typeName(v))
 }
 
 // rangeValue is the lazy result of range(): iterable and indexable without
