@@ -207,4 +207,3 @@ func rpmVerCmp(a, b string) int {
 	}
 	return len(a) - len(b)
 }
-
