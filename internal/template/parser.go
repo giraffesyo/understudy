@@ -563,6 +563,16 @@ func (p *parser) parseFilterExpr(node Expr) (Expr, error) {
 				return nil, err
 			}
 			name := t.val
+			// Dotted test names (ansible.builtin.version) collapse to the
+			// final segment, like filters.
+			for p.kind() == tokDot {
+				p.next()
+				seg, err := p.expect(tokName)
+				if err != nil {
+					return nil, err
+				}
+				name = seg.val
+			}
 			var args []Expr
 			if p.kind() == tokLParen {
 				p.next()

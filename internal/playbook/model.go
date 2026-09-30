@@ -43,6 +43,10 @@ type Play struct {
 	// Filled by ResolveRoles: per-role vars for the store's role layers.
 	RoleDefaults []map[string]any
 	RoleVars     []map[string]any
+	// Role names for the ansible_play_role_names / ansible_dependent_role_names
+	// magic variables (roles: entries, and roles pulled in as dependencies).
+	PlayRoleNames      []string
+	DependentRoleNames []string
 
 	Src Pos
 }

@@ -67,6 +67,8 @@ type Options struct {
 	Connection string   // "" = per-host behavioral vars; "local" forces local
 	BaseDir    string   // playbook directory
 	RolesPath  []string // roles_path search directories (after <playbook>/roles)
+	ConfigFile string   // ansible.cfg in effect ("" = none): ansible_config_file
+	Inventory  []string // inventory sources: ansible_inventory_sources
 	Tags       []string
 	SkipTags   []string
 	ConnOpts   connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
@@ -866,6 +868,7 @@ func (r *Runner) newHostContext(host string, pos template.Position, playHosts []
 	}
 	c.SetMagic("playbook_dir", r.Opts.BaseDir)
 	c.SetMagic("ansible_check_mode", r.Opts.CheckMode)
+	r.setRunMagic(c, host, playHosts)
 	// ansible_connection reflects the connection in effect when the host
 	// does not set it: play keyword, then -c, then the default.
 	if _, ok := r.Store.RawHostVar(host, "ansible_connection"); !ok {

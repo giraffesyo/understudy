@@ -1,0 +1,29 @@
+---
+# Run-level magic variables roles consult (ansible_version, run/skip tags,
+# diff mode, forks, verbosity, role name lists) and FQCN test names.
+- name: magic run vars
+  hosts: all
+  gather_facts: false
+  roles:
+    - mini
+  vars:
+    greeting: hi
+    expected_greeting: hi
+  tasks:
+    - name: types of run-level magic vars
+      debug:
+        msg:
+          - "{{ ansible_version.full is string }} {{ ansible_version.major is number }}"
+          - "{{ ansible_version.full is ansible.builtin.version('2.10', '>=') }}"
+          - "{{ ansible_run_tags }}"
+          - "{{ ansible_skip_tags }}"
+          - "{{ ansible_diff_mode }}"
+          - "{{ ansible_forks }}"
+          - "{{ ansible_verbosity }}"
+          - "{{ ansible_play_role_names }}"
+          - "{{ role_names }}"
+          - "{{ ansible_role_names }}"
+          - "{{ ansible_dependent_role_names }}"
+          - "{{ ansible_play_batch }}"
+          - "{{ ansible_facts }}"
+          - "{{ 'x' is ansible.builtin.string }}"

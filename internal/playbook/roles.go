@@ -71,6 +71,9 @@ func ResolveRoles(plays []*Play, baseDir string, rolesPath []string) error {
 		seen := map[string]bool{}
 		var roleTasks []*Task
 		for _, ref := range play.Roles {
+			play.PlayRoleNames = append(play.PlayRoleNames, ref.Name)
+		}
+		for _, ref := range play.Roles {
 			if err := resolveRoleRef(play, ref, baseDir, rolesPath, seen, &roleTasks, 0); err != nil {
 				return err
 			}
@@ -97,6 +100,9 @@ func resolveRoleRef(play *Play, ref *RoleRef, baseDir string, rolesPath []string
 	}
 
 	for _, dep := range role.deps {
+		if !containsStr(play.DependentRoleNames, dep.Name) {
+			play.DependentRoleNames = append(play.DependentRoleNames, dep.Name)
+		}
 		if err := resolveRoleRef(play, dep, baseDir, rolesPath, seen, out, depth+1); err != nil {
 			return err
 		}
@@ -128,6 +134,15 @@ func resolveRoleRef(play *Play, ref *RoleRef, baseDir string, rolesPath []string
 	*out = append(*out, role.tasks...)
 	play.Handlers = append(play.Handlers, role.handlers...)
 	return nil
+}
+
+func containsStr(list []string, s string) bool {
+	for _, e := range list {
+		if e == s {
+			return true
+		}
+	}
+	return false
 }
 
 // loadRole reads a role directory: tasks/main.yml, handlers/main.yml,

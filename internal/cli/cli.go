@@ -338,8 +338,14 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		Connection:    p.connection,
 		BaseDir:       baseDir,
 		RolesPath:     cfg.RolesPath,
+		Inventory:     p.inventory,
 		Tags:          splitCSV(p.tags),
 		SkipTags:      splitCSV(p.skipTags),
+	}
+	if cfg.Source != "" {
+		if abs, err := filepath.Abs(cfg.Source); err == nil {
+			opts.ConfigFile = abs
+		}
 	}
 	opts.ConnOpts = connection.ManagerOptions{
 		RemoteUser:      remoteUser,
