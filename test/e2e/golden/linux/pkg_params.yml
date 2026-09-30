@@ -1,0 +1,27 @@
+# distros: ubuntu alpine
+---
+# Each package module accepts exactly its own parameters, and package
+# hands everything but use to the host's module (run as
+# ansible.legacy.<module>), which rejects the rest with AnsibleModule's
+# message.
+- hosts: target
+  gather_facts: false
+  tasks:
+    - name: a dnf parameter through package
+      package: {name: tree, state: present, enablerepo: extras}
+      ignore_errors: true
+    - name: apt with a dnf parameter
+      apt: {name: tree, enablerepo: extras}
+      ignore_errors: true
+      when: distro == 'ubuntu'
+    - name: the FQCN names the module as written
+      ansible.builtin.apt: {name: tree, bogus: 1, use: apt}
+      ignore_errors: true
+      when: distro == 'ubuntu'
+    - name: apk with an apt parameter
+      community.general.apk: {name: tree, install_recommends: false}
+      ignore_errors: true
+      when: distro == 'alpine'
+    - name: package with an explicit backend that is not installed
+      package: {name: tree, state: present, use: no_such_manager}
+      ignore_errors: true

@@ -107,3 +107,15 @@ func nameCheckModeSkip(task *playbook.Task, res *agentproto.Result) {
 		res.Msg = pre + task.Action + rest[i:]
 	}
 }
+
+// nameUnsupportedParams names the module in AnsibleModule's "Unsupported
+// parameters for (...) module" failure as the task wrote it; modules
+// report their short name (a backend run through an action names itself
+// ansible.legacy.<module> and is left alone).
+func nameUnsupportedParams(task *playbook.Task, res *agentproto.Result) {
+	pre := "Unsupported parameters for (" + task.Module + ") module: "
+	if res == nil || !res.Failed || task.Action == "" || task.Action == task.Module || !strings.HasPrefix(res.Msg, pre) {
+		return
+	}
+	res.Msg = "Unsupported parameters for (" + task.Action + ") module: " + res.Msg[len(pre):]
+}

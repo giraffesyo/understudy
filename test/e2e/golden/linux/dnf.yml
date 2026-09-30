@@ -1,0 +1,55 @@
+# distros: rocky
+---
+# dnf, yum and package results on Rocky Linux 9 (the dnf4 backend): the
+# dnf action reports the pkg_mgr fact it had to detect, installs and
+# removals list "Installed:/Removed: <nevra>", no-ops say "Nothing to
+# do", check mode says what it would do, a missing package fails, and
+# each module accepts only its own parameters. The image caches the
+# packages, so nothing depends on a mirror.
+- hosts: target
+  gather_facts: false
+  become: true
+  tasks:
+    - name: install with dnf (detects the backend)
+      dnf: {name: tree, state: present}
+    - name: install again
+      dnf: {name: tree}
+    - name: remove in check mode
+      dnf: {name: tree, state: absent}
+      check_mode: true
+    - name: remove
+      yum: {name: tree, state: absent}
+    - name: remove again
+      dnf: {name: tree, state: absent}
+    - name: install in check mode
+      package: {name: tree, state: present}
+      check_mode: true
+    - name: install with package
+      package: {name: tree, state: present}
+    - name: latest when already newest
+      dnf: {name: tree, state: latest}
+    - name: a package that does not exist
+      dnf: {name: [tree, no-such-package-golden], state: present}
+      ignore_errors: true
+    - name: update_only skips what is not installed
+      dnf: {name: no-such-package-golden, state: latest, update_only: true}
+    - name: an apt parameter
+      dnf: {name: tree, install_recommends: false}
+      ignore_errors: true
+    - name: an apt parameter through package
+      package: {name: tree, state: present, cache_valid_time: 60}
+      ignore_errors: true
+    - name: dnf5 is not installed here
+      dnf: {name: tree, use_backend: dnf4, bogus: 1}
+      ignore_errors: true
+    - name: cache update alone
+      dnf: {update_cache: true}
+      when: false
+    - name: autoremove alone
+      dnf: {autoremove: true}
+    - name: a package with a dependency
+      dnf: {name: zip}
+    - name: remove it and its unused dependency
+      dnf: {name: zip, state: absent, autoremove: true}
+    - name: cleanup
+      dnf: {name: tree, state: absent}

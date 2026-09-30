@@ -1,6 +1,56 @@
 package modules
 
-import "sort"
+import (
+	"sort"
+	"strings"
+
+	"github.com/giraffesyo/understudy/internal/agentproto"
+	"github.com/giraffesyo/understudy/internal/modules/args"
+)
+
+// parseModuleArgs validates raw against spec as AnsibleModule does,
+// failing unknown parameters with its message for the module as invoked
+// (the executor names a directly invoked module as the task wrote it).
+// Hidden arguments (a leading underscore) are not checked.
+func parseModuleArgs(spec args.Spec, raw map[string]any, module string) (*args.Parsed, *agentproto.Result) {
+	legal := map[string]bool{}
+	var names, aliases []string
+	for n, def := range spec {
+		legal[n] = true
+		names = append(names, n)
+		for _, a := range def.Aliases {
+			legal[a] = true
+			aliases = append(aliases, a)
+		}
+	}
+	var unknown []string
+	clean := make(map[string]any, len(raw))
+	for k, v := range raw {
+		if strings.HasPrefix(k, "_") {
+			continue
+		}
+		clean[k] = v
+		if !legal[k] {
+			unknown = append(unknown, k)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		sort.Strings(names)
+		sort.Strings(aliases)
+		supported := strings.Join(names, ", ")
+		if len(aliases) > 0 {
+			supported += " (" + strings.Join(aliases, ", ") + ")"
+		}
+		return nil, agentproto.Fail("Unsupported parameters for (%s) module: %s. Supported parameters include: %s.",
+			module, strings.Join(unknown, ", "), supported)
+	}
+	p, err := spec.Parse(clean)
+	if err != nil {
+		return nil, agentproto.Fail("%v", err)
+	}
+	return p, nil
+}
 
 // adhocParams are the parameters of modules that read their arguments
 // without an args.Spec (free-form parsing), for tools/paramaudit.

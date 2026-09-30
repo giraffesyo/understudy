@@ -14,33 +14,30 @@ import (
 )
 
 func init() {
-	Register(mkPkg(""), "package", "ansible.builtin.package")
-	Register(mkPkg("apt"), "apt", "ansible.builtin.apt")
-	Register(mkPkg("dnf"), "dnf", "ansible.builtin.dnf")
-	Register(mkPkg("yum"), "yum", "ansible.builtin.yum")
+	Register(packageModule, "package", "ansible.builtin.package")
+	Register(aptModule, "apt", "ansible.builtin.apt")
+	// yum redirects to dnf: both run through the dnf action.
+	Register(dnfActionModule, "dnf", "ansible.builtin.dnf", "yum", "ansible.builtin.yum")
+	Register(dnf5Module, "dnf5", "ansible.builtin.dnf5")
 	Register(apkModule, "apk", "community.general.apk")
 }
 
-var pkgSpec = args.Spec{
-	"name":               {Type: "list", Aliases: []string{"pkg", "package"}},
-	"state":              {Default: "present", Choices: []string{"present", "installed", "absent", "removed", "latest", "build-dep", "fixed"}},
-	"update_cache":       {Type: "bool", Default: false, Aliases: []string{"update-cache", "expire-cache"}},
-	"cache_valid_time":   {Type: "int"},
-	"install_recommends": {Type: "bool", Aliases: []string{"install-recommends"}},
-	"autoremove":         {Type: "bool", Default: false},
-	"dpkg_options":       {Default: "force-confdef,force-confold"},
-	"purge":              {Type: "bool", Default: false},
-	// allow_downgrade: apt passes --allow-downgrades; with dnf a versioned
-	// request older than the installed one is still refused by the CLI.
-	"allow_downgrade": {Type: "bool", Default: false, Aliases: []string{"allow-downgrade", "allow_downgrades", "allow-downgrades"}},
-	"default_release": {Aliases: []string{"default-release"}},
-
-	// apt-only options (ansible.builtin.apt).
+// aptSpec is ansible.builtin.apt's argument spec.
+var aptSpec = args.Spec{
+	"state":                        {Default: "present", Choices: []string{"absent", "build-dep", "fixed", "latest", "present"}},
+	"update_cache":                 {Type: "bool", Aliases: []string{"update-cache"}},
 	"update_cache_retries":         {Type: "int", Default: 5},
 	"update_cache_retry_max_delay": {Type: "int", Default: 12},
+	"cache_valid_time":             {Type: "int", Default: 0},
+	"purge":                        {Type: "bool", Default: false},
+	"package":                      {Type: "list", Aliases: []string{"pkg", "name"}},
 	"deb":                          {},
+	"default_release":              {Aliases: []string{"default-release"}},
+	"install_recommends":           {Type: "bool", Aliases: []string{"install-recommends"}},
 	"force":                        {Type: "bool", Default: false},
 	"upgrade":                      {Default: "no", Choices: []string{"dist", "full", "no", "safe", "yes"}},
+	"dpkg_options":                 {Default: "force-confdef,force-confold"},
+	"autoremove":                   {Type: "bool", Default: false},
 	"autoclean":                    {Type: "bool", Default: false},
 	"fail_on_autoremove":           {Type: "bool", Default: false},
 	"policy_rc_d":                  {Type: "int"},
@@ -48,55 +45,249 @@ var pkgSpec = args.Spec{
 	"force_apt_get":                {Type: "bool", Default: false},
 	"clean":                        {Type: "bool", Default: false},
 	"allow_unauthenticated":        {Type: "bool", Default: false, Aliases: []string{"allow-unauthenticated"}},
+	"allow_downgrade":              {Type: "bool", Default: false, Aliases: []string{"allow-downgrade", "allow_downgrades", "allow-downgrades"}},
 	"allow_change_held_packages":   {Type: "bool", Default: false},
+	"lock_timeout":                 {Type: "int", Default: 60},
 	// Installing python3-apt is moot without Python; accepted for
 	// compatibility.
 	"auto_install_module_deps": {Type: "bool", Default: true},
-
-	// package: the backend module to use (default: detect).
-	"use": {Default: "auto"},
-
-	// dnf/yum options (Ansible's dnf and yum modules).
-	"enablerepo":        {Type: "list"},
-	"disablerepo":       {Type: "list"},
-	"use_backend":       {Choices: []string{"auto", "yum", "yum4", "dnf", "dnf4", "dnf5"}},
-	"disable_gpg_check": {Type: "bool", Default: false},
-	"exclude":           {Type: "list"},
-	"skip_broken":       {Type: "bool", Default: false},
-	"allowerasing":      {Type: "bool", Default: false},
-	"nobest":            {Type: "bool"},
-	"conf_file":         {},
-	"releasever":        {},
-	"installroot":       {},
-	"install_weak_deps": {Type: "bool", Default: true},
-	"disable_excludes":  {},
-	"security":          {Type: "bool", Default: false},
-	"bugfix":            {Type: "bool", Default: false},
-	"download_only":     {Type: "bool", Default: false},
-	"lock_timeout":      {Type: "int"},
-	"validate_certs":    {Type: "bool", Default: true},
-	"sslverify":         {Type: "bool", Default: true},
-	"best":              {Type: "bool"},
-	"cacheonly":         {Type: "bool", Default: false},
-	"disable_plugin":    {Type: "list"},
-	"enable_plugin":     {Type: "list"},
-	"download_dir":      {},
-	"list":              {},
-	"update_only":       {Type: "bool", Default: false},
 }
 
-// rpmOnly/aptOnly options are rejected on the other family rather than
-// silently ignored.
-var (
-	rpmOnlyOpts = []string{"enablerepo", "disablerepo", "use_backend", "disable_gpg_check", "exclude",
-		"skip_broken", "allowerasing", "nobest", "conf_file", "releasever", "installroot",
-		"disable_excludes", "security", "bugfix", "download_only", "best", "cacheonly", "disable_plugin",
-		"enable_plugin", "download_dir", "list", "update_only"}
-	aptOnlyOpts = []string{"cache_valid_time", "install_recommends", "install-recommends", "dpkg_options", "purge",
-		"default_release", "update_cache_retries", "update_cache_retry_max_delay", "deb", "force", "upgrade",
-		"autoclean", "fail_on_autoremove", "policy_rc_d", "only_upgrade", "force_apt_get", "clean",
-		"allow_unauthenticated", "allow-unauthenticated", "allow_change_held_packages", "auto_install_module_deps"}
+// yumdnfSpec is module_utils.yumdnf's yumdnf_argument_spec, shared by the
+// dnf and dnf5 modules.
+func yumdnfSpec(extra args.Spec) args.Spec {
+	s := args.Spec{
+		"allow_downgrade":   {Type: "bool", Default: false},
+		"allowerasing":      {Type: "bool", Default: false},
+		"autoremove":        {Type: "bool", Default: false},
+		"best":              {Type: "bool"},
+		"bugfix":            {Type: "bool", Default: false},
+		"cacheonly":         {Type: "bool", Default: false},
+		"conf_file":         {},
+		"disable_excludes":  {},
+		"disable_gpg_check": {Type: "bool", Default: false},
+		"disable_plugin":    {Type: "list", Default: []any{}},
+		"disablerepo":       {Type: "list", Default: []any{}},
+		"download_only":     {Type: "bool", Default: false},
+		"download_dir":      {},
+		"enable_plugin":     {Type: "list", Default: []any{}},
+		"enablerepo":        {Type: "list", Default: []any{}},
+		"exclude":           {Type: "list", Default: []any{}},
+		"installroot":       {Default: "/"},
+		"install_weak_deps": {Type: "bool", Default: true},
+		"list":              {},
+		"name":              {Type: "list", Aliases: []string{"pkg"}, Default: []any{}},
+		"nobest":            {Type: "bool"},
+		"releasever":        {},
+		"security":          {Type: "bool", Default: false},
+		"skip_broken":       {Type: "bool", Default: false},
+		// removed==absent, installed==present; no default: autoremove
+		// alone means absent.
+		"state":          {Choices: []string{"absent", "installed", "latest", "present", "removed"}},
+		"update_cache":   {Type: "bool", Default: false, Aliases: []string{"expire-cache"}},
+		"update_only":    {Type: "bool", Default: false},
+		"validate_certs": {Type: "bool", Default: true},
+		"sslverify":      {Type: "bool", Default: true},
+		"lock_timeout":   {Type: "int", Default: 30},
+	}
+	for k, v := range extra {
+		s[k] = v
+	}
+	return s
+}
+
+// dnfSpec is ansible.builtin.dnf's (and so yum's) argument spec.
+var dnfSpec = yumdnfSpec(args.Spec{
+	"use_backend": {Default: "auto", Choices: []string{"auto", "dnf", "yum", "yum4", "dnf4", "dnf5"}},
+})
+
+// dnf5Spec is ansible.builtin.dnf5's argument spec.
+var dnf5Spec = yumdnfSpec(args.Spec{
+	"auto_install_module_deps": {Type: "bool", Default: true},
+})
+
+// packageSpec is ansible.builtin.package's documented options; the action
+// hands everything but use to the package manager's module.
+var packageSpec = args.Spec{
+	"name":  {Required: true, Type: "any"},
+	"state": {Required: true},
+	"use":   {Default: "auto"},
+}
+
+// Hidden arguments the package actions pass their module.
+const (
+	// pkgMgrFactKey carries the host's ansible_facts.pkg_mgr, when set.
+	pkgMgrFactKey = "_understudy_pkg_mgr"
+	// pkgUseVarKey carries the ansible_package_use variable (package).
+	pkgUseVarKey = "_understudy_package_use"
+	// pkgReportFactKey asks the dnf action to report a pkg_mgr it had
+	// to detect as ansible_facts, as the dnf action plugin does.
+	pkgReportFactKey = "_understudy_report_pkg_mgr"
 )
+
+// takeHidden removes a hidden argument from raw, returning its value.
+func takeHidden(raw map[string]any, key string) any {
+	v := raw[key]
+	delete(raw, key)
+	return v
+}
+
+func copyRaw(raw map[string]any) map[string]any {
+	out := make(map[string]any, len(raw))
+	for k, v := range raw {
+		out[k] = v
+	}
+	return out
+}
+
+// detectPkgMgrFact is the pkg_mgr fact setup would report (gather_subset
+// !all, filter ansible_pkg_mgr).
+func detectPkgMgrFact(env *RunEnv) string {
+	facts, err := gatherFacts(newFactEnv("/etc/ansible/facts.d", 10*time.Second), []string{"!all"}, []string{"ansible_pkg_mgr"})
+	if err != nil {
+		return "auto"
+	}
+	if s, ok := facts["ansible_pkg_mgr"].(string); ok {
+		return s
+	}
+	return "auto"
+}
+
+// aptModule is ansible.builtin.apt.
+func aptModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
+	return aptModuleAs(env, rawArgs, "apt")
+}
+
+func aptModuleAs(env *RunEnv, rawArgs map[string]any, name string) *agentproto.Result {
+	raw := copyRaw(rawArgs)
+	takeHidden(raw, pkgMgrFactKey)
+	p, fail := parseModuleArgs(aptSpec, raw, name)
+	if fail != nil {
+		return fail
+	}
+	return runPkg(env, pkgManagers["apt"], p, raw, "")
+}
+
+// dnfActionModule is the dnf action plugin (yum redirects to it): the
+// backend comes from use_backend (or use), else the pkg_mgr fact, else
+// setup's detection, which the result then reports as ansible_facts.
+func dnfActionModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
+	raw := copyRaw(rawArgs)
+	fact, _ := takeHidden(raw, pkgMgrFactKey).(string)
+	report, _ := takeHidden(raw, pkgReportFactKey).(bool)
+	_, hasUse := raw["use"]
+	_, hasBackend := raw["use_backend"]
+	if hasUse && hasBackend {
+		return agentproto.Fail("parameters are mutually exclusive: ('use', 'use_backend')")
+	}
+	module := "auto"
+	if v, ok := raw["use"]; ok {
+		module = fmt.Sprint(v)
+	} else if v, ok := raw["use_backend"]; ok {
+		module = fmt.Sprint(v)
+	}
+	if (module == "yum" || module == "auto") && fact != "" {
+		module = fact
+	}
+	var facts map[string]any
+	valid := map[string]bool{"yum": true, "yum4": true, "dnf": true, "dnf4": true, "dnf5": true}
+	if !valid[module] {
+		module = detectPkgMgrFact(env)
+		if report && module != "auto" {
+			facts = map[string]any{"pkg_mgr": module}
+		}
+	}
+	if !valid[module] {
+		return &agentproto.Result{Failed: true, AnsibleFacts: facts, Extra: map[string]any{"msg": []any{
+			"Could not detect which major revision of dnf is in use, which is required to determine module backend.",
+			"You should manually specify use_backend to tell the module whether to use the dnf4 or dnf5 backend})"}}}
+	}
+	delete(raw, "use")
+	delete(raw, "use_backend")
+	var res *agentproto.Result
+	if module == "dnf5" {
+		res = dnfModuleAs(env, raw, "dnf5", "ansible.legacy.dnf5")
+	} else {
+		res = dnfModuleAs(env, raw, "dnf", "ansible.legacy.dnf")
+	}
+	if facts != nil && res != nil {
+		if res.AnsibleFacts == nil {
+			res.AnsibleFacts = map[string]any{}
+		}
+		for k, v := range facts {
+			if _, set := res.AnsibleFacts[k]; !set {
+				res.AnsibleFacts[k] = v
+			}
+		}
+	}
+	return res
+}
+
+// dnf5Module is ansible.builtin.dnf5 run directly.
+func dnf5Module(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
+	raw := copyRaw(rawArgs)
+	takeHidden(raw, pkgMgrFactKey)
+	return dnfModuleAs(env, raw, "dnf5", "dnf5")
+}
+
+// dnfModuleAs runs the dnf (dnf4) or dnf5 module, named as invoked.
+func dnfModuleAs(env *RunEnv, raw map[string]any, backend, name string) *agentproto.Result {
+	spec := dnfSpec
+	if backend == "dnf5" {
+		spec = dnf5Spec
+	}
+	p, fail := parseModuleArgs(spec, raw, name)
+	if fail != nil {
+		return fail
+	}
+	if err := spec.MutuallyExclusive(raw, []string{"name", "list"}, []string{"best", "nobest"}); err != nil {
+		return agentproto.Fail("%v", err)
+	}
+	mgr := rpmManager("dnf")
+	if backend == "dnf5" {
+		mgr = rpmManager("dnf5")
+	}
+	return runPkg(env, mgr, p, raw, backend)
+}
+
+// packageModule is the package action: use (or ansible_package_use, else
+// the pkg_mgr fact, else detection) names the module the other arguments
+// go to, run as ansible.legacy.<module>.
+func packageModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
+	raw := copyRaw(rawArgs)
+	fact, _ := takeHidden(raw, pkgMgrFactKey).(string)
+	useVar, _ := takeHidden(raw, pkgUseVarKey).(string)
+	module := "auto"
+	if v, ok := raw["use"]; ok {
+		module = fmt.Sprint(v)
+	}
+	delete(raw, "use")
+	if module == "auto" {
+		module = useVar
+		if module == "" {
+			module = fact
+		}
+		if module == "" {
+			module = detectPkgMgrFact(env)
+		}
+	}
+	if module == "" || module == "auto" {
+		return agentproto.Fail("Could not detect which package manager to use. Try gathering facts or setting the \"use\" option.")
+	}
+	short := module[strings.LastIndexByte(module, '.')+1:]
+	switch short {
+	case "apt":
+		return aptModuleAs(env, raw, "ansible.legacy.apt")
+	case "dnf", "yum":
+		// The package action runs the dnf module itself, not the action.
+		return dnfModuleAs(env, raw, "dnf", "ansible.legacy."+short)
+	case "dnf5":
+		return dnfModuleAs(env, raw, "dnf5", "ansible.legacy.dnf5")
+	case "apk":
+		return apkModuleAs(env, raw, "ansible.legacy.apk")
+	}
+	return agentproto.Fail("Could not find a matching action for the \"%s\" package manager.", module)
+}
 
 // pkgManager abstracts one package manager's query and mutate commands.
 // opts are manager-specific CLI flags derived from the module options.
@@ -152,327 +343,270 @@ func rpmManager(cmd string) *pkgManager {
 	}
 }
 
-// mkPkg builds a package module bound to one manager, or auto-detecting
-// when mgrName is "" (the generic `package` module).
-func mkPkg(mgrName string) ModuleFunc {
-	return func(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
-		if _, set := rawArgs["use"]; set && mgrName != "" {
-			return agentproto.Fail("Unsupported parameters: use")
-		}
-		p, err := pkgSpec.Parse(rawArgs)
-		if err != nil {
-			return agentproto.Fail("%v", err)
-		}
+// runPkg installs, removes or upgrades packages with one manager; backend
+// is the dnf module flavor ("dnf", "dnf5") for rpm managers, "" for apt.
+func runPkg(env *RunEnv, mgr *pkgManager, p *args.Parsed, rawArgs map[string]any, backend string) *agentproto.Result {
+	if _, err := exec.LookPath(pkgBinary(mgr.name)); err != nil {
+		return agentproto.Fail("package manager %q is not available on this host", mgr.name)
+	}
+	opts, err := pkgOptions(mgr.name, p, rawArgs, rpmRepoMatcher(env, mgr.name))
+	if err != nil {
+		return agentproto.Fail("%v", err)
+	}
+	// dnf/apt only lock the final transaction, not their download
+	// cache: concurrent package tasks (parallel blocks, async jobs)
+	// must not overlap. The lock is cross-process (each agent call is
+	// its own process).
+	if !env.CheckMode {
+		unlock := lockPackageManager()
+		defer unlock()
+	}
 
-		mgr := pkgManagers[mgrName]
-		if mgr == nil {
-			// The package action: use names the backend module, else the
-			// detected package manager (ansible_pkg_mgr).
-			use := p.Str("use")
-			fwd := make(map[string]any, len(rawArgs))
-			for k, v := range rawArgs {
-				if k != "use" {
-					fwd[k] = v
-				}
-			}
-			switch use {
-			case "auto", "":
-				mgr = detectPkgManager()
-				if mgr == nil {
-					if _, err := exec.LookPath("apk"); err == nil {
-						return apkModule(env, fwd)
-					}
-					return agentproto.Fail("Could not detect a package manager. Try using the \"use\" option.")
-				}
-			case "apk", "community.general.apk":
-				return apkModule(env, fwd)
-			case "apt", "dnf", "yum", "ansible.builtin.apt", "ansible.builtin.dnf", "ansible.builtin.yum":
-				return mkPkg(use[strings.LastIndexByte(use, '.')+1:])(env, fwd)
-			case "dnf5", "ansible.builtin.dnf5":
-				return mkPkg("dnf")(env, withArg(fwd, "use_backend", "dnf5"))
-			default:
-				return agentproto.Fail("Could not find a matching action for the \"%s\" package manager.", use)
-			}
+	nameKey := "name"
+	if mgr.name == "apt" {
+		nameKey = "package"
+	}
+	var names []string
+	for _, n := range p.List(nameKey) {
+		s, ok := n.(string)
+		if !ok {
+			s = pyStrValue(n)
 		}
-		// yum on a dnf-only system (RHEL 8+) is dnf, as in Ansible's yum
-		// action; use_backend picks explicitly.
-		if mgr.name == "yum" || mgr.name == "dnf" {
-			switch p.Str("use_backend") {
-			case "dnf", "dnf4", "yum4":
-				mgr = pkgManagers["dnf"]
-			case "dnf5":
-				mgr = rpmManager("dnf5")
-			case "yum":
-				mgr = pkgManagers["yum"]
-			}
-			if _, err := exec.LookPath(pkgBinary(mgr.name)); err != nil && mgr.name == "yum" {
-				mgr = pkgManagers["dnf"]
-			}
-		}
-		if _, err := exec.LookPath(pkgBinary(mgr.name)); err != nil {
-			return agentproto.Fail("package manager %q is not available on this host", mgr.name)
-		}
-		opts, err := pkgOptions(mgr.name, p, rawArgs, rpmRepoMatcher(env, mgr.name))
-		if err != nil {
-			return agentproto.Fail("%v", err)
-		}
-		// dnf/apt only lock the final transaction, not their download
-		// cache: concurrent package tasks (parallel blocks, async jobs)
-		// must not overlap. The lock is cross-process (each agent call is
-		// its own process).
-		if !env.CheckMode {
-			unlock := lockPackageManager()
-			defer unlock()
-		}
+		names = append(names, s)
+	}
+	if backend != "" {
+		return runDnf(env, mgr, p, rawArgs, names, opts, backend)
+	}
 
-		var names []string
-		for _, n := range p.List("name") {
-			s, ok := n.(string)
-			if !ok || s == "" {
-				return agentproto.Fail("package names must be strings")
-			}
-			names = append(names, s)
-		}
+	state := p.Str("state")
+	switch state {
+	case "installed":
+		state = "present"
+	case "removed":
+		state = "absent"
+	}
 
-		state := p.Str("state")
-		switch state {
-		case "installed":
-			state = "present"
-		case "removed":
-			state = "absent"
-		}
-
-		res := &agentproto.Result{Extra: map[string]any{}}
-		apt := mgr.name == "apt"
-		upgradeMode := p.Str("upgrade")
-		if upgradeMode == "no" {
-			upgradeMode = ""
-		}
-		deb := pyExpandPath(p.Str("deb"))
-		if apt {
-			present := 0
-			for _, group := range [][]string{{"deb"}, {"name", "pkg", "package"}, {"upgrade"}} {
-				for _, k := range group {
-					if v, ok := rawArgs[k]; ok && v != nil {
-						present++
-						break
-					}
-				}
-			}
-			if present > 1 {
-				return agentproto.Fail("parameters are mutually exclusive: deb|package|upgrade")
-			}
-			if p.Bool("clean") {
-				rc, out, errOut := runAptCmd(env, "apt-get", "clean")
-				if rc != 0 {
-					return &agentproto.Result{Failed: true, Msg: "apt-get clean failed", Stdout: out, RC: agentproto.IntPtr(rc)}
-				}
-				if errOut != "" {
-					return &agentproto.Result{Failed: true, Msg: "apt-get clean failed: " + errOut, Stdout: out, RC: agentproto.IntPtr(rc)}
-				}
-				if len(names) == 0 && upgradeMode == "" && deb == "" {
-					return aptOutput(true, &out, out, errOut)
+	res := &agentproto.Result{Extra: map[string]any{}}
+	apt := mgr.name == "apt"
+	upgradeMode := p.Str("upgrade")
+	if upgradeMode == "no" {
+		upgradeMode = ""
+	}
+	deb := pyExpandPath(p.Str("deb"))
+	if apt {
+		present := 0
+		for _, group := range [][]string{{"deb"}, {"name", "pkg", "package"}, {"upgrade"}} {
+			for _, k := range group {
+				if v, ok := rawArgs[k]; ok && v != nil {
+					present++
+					break
 				}
 			}
 		}
-		if !apt && p.Has("list") {
-			return dnfList(env, mgr.name, opts.repo, p.Str("list"))
+		if present > 1 {
+			return agentproto.Fail("parameters are mutually exclusive: deb|package|upgrade")
 		}
-
-		wantUpdate := p.Bool("update_cache") || (apt && p.Int("cache_valid_time") > 0)
-		if wantUpdate && apt {
-			// ansible.builtin.apt: refresh unless the cache is younger than
-			// cache_valid_time; with nothing else to do, changed reports
-			// whether the cache was refreshed.
-			before := aptCacheMtime()
-			updated := false
-			if !aptCacheFresh(mgr.name, int(p.Int("cache_valid_time"))) {
-				if !env.CheckMode {
-					if fail := aptUpdateWithRetries(env, mgr, opts.repo, p); fail != nil {
-						return fail
-					}
-				}
-				after := aptCacheMtime()
-				updated = env.CheckMode || after != before
-				before = after
+		if p.Bool("clean") {
+			rc, out, errOut := runAptCmd(env, "apt-get", "clean")
+			if rc != 0 {
+				return &agentproto.Result{Failed: true, Msg: "apt-get clean failed", Stdout: out, RC: agentproto.IntPtr(rc)}
 			}
-			res.Extra["cache_updated"] = updated
-			res.Extra["cache_update_time"] = before
+			if errOut != "" {
+				return &agentproto.Result{Failed: true, Msg: "apt-get clean failed: " + errOut, Stdout: out, RC: agentproto.IntPtr(rc)}
+			}
 			if len(names) == 0 && upgradeMode == "" && deb == "" {
-				res.Changed = updated
-				return res
-			}
-		} else if p.Bool("update_cache") {
-			if !env.CheckMode {
-				if out, err := mgr.refresh(env, opts.repo); err != nil {
-					return agentproto.Fail("cache update failed: %v: %s", err, tail(out))
-				}
-			}
-			res.Extra["cache_updated"] = true
-			if len(names) == 0 {
-				return res
+				return aptOutput(true, &out, out, errOut)
 			}
 		}
-		if apt {
-			// install() results always carry the cache state.
-			if _, ok := res.Extra["cache_updated"]; !ok {
-				res.Extra["cache_updated"] = false
-				res.Extra["cache_update_time"] = aptCacheMtime()
-			}
-			if upgradeMode != "" {
-				return aptUpgrade(env, p, upgradeMode)
-			}
-			if deb != "" {
-				if state != "present" {
-					return agentproto.Fail("deb only supports state=present")
-				}
-				return aptInstallDeb(env, p, deb)
-			}
-			var filtered []string
-			all := false
-			for _, n := range names {
-				if n == "*" {
-					all = true
-					continue
-				}
-				filtered = append(filtered, strings.TrimSpace(n))
-			}
-			names = filtered
-			if state == "latest" && all {
-				if len(names) > 0 {
-					return agentproto.Fail("unable to install additional packages when upgrading all installed packages")
-				}
-				return aptUpgrade(env, p, "yes")
-			}
-			for _, n := range names {
-				if strings.Count(n, "=") > 1 {
-					return agentproto.Fail("invalid package spec: %s", n)
+	}
+	if !apt && p.Has("list") {
+		return dnfList(env, mgr.name, opts.repo, p.Str("list"))
+	}
+
+	wantUpdate := p.Bool("update_cache") || (apt && p.Int("cache_valid_time") > 0)
+	if wantUpdate && apt {
+		// ansible.builtin.apt: refresh unless the cache is younger than
+		// cache_valid_time; with nothing else to do, changed reports
+		// whether the cache was refreshed.
+		before := aptCacheMtime()
+		updated := false
+		if !aptCacheFresh(mgr.name, int(p.Int("cache_valid_time"))) {
+			if !env.CheckMode {
+				if fail := aptUpdateWithRetries(env, mgr, opts.repo, p); fail != nil {
+					return fail
 				}
 			}
-			if len(names) == 0 {
-				if p.Bool("autoclean") {
-					return aptCleanup(env, p, "autoclean")
-				}
-				if p.Bool("autoremove") {
-					return aptCleanup(env, p, "autoremove")
-				}
+			after := aptCacheMtime()
+			updated = env.CheckMode || after != before
+			before = after
+		}
+		res.Extra["cache_updated"] = updated
+		res.Extra["cache_update_time"] = before
+		if len(names) == 0 && upgradeMode == "" && deb == "" {
+			res.Changed = updated
+			return res
+		}
+	} else if p.Bool("update_cache") {
+		if !env.CheckMode {
+			if out, err := mgr.refresh(env, opts.repo); err != nil {
+				return agentproto.Fail("cache update failed: %v: %s", err, tail(out))
 			}
-			if state == "build-dep" || state == "fixed" {
-				r := aptBuildDepOrFixed(env, p, names, state)
-				if r.Extra == nil {
-					r.Extra = map[string]any{}
-				}
-				r.Extra["cache_updated"] = res.Extra["cache_updated"]
-				r.Extra["cache_update_time"] = res.Extra["cache_update_time"]
-				return r
+		}
+		res.Extra["cache_updated"] = true
+		if len(names) == 0 {
+			return res
+		}
+	}
+	if apt {
+		// install() results always carry the cache state.
+		if _, ok := res.Extra["cache_updated"]; !ok {
+			res.Extra["cache_updated"] = false
+			res.Extra["cache_update_time"] = aptCacheMtime()
+		}
+		if upgradeMode != "" {
+			return aptUpgrade(env, p, upgradeMode)
+		}
+		if deb != "" {
+			if state != "present" {
+				return agentproto.Fail("deb only supports state=present")
 			}
-		} else if state == "build-dep" || state == "fixed" {
-			return agentproto.Fail("state=%s is only supported by apt", state)
+			return aptInstallDeb(env, p, deb)
+		}
+		var filtered []string
+		all := false
+		for _, n := range names {
+			if n == "*" {
+				all = true
+				continue
+			}
+			filtered = append(filtered, strings.TrimSpace(n))
+		}
+		names = filtered
+		if state == "latest" && all {
+			if len(names) > 0 {
+				return agentproto.Fail("unable to install additional packages when upgrading all installed packages")
+			}
+			return aptUpgrade(env, p, "yes")
+		}
+		for _, n := range names {
+			if strings.Count(n, "=") > 1 {
+				return agentproto.Fail("invalid package spec: %s", n)
+			}
 		}
 		if len(names) == 0 {
-			return agentproto.Fail("'name' is required (or update_cache alone)")
+			if p.Bool("autoclean") {
+				return aptCleanup(env, p, "autoclean")
+			}
+			if p.Bool("autoremove") {
+				return aptCleanup(env, p, "autoremove")
+			}
 		}
-		onlyInstalled := (apt && p.Bool("only_upgrade")) || (!apt && state == "latest" && p.Bool("update_only"))
+		if state == "build-dep" || state == "fixed" {
+			r := aptBuildDepOrFixed(env, p, names, state)
+			if r.Extra == nil {
+				r.Extra = map[string]any{}
+			}
+			r.Extra["cache_updated"] = res.Extra["cache_updated"]
+			r.Extra["cache_update_time"] = res.Extra["cache_update_time"]
+			return r
+		}
+	} else if state == "build-dep" || state == "fixed" {
+		return agentproto.Fail("state=%s is only supported by apt", state)
+	}
+	if len(names) == 0 {
+		return agentproto.Fail("'name' is required (or update_cache alone)")
+	}
+	onlyInstalled := (apt && p.Bool("only_upgrade")) || (!apt && state == "latest" && p.Bool("update_only"))
 
-		switch state {
-		case "present", "latest":
-			var missing []string
-			for _, pkg := range names {
-				if !mgr.installed(env, pkg) {
-					missing = append(missing, pkg)
+	switch state {
+	case "present", "latest":
+		var missing []string
+		for _, pkg := range names {
+			if !mgr.installed(env, pkg) {
+				missing = append(missing, pkg)
+			}
+		}
+		targets := missing
+		if state == "latest" {
+			targets = names // latest always runs the install command
+		}
+		var skipped []any
+		if onlyInstalled {
+			// only_upgrade / update_only: packages that are not
+			// installed are skipped, the rest only upgraded.
+			var keep []string
+			for _, t := range targets {
+				if !containsStr(missing, t) {
+					keep = append(keep, t)
+				} else if !apt {
+					skipped = append(skipped, fmt.Sprintf("Packages providing %s not installed due to update_only specified", t))
 				}
 			}
-			targets := missing
-			if state == "latest" {
-				targets = names // latest always runs the install command
+			targets = keep
+		}
+		if len(targets) == 0 {
+			if skipped != nil {
+				// The dnf module's no-op result.
+				res.Msg = "Nothing to do"
+				res.Extra["results"] = skipped
 			}
-			var skipped []any
-			if onlyInstalled {
-				// only_upgrade / update_only: packages that are not
-				// installed are skipped, the rest only upgraded.
-				var keep []string
-				for _, t := range targets {
-					if !containsStr(missing, t) {
-						keep = append(keep, t)
-					} else if !apt {
-						skipped = append(skipped, fmt.Sprintf("Packages providing %s not installed due to update_only specified", t))
-					}
-				}
-				targets = keep
+			return res
+		}
+		if env.CheckMode {
+			res.Changed = len(missing) > 0 || state == "latest"
+			res.Extra["would_install"] = targets
+			return res
+		}
+		if apt {
+			argv := append(append([]string{aptGetPath(), "install", "-y"}, opts.install...), targets...)
+			return aptRunResult(env, p, res, argv, true)
+		}
+		var out string
+		err := withPolicyRcD(apt, p, func() error {
+			var e error
+			out, e = mgr.install(env, targets, state == "latest", opts.install)
+			return e
+		})
+		if err != nil {
+			return agentproto.Fail("package install failed: %v: %s", err, tail(out))
+		}
+		// The transaction decides: names that only resolve through dnf
+		// (groups, modules) can look missing and still be "Nothing to do".
+		res.Changed = pkgOutputShowsChange(mgr.name, out)
+	case "absent":
+		// remove() exits without the cache state.
+		delete(res.Extra, "cache_updated")
+		delete(res.Extra, "cache_update_time")
+		var present []string
+		for _, pkg := range names {
+			if mgr.installed(env, pkg) {
+				present = append(present, pkg)
 			}
-			if len(targets) == 0 {
-				if skipped != nil {
-					// The dnf module's no-op result.
-					res.Msg = "Nothing to do"
-					res.Extra["results"] = skipped
-				}
-				return res
-			}
-			if env.CheckMode {
-				res.Changed = len(missing) > 0 || state == "latest"
-				res.Extra["would_install"] = targets
-				return res
-			}
-			if apt {
-				argv := append(append([]string{aptGetPath(), "install", "-y"}, opts.install...), targets...)
-				return aptRunResult(env, p, res, argv, true)
-			}
-			var out string
-			err := withPolicyRcD(apt, p, func() error {
-				var e error
-				out, e = mgr.install(env, targets, state == "latest", opts.install)
-				return e
-			})
-			if err != nil {
-				return agentproto.Fail("package install failed: %v: %s", err, tail(out))
-			}
-			// The transaction decides: names that only resolve through dnf
-			// (groups, modules) can look missing and still be "Nothing to do".
-			res.Changed = pkgOutputShowsChange(mgr.name, out)
-		case "absent":
-			// remove() exits without the cache state.
-			delete(res.Extra, "cache_updated")
-			delete(res.Extra, "cache_update_time")
-			var present []string
-			for _, pkg := range names {
-				if mgr.installed(env, pkg) {
-					present = append(present, pkg)
-				}
-			}
-			if len(present) == 0 {
-				return res
-			}
-			if env.CheckMode {
-				res.Changed = true
-				res.Extra["would_remove"] = present
-				return res
-			}
-			if apt {
-				argv := append(append([]string{aptGetPath(), "remove", "-y"}, opts.remove...), present...)
-				return aptRunResult(env, p, res, argv, false)
-			}
-			var out string
-			err := withPolicyRcD(apt, p, func() error {
-				var e error
-				out, e = mgr.remove(env, present, opts.remove)
-				return e
-			})
-			if err != nil {
-				return agentproto.Fail("package removal failed: %v: %s", err, tail(out))
-			}
+		}
+		if len(present) == 0 {
+			return res
+		}
+		if env.CheckMode {
 			res.Changed = true
+			res.Extra["would_remove"] = present
+			return res
 		}
-		return res
-	}
-}
-
-func detectPkgManager() *pkgManager {
-	for _, name := range []string{"apt", "dnf", "yum"} {
-		if _, err := exec.LookPath(pkgBinary(name)); err == nil {
-			return pkgManagers[name]
+		if apt {
+			argv := append(append([]string{aptGetPath(), "remove", "-y"}, opts.remove...), present...)
+			return aptRunResult(env, p, res, argv, false)
 		}
+		var out string
+		err := withPolicyRcD(apt, p, func() error {
+			var e error
+			out, e = mgr.remove(env, present, opts.remove)
+			return e
+		})
+		if err != nil {
+			return agentproto.Fail("package removal failed: %v: %s", err, tail(out))
+		}
+		res.Changed = true
 	}
-	return nil
+	return res
 }
 
 func pkgBinary(name string) string {
@@ -578,20 +712,11 @@ type pkgOpts struct {
 	repo, install, remove []string
 }
 
-// pkgOptions maps module options onto the manager's CLI flags, rejecting
-// options that belong to the other package family.
+// pkgOptions maps module options onto the manager's CLI flags (each
+// module's argument spec admits only its own options).
 func pkgOptions(mgr string, p *args.Parsed, raw map[string]any, repoKnown func(string) bool) (pkgOpts, error) {
 	var o pkgOpts
 	rpm := mgr == "dnf" || mgr == "yum" || mgr == "dnf5"
-	reject := aptOnlyOpts
-	if !rpm {
-		reject = rpmOnlyOpts
-	}
-	for _, k := range reject {
-		if _, set := raw[k]; set {
-			return o, fmt.Errorf("the %q option is not supported by %s", k, mgr)
-		}
-	}
 	if rpm {
 		// The dnf module enables/disables base.repos.get_matching(pattern):
 		// a pattern matching no configured repo is a no-op, where the dnf

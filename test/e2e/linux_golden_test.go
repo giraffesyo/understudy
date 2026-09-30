@@ -43,7 +43,9 @@ RUN apk add --no-cache openssh sudo python3 git && ssh-keygen -A && \
     echo '` + lgUser + ` ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/` + lgUser + `
 CMD ["/usr/sbin/sshd", "-D", "-e"]`,
 	"rocky": `FROM rockylinux/rockylinux:9
-RUN dnf -y install openssh-server openssh-clients sudo python3 chkconfig git-core && ssh-keygen -A && \
+RUN printf 'keepcache=1\nmetadata_expire=-1\n' >> /etc/dnf/dnf.conf && \
+    dnf -y install openssh-server openssh-clients sudo python3 chkconfig git-core && \
+    dnf -y install --downloadonly tree zip && ssh-keygen -A && \
     useradd -m ` + lgUser + ` && \
     echo '` + lgUser + ` ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/` + lgUser + `
 CMD ["/usr/sbin/sshd", "-D", "-e"]`,
