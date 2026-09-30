@@ -897,6 +897,9 @@ func (u *userRun) modifyBusybox() (*int, string, string) {
 			fsutil.Backup("/etc/passwd")
 			if err := fsutil.AtomicMove(tmp.Name(), "/etc/passwd", true); err != nil {
 				os.Remove(tmp.Name())
+				if res := seFailure(err); res != nil {
+					u.fail(res.Msg, res.Extra)
+				}
 				u.fail(pyStrOSError(err, "/etc/passwd"), nil)
 			}
 		}
@@ -1114,10 +1117,8 @@ func (u *userRun) warnPasswordHash() {
 	}
 }
 
-func selinuxEnabled() bool {
-	b, err := os.ReadFile("/sys/fs/selinux/enforce")
-	return err == nil && len(b) > 0 && pathExists("/etc/selinux/config")
-}
+// selinuxEnabled is AnsibleModule.selinux_enabled.
+func selinuxEnabled() bool { return fsutil.SELinuxEnabled() }
 
 func userModule(env *RunEnv, rawArgs map[string]any) (res *agentproto.Result) {
 	p, err := userSpec.Parse(rawArgs)

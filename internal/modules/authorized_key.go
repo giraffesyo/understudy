@@ -374,6 +374,9 @@ func (a *akRun) keyfile(write bool) (string, *agentproto.Result) {
 			if err := os.Mkdir(sshdir, 0o700); err != nil {
 				return "", agentproto.Fail("Failed to create directory %s : %s", sshdir, pyStrOSError(err, sshdir))
 			}
+			if err := fsutil.SetDefaultSELinuxContext(sshdir, false); err != nil {
+				return "", seFailure(err)
+			}
 		}
 		if a.follow {
 			os.Chown(sshdir, a.uid, a.gid)
@@ -397,6 +400,9 @@ func (a *akRun) keyfile(write bool) (string, *agentproto.Result) {
 			return "", agentproto.Fail("File open failed %s : %s", keysfile, pyStrOSError(err, keysfile))
 		}
 		f.Close()
+		if err := fsutil.SetDefaultSELinuxContext(keysfile, false); err != nil {
+			return "", seFailure(err)
+		}
 	}
 	if a.follow {
 		os.Chown(keysfile, a.uid, a.gid)
@@ -604,6 +610,9 @@ func authorizedKeyModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result
 			}
 			if err := fsutil.AtomicMove(tmp.Name(), filename, true); err != nil {
 				os.Remove(tmp.Name())
+				if res := seFailure(err); res != nil {
+					return res
+				}
 				return agentproto.Fail("Unable to make %s into to %s, failed final rename from %s: %s",
 					tmp.Name(), filename, tmp.Name(), pyStrOSError(err, filename))
 			}

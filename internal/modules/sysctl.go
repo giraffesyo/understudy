@@ -326,6 +326,9 @@ func (s *sysctl) writeSysctl() *agentproto.Result {
 	tmp.Close()
 	if err := fsutil.AtomicMove(tmp.Name(), real, true); err != nil {
 		os.Remove(tmp.Name())
+		if res := seFailure(err); res != nil {
+			return res
+		}
 		return agentproto.Fail("Unable to make %s into to %s, failed final rename from %s: %s", tmp.Name(), real, tmp.Name(), pyOSError(err))
 	}
 	return nil
