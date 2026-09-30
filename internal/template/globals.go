@@ -3,6 +3,8 @@ package template
 import (
 	"fmt"
 	"strings"
+
+	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
 // registerGlobals installs callable globals: range, dict, lookup, query.
@@ -53,13 +55,43 @@ func registerGlobals(e *Engine) {
 		return ns, nil
 	})
 
-	e.Globals["dict"] = globalFunc(func(ec *EvalCtx, args []any, kwargs map[string]any) (any, error) {
-		if len(args) > 0 {
-			return nil, fmt.Errorf("dict() only accepts keyword arguments")
+	// dict(): Python's, from a mapping or an iterable of pairs, then the
+	// keyword arguments, keeping insertion order.
+	e.Globals["dict"] = kwOrderFunc(func(ec *EvalCtx, args []any, kwargs *yaml.OMap) (any, error) {
+		if len(args) > 1 {
+			return nil, fmt.Errorf("dict expected at most 1 argument, got %d", len(args))
 		}
-		out := make(map[string]any, len(kwargs))
-		for k, v := range kwargs {
-			out[k] = v
+		out := yaml.NewOMap()
+		if len(args) == 1 {
+			if m, ok := args[0].(Mapping); ok {
+				for _, k := range m.Keys() {
+					v, _ := m.GetItem(k)
+					out.Set(k, v)
+				}
+			} else if m, ok := args[0].(map[string]any); ok {
+				for _, k := range sortedKeys(m) {
+					out.Set(k, m[k])
+				}
+			} else {
+				items, err := iterate(args[0])
+				if err != nil {
+					return nil, err
+				}
+				for i, item := range items {
+					pair, err := iterate(item)
+					if err != nil || len(pair) != 2 {
+						n := len(pair)
+						if err != nil {
+							n = 1
+						}
+						return nil, fmt.Errorf("dictionary update sequence element #%d has length %d; 2 is required", i, n)
+					}
+					out.Set(toStr(pair[0]), pair[1])
+				}
+			}
+		}
+		for _, k := range kwargs.Keys() {
+			out.Set(k, kwargs.Get(k))
 		}
 		return out, nil
 	})

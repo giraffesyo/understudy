@@ -6,6 +6,8 @@ package omap
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"maps"
 	"sort"
 )
@@ -152,4 +154,55 @@ func PlainMap(v any) (map[string]any, bool) {
 		return t.AsMap(), true
 	}
 	return nil, false
+}
+
+// UnmarshalJSON decodes JSON as encoding/json does into any, except that
+// objects become *OMap in document order (as Python's json.loads builds
+// dicts). A repeated key keeps its first position and last value.
+func UnmarshalJSON(data []byte) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	v, err := decodeValue(dec)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("invalid character after top-level value")
+	}
+	return v, nil
+}
+
+func decodeValue(dec *json.Decoder) (any, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	switch tok {
+	case json.Delim('{'):
+		m := NewOMap()
+		for dec.More() {
+			key, err := dec.Token()
+			if err != nil {
+				return nil, err
+			}
+			v, err := decodeValue(dec)
+			if err != nil {
+				return nil, err
+			}
+			m.Set(key.(string), v)
+		}
+		_, err := dec.Token() // '}'
+		return m, err
+	case json.Delim('['):
+		out := []any{}
+		for dec.More() {
+			v, err := decodeValue(dec)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, v)
+		}
+		_, err := dec.Token() // ']'
+		return out, err
+	}
+	return tok, nil
 }
