@@ -18,15 +18,15 @@ func init() {
 	Register(mkPkg("apt"), "apt", "ansible.builtin.apt")
 	Register(mkPkg("dnf"), "dnf", "ansible.builtin.dnf")
 	Register(mkPkg("yum"), "yum", "ansible.builtin.yum")
-	Register(mkPkg("apk"), "apk", "community.general.apk")
+	Register(apkModule, "apk", "community.general.apk")
 }
 
 var pkgSpec = args.Spec{
 	"name":               {Type: "list", Aliases: []string{"pkg", "package"}},
-	"state":              {Default: "present", Choices: []string{"present", "installed", "absent", "removed", "latest"}},
+	"state":              {Default: "present", Choices: []string{"present", "installed", "absent", "removed", "latest", "build-dep", "fixed"}},
 	"update_cache":       {Type: "bool", Default: false, Aliases: []string{"update-cache", "expire-cache"}},
 	"cache_valid_time":   {Type: "int"},
-	"install_recommends": {Type: "bool"},
+	"install_recommends": {Type: "bool", Aliases: []string{"install-recommends"}},
 	"autoremove":         {Type: "bool", Default: false},
 	"dpkg_options":       {Default: "force-confdef,force-confold"},
 	"purge":              {Type: "bool", Default: false},
@@ -34,6 +34,27 @@ var pkgSpec = args.Spec{
 	// request older than the installed one is still refused by the CLI.
 	"allow_downgrade": {Type: "bool", Default: false, Aliases: []string{"allow-downgrade", "allow_downgrades", "allow-downgrades"}},
 	"default_release": {Aliases: []string{"default-release"}},
+
+	// apt-only options (ansible.builtin.apt).
+	"update_cache_retries":         {Type: "int", Default: 5},
+	"update_cache_retry_max_delay": {Type: "int", Default: 12},
+	"deb":                          {},
+	"force":                        {Type: "bool", Default: false},
+	"upgrade":                      {Default: "no", Choices: []string{"dist", "full", "no", "safe", "yes"}},
+	"autoclean":                    {Type: "bool", Default: false},
+	"fail_on_autoremove":           {Type: "bool", Default: false},
+	"policy_rc_d":                  {Type: "int"},
+	"only_upgrade":                 {Type: "bool", Default: false},
+	"force_apt_get":                {Type: "bool", Default: false},
+	"clean":                        {Type: "bool", Default: false},
+	"allow_unauthenticated":        {Type: "bool", Default: false, Aliases: []string{"allow-unauthenticated"}},
+	"allow_change_held_packages":   {Type: "bool", Default: false},
+	// Installing python3-apt is moot without Python; accepted for
+	// compatibility.
+	"auto_install_module_deps": {Type: "bool", Default: true},
+
+	// package: the backend module to use (default: detect).
+	"use": {Default: "auto"},
 
 	// dnf/yum options (Ansible's dnf and yum modules).
 	"enablerepo":        {Type: "list"},
@@ -55,6 +76,13 @@ var pkgSpec = args.Spec{
 	"lock_timeout":      {Type: "int"},
 	"validate_certs":    {Type: "bool", Default: true},
 	"sslverify":         {Type: "bool", Default: true},
+	"best":              {Type: "bool"},
+	"cacheonly":         {Type: "bool", Default: false},
+	"disable_plugin":    {Type: "list"},
+	"enable_plugin":     {Type: "list"},
+	"download_dir":      {},
+	"list":              {},
+	"update_only":       {Type: "bool", Default: false},
 }
 
 // rpmOnly/aptOnly options are rejected on the other family rather than
@@ -62,8 +90,12 @@ var pkgSpec = args.Spec{
 var (
 	rpmOnlyOpts = []string{"enablerepo", "disablerepo", "use_backend", "disable_gpg_check", "exclude",
 		"skip_broken", "allowerasing", "nobest", "conf_file", "releasever", "installroot",
-		"disable_excludes", "security", "bugfix", "download_only"}
-	aptOnlyOpts = []string{"cache_valid_time", "install_recommends", "dpkg_options", "purge", "default_release"}
+		"disable_excludes", "security", "bugfix", "download_only", "best", "cacheonly", "disable_plugin",
+		"enable_plugin", "download_dir", "list", "update_only"}
+	aptOnlyOpts = []string{"cache_valid_time", "install_recommends", "install-recommends", "dpkg_options", "purge",
+		"default_release", "update_cache_retries", "update_cache_retry_max_delay", "deb", "force", "upgrade",
+		"autoclean", "fail_on_autoremove", "policy_rc_d", "only_upgrade", "force_apt_get", "clean",
+		"allow_unauthenticated", "allow-unauthenticated", "allow_change_held_packages", "auto_install_module_deps"}
 )
 
 // pkgManager abstracts one package manager's query and mutate commands.
@@ -97,26 +129,6 @@ var pkgManagers = map[string]*pkgManager{
 	},
 	"dnf": rpmManager("dnf"),
 	"yum": rpmManager("yum"),
-	"apk": {
-		name: "apk",
-		installed: func(env *RunEnv, pkg string) bool {
-			_, err := runOut(env, "apk", "info", "-e", pkg)
-			return err == nil
-		},
-		install: func(env *RunEnv, pkgs []string, latest bool, _ []string) (string, error) {
-			argv := []string{"add"}
-			if latest {
-				argv = append(argv, "--upgrade")
-			}
-			return runOut(env, "apk", append(argv, pkgs...)...)
-		},
-		remove: func(env *RunEnv, pkgs []string, _ []string) (string, error) {
-			return runOut(env, "apk", append([]string{"del"}, pkgs...)...)
-		},
-		refresh: func(env *RunEnv, _ []string) (string, error) {
-			return runOut(env, "apk", "update")
-		},
-	},
 }
 
 func rpmManager(cmd string) *pkgManager {
@@ -144,6 +156,9 @@ func rpmManager(cmd string) *pkgManager {
 // when mgrName is "" (the generic `package` module).
 func mkPkg(mgrName string) ModuleFunc {
 	return func(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
+		if _, set := rawArgs["use"]; set && mgrName != "" {
+			return agentproto.Fail("Unsupported parameters: use")
+		}
 		p, err := pkgSpec.Parse(rawArgs)
 		if err != nil {
 			return agentproto.Fail("%v", err)
@@ -151,9 +166,32 @@ func mkPkg(mgrName string) ModuleFunc {
 
 		mgr := pkgManagers[mgrName]
 		if mgr == nil {
-			mgr = detectPkgManager()
-			if mgr == nil {
-				return agentproto.Fail("no supported package manager found (apt, dnf, yum, apk)")
+			// The package action: use names the backend module, else the
+			// detected package manager (ansible_pkg_mgr).
+			use := p.Str("use")
+			fwd := make(map[string]any, len(rawArgs))
+			for k, v := range rawArgs {
+				if k != "use" {
+					fwd[k] = v
+				}
+			}
+			switch use {
+			case "auto", "":
+				mgr = detectPkgManager()
+				if mgr == nil {
+					if _, err := exec.LookPath("apk"); err == nil {
+						return apkModule(env, fwd)
+					}
+					return agentproto.Fail("Could not detect a package manager. Try using the \"use\" option.")
+				}
+			case "apk", "community.general.apk":
+				return apkModule(env, fwd)
+			case "apt", "dnf", "yum", "ansible.builtin.apt", "ansible.builtin.dnf", "ansible.builtin.yum":
+				return mkPkg(use[strings.LastIndexByte(use, '.')+1:])(env, fwd)
+			case "dnf5", "ansible.builtin.dnf5":
+				return mkPkg("dnf")(env, withArg(fwd, "use_backend", "dnf5"))
+			default:
+				return agentproto.Fail("Could not find a matching action for the \"%s\" package manager.", use)
 			}
 		}
 		// yum on a dnf-only system (RHEL 8+) is dnf, as in Ansible's yum
@@ -205,9 +243,44 @@ func mkPkg(mgrName string) ModuleFunc {
 		}
 
 		res := &agentproto.Result{Extra: map[string]any{}}
+		apt := mgr.name == "apt"
+		upgradeMode := p.Str("upgrade")
+		if upgradeMode == "no" {
+			upgradeMode = ""
+		}
+		deb := pyExpandPath(p.Str("deb"))
+		if apt {
+			present := 0
+			for _, group := range [][]string{{"deb"}, {"name", "pkg", "package"}, {"upgrade"}} {
+				for _, k := range group {
+					if v, ok := rawArgs[k]; ok && v != nil {
+						present++
+						break
+					}
+				}
+			}
+			if present > 1 {
+				return agentproto.Fail("parameters are mutually exclusive: deb|package|upgrade")
+			}
+			if p.Bool("clean") {
+				rc, out, errOut := runAptCmd(env, "apt-get", "clean")
+				if rc != 0 {
+					return &agentproto.Result{Failed: true, Msg: "apt-get clean failed", Stdout: out, RC: agentproto.IntPtr(rc)}
+				}
+				if errOut != "" {
+					return &agentproto.Result{Failed: true, Msg: "apt-get clean failed: " + errOut, Stdout: out, RC: agentproto.IntPtr(rc)}
+				}
+				if len(names) == 0 && upgradeMode == "" && deb == "" {
+					return aptOutput(true, &out, out, errOut)
+				}
+			}
+		}
+		if !apt && p.Has("list") {
+			return dnfList(env, mgr.name, opts.repo, p.Str("list"))
+		}
 
-		wantUpdate := p.Bool("update_cache") || (mgr.name == "apt" && p.Int("cache_valid_time") > 0)
-		if wantUpdate && mgr.name == "apt" {
+		wantUpdate := p.Bool("update_cache") || (apt && p.Int("cache_valid_time") > 0)
+		if wantUpdate && apt {
 			// ansible.builtin.apt: refresh unless the cache is younger than
 			// cache_valid_time; with nothing else to do, changed reports
 			// whether the cache was refreshed.
@@ -215,8 +288,8 @@ func mkPkg(mgrName string) ModuleFunc {
 			updated := false
 			if !aptCacheFresh(mgr.name, int(p.Int("cache_valid_time"))) {
 				if !env.CheckMode {
-					if out, err := mgr.refresh(env, opts.repo); err != nil {
-						return agentproto.Fail("cache update failed: %v: %s", err, tail(out))
+					if fail := aptUpdateWithRetries(env, mgr, opts.repo, p); fail != nil {
+						return fail
 					}
 				}
 				after := aptCacheMtime()
@@ -225,7 +298,7 @@ func mkPkg(mgrName string) ModuleFunc {
 			}
 			res.Extra["cache_updated"] = updated
 			res.Extra["cache_update_time"] = before
-			if len(names) == 0 {
+			if len(names) == 0 && upgradeMode == "" && deb == "" {
 				res.Changed = updated
 				return res
 			}
@@ -240,9 +313,66 @@ func mkPkg(mgrName string) ModuleFunc {
 				return res
 			}
 		}
+		if apt {
+			// install() results always carry the cache state.
+			if _, ok := res.Extra["cache_updated"]; !ok {
+				res.Extra["cache_updated"] = false
+				res.Extra["cache_update_time"] = aptCacheMtime()
+			}
+			if upgradeMode != "" {
+				return aptUpgrade(env, p, upgradeMode)
+			}
+			if deb != "" {
+				if state != "present" {
+					return agentproto.Fail("deb only supports state=present")
+				}
+				return aptInstallDeb(env, p, deb)
+			}
+			var filtered []string
+			all := false
+			for _, n := range names {
+				if n == "*" {
+					all = true
+					continue
+				}
+				filtered = append(filtered, strings.TrimSpace(n))
+			}
+			names = filtered
+			if state == "latest" && all {
+				if len(names) > 0 {
+					return agentproto.Fail("unable to install additional packages when upgrading all installed packages")
+				}
+				return aptUpgrade(env, p, "yes")
+			}
+			for _, n := range names {
+				if strings.Count(n, "=") > 1 {
+					return agentproto.Fail("invalid package spec: %s", n)
+				}
+			}
+			if len(names) == 0 {
+				if p.Bool("autoclean") {
+					return aptCleanup(env, p, "autoclean")
+				}
+				if p.Bool("autoremove") {
+					return aptCleanup(env, p, "autoremove")
+				}
+			}
+			if state == "build-dep" || state == "fixed" {
+				r := aptBuildDepOrFixed(env, p, names, state)
+				if r.Extra == nil {
+					r.Extra = map[string]any{}
+				}
+				r.Extra["cache_updated"] = res.Extra["cache_updated"]
+				r.Extra["cache_update_time"] = res.Extra["cache_update_time"]
+				return r
+			}
+		} else if state == "build-dep" || state == "fixed" {
+			return agentproto.Fail("state=%s is only supported by apt", state)
+		}
 		if len(names) == 0 {
 			return agentproto.Fail("'name' is required (or update_cache alone)")
 		}
+		onlyInstalled := (apt && p.Bool("only_upgrade")) || (!apt && state == "latest" && p.Bool("update_only"))
 
 		switch state {
 		case "present", "latest":
@@ -256,7 +386,26 @@ func mkPkg(mgrName string) ModuleFunc {
 			if state == "latest" {
 				targets = names // latest always runs the install command
 			}
+			var skipped []any
+			if onlyInstalled {
+				// only_upgrade / update_only: packages that are not
+				// installed are skipped, the rest only upgraded.
+				var keep []string
+				for _, t := range targets {
+					if !containsStr(missing, t) {
+						keep = append(keep, t)
+					} else if !apt {
+						skipped = append(skipped, fmt.Sprintf("Packages providing %s not installed due to update_only specified", t))
+					}
+				}
+				targets = keep
+			}
 			if len(targets) == 0 {
+				if skipped != nil {
+					// The dnf module's no-op result.
+					res.Msg = "Nothing to do"
+					res.Extra["results"] = skipped
+				}
 				return res
 			}
 			if env.CheckMode {
@@ -264,15 +413,26 @@ func mkPkg(mgrName string) ModuleFunc {
 				res.Extra["would_install"] = targets
 				return res
 			}
-			out, err := mgr.install(env, targets, state == "latest", opts.install)
+			if apt {
+				argv := append(append([]string{aptGetPath(), "install", "-y"}, opts.install...), targets...)
+				return aptRunResult(env, p, res, argv, true)
+			}
+			var out string
+			err := withPolicyRcD(apt, p, func() error {
+				var e error
+				out, e = mgr.install(env, targets, state == "latest", opts.install)
+				return e
+			})
 			if err != nil {
 				return agentproto.Fail("package install failed: %v: %s", err, tail(out))
 			}
 			// The transaction decides: names that only resolve through dnf
 			// (groups, modules) can look missing and still be "Nothing to do".
 			res.Changed = pkgOutputShowsChange(mgr.name, out)
-			res.Stdout = tail(out)
 		case "absent":
+			// remove() exits without the cache state.
+			delete(res.Extra, "cache_updated")
+			delete(res.Extra, "cache_update_time")
 			var present []string
 			for _, pkg := range names {
 				if mgr.installed(env, pkg) {
@@ -287,19 +447,27 @@ func mkPkg(mgrName string) ModuleFunc {
 				res.Extra["would_remove"] = present
 				return res
 			}
-			out, err := mgr.remove(env, present, opts.remove)
+			if apt {
+				argv := append(append([]string{aptGetPath(), "remove", "-y"}, opts.remove...), present...)
+				return aptRunResult(env, p, res, argv, false)
+			}
+			var out string
+			err := withPolicyRcD(apt, p, func() error {
+				var e error
+				out, e = mgr.remove(env, present, opts.remove)
+				return e
+			})
 			if err != nil {
 				return agentproto.Fail("package removal failed: %v: %s", err, tail(out))
 			}
 			res.Changed = true
-			res.Stdout = tail(out)
 		}
 		return res
 	}
 }
 
 func detectPkgManager() *pkgManager {
-	for _, name := range []string{"apt", "dnf", "yum", "apk"} {
+	for _, name := range []string{"apt", "dnf", "yum"} {
 		if _, err := exec.LookPath(pkgBinary(name)); err == nil {
 			return pkgManagers[name]
 		}
@@ -450,6 +618,15 @@ func pkgOptions(mgr string, p *args.Parsed, raw map[string]any, repoKnown func(s
 		if !p.Bool("sslverify") || !p.Bool("validate_certs") {
 			o.repo = append(o.repo, "--setopt=sslverify=False")
 		}
+		if p.Bool("cacheonly") {
+			o.repo = append(o.repo, "--cacheonly")
+		}
+		for _, x := range p.List("disable_plugin") {
+			o.repo = append(o.repo, "--disableplugin="+fmt.Sprint(x))
+		}
+		for _, x := range p.List("enable_plugin") {
+			o.repo = append(o.repo, "--enableplugin="+fmt.Sprint(x))
+		}
 		o.install = append([]string(nil), o.repo...)
 		if p.Bool("disable_gpg_check") {
 			o.install = append(o.install, "--nogpgcheck")
@@ -462,6 +639,9 @@ func pkgOptions(mgr string, p *args.Parsed, raw map[string]any, repoKnown func(s
 		}
 		if p.Bool("nobest") {
 			o.install = append(o.install, "--nobest")
+		} else if _, set := raw["nobest"]; !set && p.Has("best") {
+			// nobest wins over best, as in the dnf module.
+			o.install = append(o.install, fmt.Sprintf("--setopt=best=%v", pyBool(p.Bool("best"))))
 		}
 		if !p.Bool("install_weak_deps") {
 			o.install = append(o.install, "--setopt=install_weak_deps=False")
@@ -474,6 +654,9 @@ func pkgOptions(mgr string, p *args.Parsed, raw map[string]any, repoKnown func(s
 		}
 		if p.Bool("download_only") {
 			o.install = append(o.install, "--downloadonly")
+			if d := p.Str("download_dir"); d != "" {
+				o.install = append(o.install, "--downloaddir="+d)
+			}
 		}
 		o.remove = append([]string(nil), o.repo...)
 		if !p.Bool("autoremove") {
@@ -510,6 +693,27 @@ func pkgOptions(mgr string, p *args.Parsed, raw map[string]any, repoKnown func(s
 		}
 		if p.Bool("allow_downgrade") {
 			o.install = append(o.install, "--allow-downgrades")
+		}
+		// apt module install/remove flags.
+		if p.Bool("force") {
+			o.install = append(o.install, "--force-yes")
+			o.remove = append(o.remove, "--force-yes")
+		}
+		if p.Bool("autoremove") {
+			o.install = append(o.install, "--auto-remove")
+		}
+		if p.Bool("fail_on_autoremove") {
+			o.install = append(o.install, "--no-remove")
+		}
+		if p.Bool("only_upgrade") {
+			o.install = append(o.install, "--only-upgrade")
+		}
+		if p.Bool("allow_unauthenticated") {
+			o.install = append(o.install, "--allow-unauthenticated")
+		}
+		if p.Bool("allow_change_held_packages") {
+			o.install = append(o.install, "--allow-change-held-packages")
+			o.remove = append(o.remove, "--allow-change-held-packages")
 		}
 	}
 	return o, nil

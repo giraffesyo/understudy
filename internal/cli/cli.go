@@ -574,6 +574,16 @@ func playbookCmd(args []string) int {
 		}
 		books = append(books, book{path, plays})
 	}
+	// Module routing deprecations print as the tasks are resolved.
+	if cfg, err := config.Load(); err != nil || cfg.DeprecationWarnings {
+		var all []*playbook.Play
+		for _, b := range books {
+			all = append(all, b.plays...)
+		}
+		for _, w := range executor.RoutingDeprecationWarnings(all) {
+			fmt.Fprint(os.Stderr, w)
+		}
+	}
 
 	if p.syntax {
 		for _, b := range books {

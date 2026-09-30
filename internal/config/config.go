@@ -227,6 +227,9 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ANSIBLE_DISPLAY_SKIPPED_HOSTS"); v != "" {
 		cfg.DisplaySkippedHosts = iniBool(v, cfg.DisplaySkippedHosts)
 	}
+	if v := os.Getenv("ANSIBLE_DEPRECATION_WARNINGS"); v != "" {
+		cfg.DeprecationWarnings = iniBool(v, cfg.DeprecationWarnings)
+	}
 }
 
 func iniBool(s string, def bool) bool {
