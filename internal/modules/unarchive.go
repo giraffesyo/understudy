@@ -152,8 +152,22 @@ func unarchiveModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	if tmp != "" {
 		os.Remove(tmp)
 	}
-	if reportSrc != "" && res != nil && res.Extra != nil && res.Extra["src"] == user["src"] {
-		res.Extra["src"] = reportSrc
+	if actual, _ := user["src"].(string); reportSrc != "" && reportSrc != actual && res != nil {
+		// Written elsewhere (see transferDir): report the staging path,
+		// in the extraction command line too.
+		if res.Extra["src"] == actual {
+			res.Extra["src"] = reportSrc
+		}
+		if er, ok := res.Extra["extract_results"].(map[string]any); ok {
+			if cmd, ok := er["cmd"].([]any); ok {
+				for i, a := range cmd {
+					if a == actual {
+						cmd[i] = reportSrc
+					}
+				}
+			}
+		}
+		res.Msg = strings.ReplaceAll(res.Msg, actual, reportSrc)
 	}
 	addPathInfo(res)
 	return res

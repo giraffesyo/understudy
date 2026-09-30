@@ -72,7 +72,16 @@ func runUnarchive(ctx context.Context, actx *Context, args map[string]any, _ str
 	}
 	found, searched := searchNeedle(actx, "files", source)
 	if found == "" {
-		res := actionRaise("%s", fileNotFound(source, searched))
+		// The AnsibleFileNotFound escapes the action: ansible-core shows
+		// a bare "Task failed." caused by it.
+		cause := fileNotFound(source, searched)
+		res := actionRaise("Task failed: %s", cause)
+		res.Origin = "verbatim"
+		res.ErrorChain = &agentproto.ErrorChain{
+			Outer: "Task failed.",
+			Inner: cause,
+			Help:  "If you are using a module and expect the file to exist on the remote, see the remote_src option.",
+		}
 		return res
 	}
 	f, err := os.Open(found)
