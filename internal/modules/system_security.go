@@ -19,7 +19,7 @@ func init() {
 }
 
 // missingRequiredLib is module_utils' missing_required_lib() message.
-func missingRequiredLib(library, suffix string) string {
+func missingRequiredLibSuffix(library, suffix string) string {
 	host, _ := os.Hostname()
 	return fmt.Sprintf("Failed to import the required Python library (%s) on %s's Python /usr/bin/python3."+
 		" Please read the module documentation and install it in the appropriate location."+
@@ -215,7 +215,7 @@ func firewalldModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	if b, err := getBinPath("firewall-cmd"); err == nil {
 		fw.bin = b
 	} else {
-		return agentproto.Fail("%s", missingRequiredLib("firewall", ". Version 0.2.11 or newer required (0.3.9 or newer for offline operations)"))
+		return agentproto.Fail("%s", missingRequiredLibSuffix("firewall", ". Version 0.2.11 or newer required (0.3.9 or newer for offline operations)"))
 	}
 	if rc, _, _ := runCommand(env, []string{fw.bin, "--state"}, cmdOpts{}); rc != 0 {
 		// Firewalld is not running: permanent-only operations on disk.
@@ -575,7 +575,7 @@ func selinuxModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		return agentproto.Fail("%v", err)
 	}
 	if _, err := os.Stat("/etc/selinux"); err != nil {
-		return agentproto.Fail("%s", missingRequiredLib("libselinux-python", ""))
+		return agentproto.Fail("%s", missingRequiredLibSuffix("libselinux-python", ""))
 	}
 	configfile := p.Str("configfile")
 	policy, hasPolicy := p.Str("policy"), p.Str("policy") != ""
