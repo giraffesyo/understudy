@@ -58,11 +58,22 @@ var lookupPlugins = map[string]lookupPlugin{
 	"dig":                 lookupDig,
 }
 
+// normalizeLookupName strips the collection prefixes lookups accept.
+func normalizeLookupName(name string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(name, "ansible.builtin."), "community.general.")
+}
+
+// LookupKnown reports whether a lookup plugin is implemented (argscan).
+func LookupKnown(name string) bool {
+	_, ok := lookupPlugins[normalizeLookupName(name)]
+	return ok
+}
+
 // installLookups wires the control-side lookup plugins into the template
 // engine (lookup(), query(), and with_<name> loops).
 func (r *Runner) installLookups() {
 	r.Engine.Lookup = func(ec *template.EvalCtx, name string, terms []any, kwargs map[string]any) (any, error) {
-		name = strings.TrimPrefix(strings.TrimPrefix(name, "ansible.builtin."), "community.general.")
+		name = normalizeLookupName(name)
 		plugin, ok := lookupPlugins[name]
 		if !ok {
 			return nil, fmt.Errorf("lookup plugin %q is not supported yet", name)

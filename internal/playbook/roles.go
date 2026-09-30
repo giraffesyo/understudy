@@ -12,6 +12,16 @@ import (
 // srcDir carries the including task's role root so nested src resolution
 // keeps working; blocks flatten as usual.
 func LoadTaskFile(path, srcDir string) ([]*Task, error) {
+	return loadTaskFile(path, srcDir, false)
+}
+
+// LoadHandlerFile parses a standalone handler-list file (a role's
+// handlers/*.yml), where listen: is allowed.
+func LoadHandlerFile(path string) ([]*Task, error) {
+	return loadTaskFile(path, "", true)
+}
+
+func loadTaskFile(path, srcDir string, handler bool) ([]*Task, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -23,7 +33,7 @@ func LoadTaskFile(path, srcDir string) ([]*Task, error) {
 	if len(f.Docs) == 0 {
 		return nil, nil
 	}
-	tasks, err := parseTaskListIn(f.Docs[0], path, false, &blockCounter{}, nil)
+	tasks, err := parseTaskListIn(f.Docs[0], path, handler, &blockCounter{}, nil)
 	if err != nil {
 		return nil, err
 	}
