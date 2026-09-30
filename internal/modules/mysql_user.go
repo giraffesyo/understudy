@@ -125,6 +125,9 @@ func mysqlUserModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		}
 	}
 
+	if fail := m.driverMissing(); fail != nil {
+		return fail
+	}
 	configFile := m.configFile()
 	var conn *mysqlclient.Conn
 	if p.Bool("check_implicit_admin") {

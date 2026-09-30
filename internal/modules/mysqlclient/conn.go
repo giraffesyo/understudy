@@ -88,6 +88,9 @@ type Config struct {
 	NoTLS bool
 	// Autocommit, when set, is applied after connecting (SET AUTOCOMMIT).
 	Autocommit *bool
+	// ClientName/ClientVersion are the _client_name/_client_version
+	// connection attributes (default: ConnectorName, ConnectorVersion).
+	ClientName, ClientVersion string
 }
 
 // Conn is one client connection. It is not safe for concurrent use.
@@ -321,7 +324,11 @@ func (c *Conn) handshake(cfg Config) error {
 	}
 	if c.serverCaps&clientConnectAttrs != 0 {
 		var attrs []byte
-		for _, kv := range [][2]string{{"_client_name", "pymysql"}, {"_client_version", ConnectorVersion},
+		name, version := cfg.ClientName, cfg.ClientVersion
+		if name == "" {
+			name, version = ConnectorName, ConnectorVersion
+		}
+		for _, kv := range [][2]string{{"_client_name", name}, {"_client_version", version},
 			{"_pid", strconv.Itoa(os.Getpid())}} {
 			attrs = appendLenencStr(attrs, kv[0])
 			attrs = appendLenencStr(attrs, kv[1])
@@ -335,9 +342,9 @@ func (c *Conn) handshake(cfg Config) error {
 	return c.authLoop(plugin)
 }
 
-// ConnectorName/ConnectorVersion identify the client the way mysql_info's
-// connector_name/connector_version report the Python driver: this client
-// stands in for PyMySQL.
+// ConnectorName/ConnectorVersion identify this client by the Python
+// driver it stands in for: PyMySQL, at the release whose behavior it
+// reproduces. Modules report the target's own driver when it has one.
 const (
 	ConnectorName    = "pymysql"
 	ConnectorVersion = "1.1.2"
