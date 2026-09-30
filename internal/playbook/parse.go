@@ -42,7 +42,7 @@ var playKeywords = map[string]bool{
 	"force_handlers": true, "vars_prompt": true,
 	"gather_subset": true, "gather_timeout": true, "fact_path": true,
 	"check_mode": true, "diff": true, "become_flags": true, "become_exe": true,
-	"debugger": true,
+	"debugger": true, "timeout": true,
 }
 
 // Deferred play keys that must fail loudly rather than be ignored.

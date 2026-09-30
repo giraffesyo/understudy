@@ -81,6 +81,12 @@ type ErrorChain struct {
 	// InnerFile/InnerLine/InnerCol locate the cause's origin, when known.
 	InnerFile           string
 	InnerLine, InnerCol int
+
+	// Mid, when set, is a cause between the two (Outer caused by Mid,
+	// caused by Inner), located at MidFile:MidLine:MidCol.
+	Mid             string
+	MidFile         string
+	MidLine, MidCol int
 }
 
 // causeKey carries Result.Cause across the agent wire.

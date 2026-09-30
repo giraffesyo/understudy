@@ -100,6 +100,9 @@ type Options struct {
 	// InjectFactsSet is INJECT_FACTS_AS_VARS set explicitly (not left at
 	// its deprecated default): top-level facts then do not warn.
 	InjectFactsSet bool
+	// TaskTimeout is TASK_TIMEOUT: the timeout keyword's default, in
+	// seconds (0 = none).
+	TaskTimeout int
 }
 
 // Runner executes playbooks.
@@ -1289,10 +1292,19 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 	} else if task.Until != "" {
 		total += 3
 	}
+	timeout, bad := r.taskTimeout(play, task, vctx)
+	if bad != nil {
+		bad.DelegatedTo = delegated
+		return bad
+	}
 	var res *agentproto.Result
 	retriesExhausted := false
 	for attempt := 1; attempt <= total; attempt++ {
-		res = r.dispatch(ctx, task, actx, args, freeForm)
+		var timedOut bool
+		if res, timedOut = r.dispatchTimed(ctx, task, actx, args, freeForm, timeout); timedOut {
+			res.DelegatedTo = delegated
+			return res
+		}
 		if task.Async > 0 && task.Poll != 0 && !res.Failed && res.Extra["ansible_job_id"] != nil {
 			res = r.pollAsync(ctx, host, task, actx, res)
 		}

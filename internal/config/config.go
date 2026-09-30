@@ -29,6 +29,7 @@ type Config struct {
 	DisplaySkippedHosts bool
 
 	DeprecationWarnings bool // deprecation_warnings / ANSIBLE_DEPRECATION_WARNINGS
+	TaskTimeout         int  // task_timeout / ANSIBLE_TASK_TIMEOUT: the timeout keyword's default (0 = none)
 	// InjectFactsSet: inject_facts_as_vars is configured (ini or
 	// ANSIBLE_INJECT_FACT_VARS) rather than left at its default.
 	InjectFactsSet bool
@@ -141,6 +142,10 @@ func applyINI(cfg *Config, content string) {
 				cfg.DeprecationWarnings = iniBool(val, cfg.DeprecationWarnings)
 			case "inject_facts_as_vars":
 				cfg.InjectFactsSet = true
+			case "task_timeout":
+				if n, err := strconv.Atoi(val); err == nil {
+					cfg.TaskTimeout = n
+				}
 			case "interpreter_python":
 				// Parsed and ignored.
 			}
@@ -223,6 +228,11 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if os.Getenv("ANSIBLE_INJECT_FACT_VARS") != "" {
 		cfg.InjectFactsSet = true
+	}
+	if v := os.Getenv("ANSIBLE_TASK_TIMEOUT"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			cfg.TaskTimeout = n
+		}
 	}
 	if v := os.Getenv("ANSIBLE_DISPLAY_SKIPPED_HOSTS"); v != "" {
 		cfg.DisplaySkippedHosts = iniBool(v, cfg.DisplaySkippedHosts)

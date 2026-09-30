@@ -363,6 +363,7 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 
 		NoDeprecationWarnings: !cfg.DeprecationWarnings,
 		InjectFactsSet:        cfg.InjectFactsSet,
+		TaskTimeout:           cfg.TaskTimeout,
 	}
 	if cfg.Source != "" {
 		if abs, err := filepath.Abs(cfg.Source); err == nil {
