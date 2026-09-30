@@ -1084,54 +1084,82 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		return res
 	}
 
-	// until/retries loop.
-	attempts := task.Retries + 1
-	if task.Until == "" {
-		attempts = 1
+	// until/retries loop, as TaskExecutor._execute: 1 + retries attempts
+	// (retries defaults to 3 when only until is set); a task with retries
+	// but no until retries until it stops failing. changed_when and
+	// failed_when apply to every attempt, before until is evaluated.
+	total := 1
+	if task.RetriesSet {
+		total += max(0, task.Retries)
+	} else if task.Until != "" {
+		total += 3
 	}
 	var res *agentproto.Result
 	retriesExhausted := false
-	for attempt := 1; attempt <= attempts; attempt++ {
+	for attempt := 1; attempt <= total; attempt++ {
 		res = r.dispatch(ctx, task, actx, args, freeForm)
 		if task.Async > 0 && task.Poll != 0 && !res.Failed && res.Extra["ansible_job_id"] != nil {
 			res = r.pollAsync(ctx, host, task, actx, res)
 		}
-		if task.Until == "" {
-			break
+		if total > 1 {
+			setExtra(res, "attempts", attempt)
 		}
-		resCtx := vctx.WithOverlay(registerOverlay(task, res))
-		ok, err := resCtx.EvalWhen([]string{task.Until})
-		if err != nil {
-			return agentproto.Fail("error evaluating until condition: %v", err)
-		}
-		if ok {
-			if res.Extra == nil {
-				res.Extra = map[string]any{}
+		if !res.Skipped {
+			if fail := applyChangedFailedWhen(task, vctx, res); fail != nil {
+				return fail
 			}
-			res.Extra["attempts"] = attempt
+		}
+		if total == 1 {
 			break
 		}
-		if attempt < attempts {
+		done := !res.Failed
+		if task.Until != "" {
+			ok, err := vctx.WithOverlay(registerOverlay(task, res)).EvalWhen([]string{task.Until})
+			if err != nil {
+				return agentproto.Fail("error evaluating until condition: %v", err)
+			}
+			done = ok
+		}
+		if done {
+			break
+		}
+		if attempt < total {
+			setExtra(res, "retries", total)
+			setExtra(res, "attempts", attempt+1)
 			name := r.taskDisplayName(task, []string{host})
 			if name == "" {
 				name = task.Module
 			}
-			r.Callback.Retrying(host, task, name, task.Retries-attempt, res)
+			r.Callback.Retrying(host, task, name, total-(attempt+1), res)
 			time.Sleep(time.Duration(task.Delay) * time.Second)
 		} else {
+			// Out of attempts: ansible-core records retries-1 attempts and
+			// marks the result failed, even one the module reported ok.
 			retriesExhausted = !res.Failed
 			res.Failed = true
-			if res.Extra == nil {
-				res.Extra = map[string]any{}
-			}
-			res.Extra["attempts"] = attempt
-			if res.Msg == "" {
-				res.Msg = "Retries exhausted"
+			setExtra(res, "attempts", total-1)
+			if retriesExhausted {
+				res.Origin = "plain" // no exception, so no error block
 			}
 		}
 	}
+	if res.Failed && !retriesExhausted && res.Origin != "plain" {
+		// ansible-core attaches an ErrorSummary to every failed task
+		// result; templated (register, ansible_failed_result) it renders as
+		// this placeholder unless tracebacks are enabled. The callback
+		// strips it from the fatal line.
+		if _, has := res.Extra["exception"]; !has {
+			setExtra(res, "exception", "(traceback unavailable)")
+		}
+	}
+	res.DelegatedTo = delegated
+	res.ShowDiff = r.effectiveDiff(task)
+	return res
+}
 
-	// changed_when / failed_when override the module's own verdict.
+// applyChangedFailedWhen lets changed_when / failed_when override the
+// module's own verdict; a non-nil return is an evaluation error result.
+func applyChangedFailedWhen(task *playbook.Task, vctx *vars.Context, res *agentproto.Result) *agentproto.Result {
 	if len(task.ChangedWhen) > 0 || len(task.FailedWhen) > 0 {
 		resCtx := vctx.WithOverlay(registerOverlay(task, res))
 		if len(task.ChangedWhen) > 0 {
@@ -1160,18 +1188,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			}
 		}
 	}
-	if res.Failed && !retriesExhausted && res.Origin != "plain" {
-		// ansible-core attaches an ErrorSummary to every failed task
-		// result; templated (register, ansible_failed_result) it renders as
-		// this placeholder unless tracebacks are enabled. The callback
-		// strips it from the fatal line.
-		if _, has := res.Extra["exception"]; !has {
-			setExtra(res, "exception", "(traceback unavailable)")
-		}
-	}
-	res.DelegatedTo = delegated
-	res.ShowDiff = r.effectiveDiff(task)
-	return res
+	return nil
 }
 
 // registerOverlay exposes the in-flight result under the register name (and

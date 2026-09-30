@@ -743,9 +743,6 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			task.ChangedWhen = decodeExprList(val)
 		case "until":
 			task.Until, _ = val.Str()
-			if task.Retries == 0 {
-				task.Retries = 3
-			}
 			if task.Delay == 0 {
 				task.Delay = 5
 			}
@@ -755,6 +752,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 				return nil, err
 			}
 			task.Retries = int(n)
+			task.RetriesSet = true
 		case "delay":
 			n, err := decodeInt(val, file, "delay")
 			if err != nil {

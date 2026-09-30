@@ -93,6 +93,7 @@ type Task struct {
 	ChangedWhen    []string
 	Until          string
 	Retries        int
+	RetriesSet     bool // retries keyword given (else 3 when until is set)
 	Delay          int
 	Become         BecomeFields
 	Vars           map[string]any
