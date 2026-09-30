@@ -3,6 +3,7 @@ package callback
 import (
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -20,7 +21,9 @@ type Settings struct {
 	DisplayOkHosts      bool
 	DisplaySkippedHosts bool
 	Verbosity           int
-	Adhoc               bool // the ad-hoc command's default is minimal
+	Adhoc               bool                // the ad-hoc command's default is minimal
+	PluginDirs          []string            // where external (executable) callback plugins live
+	Extra               []executor.Callback // additional callbacks (Go API OnEvent)
 }
 
 // Build assembles the output callback chain the way ansible-core loads
@@ -29,21 +32,29 @@ type Settings struct {
 // Ansible, an unloadable stdout callback is an error and an unloadable
 // extra callback is a warning.
 func Build(s Settings, warn func(string)) (executor.Callback, error) {
-	var stdout interface {
-		executor.Callback
-		writer() io.Writer
-	}
+	var stdout executor.Callback
+	var out io.Writer = os.Stdout
 	name := strings.TrimPrefix(strings.TrimPrefix(s.StdoutCallback, "ansible.builtin."), "community.general.")
 	switch {
 	case name == "" && s.Adhoc, name == "minimal":
-		stdout = NewMinimal(s.Verbosity)
+		m := NewMinimal(s.Verbosity)
+		stdout, out = m, m.writer()
 	case name == "", name == "default":
-		stdout = New(s.Verbosity)
+		d := New(s.Verbosity)
+		stdout, out = d, d.writer()
 	default:
-		return nil, fmt.Errorf("Could not load '%s' callback plugin.", s.StdoutCallback)
+		path, _ := findPlugin(s.StdoutCallback, s.PluginDirs)
+		if path == "" {
+			return nil, fmt.Errorf("Could not load '%s' callback plugin.", s.StdoutCallback)
+		}
+		p, err := startExecPlugin(s.StdoutCallback, path, true, warn)
+		if err != nil {
+			return nil, err
+		}
+		stdout = p
 	}
 
-	var cb executor.Callback = stdout
+	cb := stdout
 	if !s.DisplayOkHosts || !s.DisplaySkippedHosts {
 		cb = &filtered{Callback: cb, showOK: s.DisplayOkHosts, showSkipped: s.DisplaySkippedHosts}
 	}
@@ -51,13 +62,24 @@ func Build(s Settings, warn func(string)) (executor.Callback, error) {
 	for _, n := range s.CallbacksEnabled {
 		switch strings.TrimPrefix(n, "ansible.posix.") {
 		case "timer":
-			extras = append(extras, &timerCallback{out: stdout.writer(), start: time.Now()})
+			extras = append(extras, &timerCallback{out: out, start: time.Now()})
 		case "profile_tasks":
-			extras = append(extras, newProfileTasks(stdout.writer()))
+			extras = append(extras, newProfileTasks(out))
 		default:
-			warn(fmt.Sprintf("Skipping callback plugin '%s', unable to load", n))
+			path, _ := findPlugin(n, s.PluginDirs)
+			if path == "" {
+				warn(fmt.Sprintf("Skipping callback plugin '%s', unable to load", n))
+				continue
+			}
+			p, err := startExecPlugin(n, path, false, warn)
+			if err != nil {
+				warn(fmt.Sprintf("Skipping callback plugin '%s', unable to load: %v", n, err))
+				continue
+			}
+			extras = append(extras, p)
 		}
 	}
+	extras = append(extras, s.Extra...)
 	if len(extras) == 0 {
 		return cb, nil
 	}
@@ -333,4 +355,9 @@ func (m *fanout) AsyncDone(h, jid string, failed bool) {
 	for _, c := range m.extras {
 		c.AsyncDone(h, jid, failed)
 	}
+}
+
+// Fanout delivers every event to primary, then to each extra callback.
+func Fanout(primary executor.Callback, extras ...executor.Callback) executor.Callback {
+	return &fanout{primary: primary, extras: extras}
 }

@@ -56,7 +56,16 @@ type Options struct {
 	Output    io.Writer
 	NoColor   bool
 	Verbosity int
+
+	// OnEvent, when set, receives every callback event (the same stream
+	// external callback plugins get), serially and in order.
+	OnEvent func(Event)
 }
+
+// Event is one callback event, named after ansible-core's CallbackBase
+// hooks (v2_playbook_on_task_start, v2_runner_on_ok, v2_playbook_on_stats,
+// ...). Result holds the task result in its registered-variable form.
+type Event = callback.Event
 
 // HostResult is one host's recap counters.
 type HostResult struct {
@@ -132,7 +141,10 @@ func Run(ctx context.Context, pb Playbook, opts Options) (*Result, error) {
 	if out == nil {
 		out = os.Stdout
 	}
-	cb := &callback.Default{Out: out, Verbosity: opts.Verbosity, NoColor: opts.NoColor}
+	var cb executor.Callback = &callback.Default{Out: out, Verbosity: opts.Verbosity, NoColor: opts.NoColor}
+	if opts.OnEvent != nil {
+		cb = callback.Fanout(cb, callback.NewEventCallback(opts.OnEvent))
+	}
 
 	runner := executor.NewRunner(inv, cb, executor.Options{
 		Forks:      forks,

@@ -128,6 +128,38 @@ other module. `Task.Block`/`Rescue`/`Always` express error handling. Rendered
 output is valid `ansible-playbook` input — the render and execution paths go
 through the same loader, so they can't disagree.
 
+## Callback plugins
+
+Callbacks are configured exactly as in Ansible (`stdout_callback`,
+`callbacks_enabled`, `callback_plugins` / `ANSIBLE_CALLBACK_PLUGINS`, and a
+playbook-adjacent `callback_plugins/` directory). Built in: `default`,
+`minimal`, `timer`, `profile_tasks`.
+
+With no Python, a plugin is **any executable** named after the plugin in a
+callback plugin directory. understudy starts it once per run and writes
+every event as one JSON object per line to its stdin, using ansible-core's
+hook names:
+
+```json
+{"event":"v2_playbook_on_start","version":1}
+{"event":"v2_playbook_on_task_start","task":{"name":"install nginx","action":"package","role":"web","path":"roles/web/tasks/main.yml:3"}}
+{"event":"v2_runner_on_ok","host":"web01","task":{...},"result":{"changed":true,...}}
+{"event":"v2_runner_on_failed","host":"web01","task":{...},"result":{...},"ignore_errors":true}
+{"event":"v2_playbook_on_stats","stats":{"web01":{"ok":2,"changed":1,"failures":0,...}}}
+```
+
+Other events: `v2_playbook_on_play_start`, `v2_playbook_on_handler_task_start`,
+`v2_runner_on_skipped`, `v2_runner_on_unreachable`,
+`v2_runner_item_on_{ok,failed,skipped}`, `v2_playbook_on_include`,
+`v2_runner_retry`, `v2_runner_on_async_{poll,ok,failed}`. `result` is the
+task result as `register:` would capture it. Stdin closes after
+`v2_playbook_on_stats`. As the `stdout_callback`, the plugin's stdout is
+the run's output; as an enabled callback, its stdout goes to stderr. A
+Python-only plugin (`name.py`) cannot load and is reported with Ansible's
+`Skipping callback plugin ..., unable to load` warning.
+
+From Go, `understudy.Options.OnEvent` receives the same events.
+
 ## Opt-in speedups
 
 These extensions keep playbooks valid for `ansible-playbook`, which simply

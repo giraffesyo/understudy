@@ -3,6 +3,7 @@ package understudy_test
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,5 +166,23 @@ func TestRenderedFileRuns(t *testing.T) {
 	})
 	if err != nil || res.Failed() {
 		t.Fatalf("res=%+v err=%v\n%s", res, err, buf.String())
+	}
+}
+
+func TestRunOnEvent(t *testing.T) {
+	var names []string
+	pb := understudy.Playbook{{Name: "p", Hosts: "localhost", Tasks: []understudy.Task{{Name: "t", Action: understudy.Debug{Msg: "x"}}}}}
+	_, err := understudy.Run(context.Background(), pb, understudy.Options{
+		Inventory: []string{"localhost,"}, Connection: "local", Output: io.Discard,
+		OnEvent: func(e understudy.Event) { names = append(names, e.Event) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(names, " ")
+	for _, want := range []string{"v2_playbook_on_start", "v2_playbook_on_play_start", "v2_playbook_on_task_start", "v2_runner_on_ok", "v2_playbook_on_stats"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("events %q missing %s", got, want)
+		}
 	}
 }
