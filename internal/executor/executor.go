@@ -3,6 +3,7 @@
 package executor
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -56,19 +57,20 @@ type HostStats struct {
 
 // Options configure a run.
 type Options struct {
-	Forks      int
-	CheckMode  bool
-	Diff       bool
-	Verbosity  int
-	ExtraVars  map[string]any
-	Become     bool
-	BecomeUser string
-	BecomePass string
-	Connection string // "" = per-host behavioral vars; "local" forces local
-	BaseDir    string // playbook directory
-	Tags       []string
-	SkipTags   []string
-	ConnOpts   connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
+	Forks        int
+	CheckMode    bool
+	Diff         bool
+	Verbosity    int
+	ExtraVars    map[string]any
+	Become       bool
+	BecomeUser   string
+	BecomeMethod string // --become-method ("" = sudo)
+	BecomePass   string
+	Connection   string // "" = per-host behavioral vars; "local" forces local
+	BaseDir      string // playbook directory
+	Tags         []string
+	SkipTags     []string
+	ConnOpts     connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
 
 	ForceHandlers bool           // --force-handlers: notified handlers run on failed hosts too
 	StartAtTask   string         // --start-at-task: skip tasks until one matches
@@ -86,6 +88,11 @@ type Runner struct {
 	Opts     Options
 	Limit    string // --limit pattern, intersected with each play's hosts
 
+	// DebugIn/DebugOut are the task debugger's terminal (default stdin
+	// and stdout).
+	DebugIn  io.Reader
+	DebugOut io.Writer
+
 	stats          map[string]*HostStats
 	order          []string
 	failed         map[string]bool
@@ -101,6 +108,9 @@ type Runner struct {
 	startedAt      bool
 	stepContinue   bool
 	aborted        bool // any_errors_fatal: stop the playbook
+	userQuit       bool // task debugger: quit (exit 99, no recap)
+	dbgReader      *bufio.Reader
+	dbgMu          sync.Mutex
 	playEnded      bool // meta: end_play
 	batchEnded     bool // meta: end_batch
 	mu             sync.Mutex
@@ -183,6 +193,10 @@ func (r *Runner) Run(ctx context.Context, plays []*playbook.Play) (int, error) {
 	for _, play := range plays {
 		if err := r.runPlay(ctx, play); err != nil {
 			return 1, err
+		}
+		if r.quitRequested() {
+			// The debugger's quit: sys.exit(99), as on KeyboardInterrupt.
+			return 99, nil
 		}
 		if r.aborted {
 			break
@@ -922,23 +936,69 @@ func playPos(play *playbook.Play) template.Position {
 // runTaskOnHost is the per-host task pipeline: when -> loop -> template args
 // -> retries -> changed_when/failed_when -> register -> stats.
 func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, playHosts []string) {
+	var override map[string]any
+	for {
+		if r.quitRequested() {
+			return
+		}
+		res, items := r.execTaskOnHost(ctx, play, task, host, playHosts, override)
+		if !r.needsDebugger(play, task, res) {
+			r.record(host, task, res, items)
+			return
+		}
+		// The result is displayed and counted first, then the debugger
+		// runs; redo rolls the host's state back.
+		snap := r.snapshotHost(host)
+		r.record(host, task, res, items)
+		copied := *task
+		copied.Args = maps.Clone(task.Args)
+		if override == nil {
+			override = map[string]any{}
+		}
+		pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
+		vctx := r.newHostContext(host, pos, playHosts)
+		if len(task.Vars) > 0 {
+			vctx = vctx.WithOverlay(task.Vars)
+		}
+		s := &debugSession{r: r, task: &copied, host: host, vctx: vctx.WithOverlay(override), res: res, play: play, override: override}
+		switch r.runDebugger(s) {
+		case debugContinue:
+			return
+		case debugQuit:
+			r.requestQuit()
+			return
+		case debugRedo:
+			r.restoreHost(host, snap, res)
+			task = s.task
+			if raw, ok := task.Args["_raw_params"]; ok {
+				// task.args['_raw_params'] is the free-form command.
+				task.FreeForm = template.PyStr(raw)
+				delete(task.Args, "_raw_params")
+			}
+		}
+	}
+}
+
+// execTaskOnHost runs one task (all loop items) on a host and returns the
+// result to record, with the per-item results for loops.
+func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, playHosts []string, override map[string]any) (*agentproto.Result, []any) {
 	pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
 	base := r.newHostContext(host, pos, playHosts)
 	if len(task.Vars) > 0 {
 		base = base.WithOverlay(task.Vars)
 	}
+	if len(override) > 0 {
+		base = base.WithOverlay(override)
+	}
 
 	// Resolve the loop (nil = run once with no loop var).
 	items, isLoop, err := r.resolveLoop(task, base)
 	if err != nil {
-		r.recordFailure(host, task, agentproto.Fail("error templating loop: %v", err))
-		return
+		return agentproto.Fail("error templating loop: %v", err), nil
 	}
 
 	if !isLoop {
-		res := r.runOnce(ctx, play, task, host, base, nil)
-		r.record(host, task, res, nil)
-		return
+		return r.runOnce(ctx, play, task, host, base, nil), nil
 	}
 
 	// Loop: aggregate per-item results Ansible-style.
@@ -952,6 +1012,9 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 		itemCtx := r.newHostContext(host, pos, playHosts)
 		if len(task.Vars) > 0 {
 			itemCtx = itemCtx.WithOverlay(task.Vars)
+		}
+		if len(override) > 0 {
+			itemCtx = itemCtx.WithOverlay(override)
 		}
 		overlay := map[string]any{task.LoopVar: vars.Final{V: item}}
 		if task.IndexVar != "" {
@@ -999,7 +1062,7 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 	default:
 		agg.Msg = "All items completed"
 	}
-	r.record(host, task, agg, itemResults)
+	return agg, itemResults
 }
 
 // resolveLoop templates the loop value. Returns isLoop=false when absent.
@@ -1051,6 +1114,13 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 	// Template module args, dropping omitted ones.
 	args := make(map[string]any, len(task.Args))
 	for k, raw := range task.Args {
+		if k == "that" && isAssertModule(task.Module) {
+			// assert's finalize_task_arg: 'that' stays raw (each entry is
+			// a conditional), except that a string that is entirely a
+			// template may resolve to a list of conditionals.
+			args[k] = assertThat(vctx, raw)
+			continue
+		}
 		v, err := vctx.TemplateValue(raw)
 		if err != nil {
 			return agentproto.Fail("error templating argument %q: %v", k, err)
@@ -1084,54 +1154,82 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		return res
 	}
 
-	// until/retries loop.
-	attempts := task.Retries + 1
-	if task.Until == "" {
-		attempts = 1
+	// until/retries loop, as TaskExecutor._execute: 1 + retries attempts
+	// (retries defaults to 3 when only until is set); a task with retries
+	// but no until retries until it stops failing. changed_when and
+	// failed_when apply to every attempt, before until is evaluated.
+	total := 1
+	if task.RetriesSet {
+		total += max(0, task.Retries)
+	} else if task.Until != "" {
+		total += 3
 	}
 	var res *agentproto.Result
 	retriesExhausted := false
-	for attempt := 1; attempt <= attempts; attempt++ {
+	for attempt := 1; attempt <= total; attempt++ {
 		res = r.dispatch(ctx, task, actx, args, freeForm)
 		if task.Async > 0 && task.Poll != 0 && !res.Failed && res.Extra["ansible_job_id"] != nil {
 			res = r.pollAsync(ctx, host, task, actx, res)
 		}
-		if task.Until == "" {
-			break
+		if total > 1 {
+			setExtra(res, "attempts", attempt)
 		}
-		resCtx := vctx.WithOverlay(registerOverlay(task, res))
-		ok, err := resCtx.EvalWhen([]string{task.Until})
-		if err != nil {
-			return agentproto.Fail("error evaluating until condition: %v", err)
-		}
-		if ok {
-			if res.Extra == nil {
-				res.Extra = map[string]any{}
+		if !res.Skipped {
+			if fail := applyChangedFailedWhen(task, vctx, res); fail != nil {
+				return fail
 			}
-			res.Extra["attempts"] = attempt
+		}
+		if total == 1 {
 			break
 		}
-		if attempt < attempts {
+		done := !res.Failed
+		if task.Until != "" {
+			ok, err := vctx.WithOverlay(registerOverlay(task, res)).EvalWhen([]string{task.Until})
+			if err != nil {
+				return agentproto.Fail("error evaluating until condition: %v", err)
+			}
+			done = ok
+		}
+		if done {
+			break
+		}
+		if attempt < total {
+			setExtra(res, "retries", total)
+			setExtra(res, "attempts", attempt+1)
 			name := r.taskDisplayName(task, []string{host})
 			if name == "" {
 				name = task.Module
 			}
-			r.Callback.Retrying(host, task, name, task.Retries-attempt, res)
+			r.Callback.Retrying(host, task, name, total-(attempt+1), res)
 			time.Sleep(time.Duration(task.Delay) * time.Second)
 		} else {
+			// Out of attempts: ansible-core records retries-1 attempts and
+			// marks the result failed, even one the module reported ok.
 			retriesExhausted = !res.Failed
 			res.Failed = true
-			if res.Extra == nil {
-				res.Extra = map[string]any{}
-			}
-			res.Extra["attempts"] = attempt
-			if res.Msg == "" {
-				res.Msg = "Retries exhausted"
+			setExtra(res, "attempts", total-1)
+			if retriesExhausted {
+				res.Origin = "plain" // no exception, so no error block
 			}
 		}
 	}
+	if res.Failed && !retriesExhausted && res.Origin != "plain" {
+		// ansible-core attaches an ErrorSummary to every failed task
+		// result; templated (register, ansible_failed_result) it renders as
+		// this placeholder unless tracebacks are enabled. The callback
+		// strips it from the fatal line.
+		if _, has := res.Extra["exception"]; !has {
+			setExtra(res, "exception", "(traceback unavailable)")
+		}
+	}
+	res.DelegatedTo = delegated
+	res.ShowDiff = r.effectiveDiff(play, task)
+	return res
+}
 
-	// changed_when / failed_when override the module's own verdict.
+// applyChangedFailedWhen lets changed_when / failed_when override the
+// module's own verdict; a non-nil return is an evaluation error result.
+func applyChangedFailedWhen(task *playbook.Task, vctx *vars.Context, res *agentproto.Result) *agentproto.Result {
 	if len(task.ChangedWhen) > 0 || len(task.FailedWhen) > 0 {
 		resCtx := vctx.WithOverlay(registerOverlay(task, res))
 		if len(task.ChangedWhen) > 0 {
@@ -1160,18 +1258,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			}
 		}
 	}
-	if res.Failed && !retriesExhausted && res.Origin != "plain" {
-		// ansible-core attaches an ErrorSummary to every failed task
-		// result; templated (register, ansible_failed_result) it renders as
-		// this placeholder unless tracebacks are enabled. The callback
-		// strips it from the fatal line.
-		if _, has := res.Extra["exception"]; !has {
-			setExtra(res, "exception", "(traceback unavailable)")
-		}
-	}
-	res.DelegatedTo = delegated
-	res.ShowDiff = r.effectiveDiff(task)
-	return res
+	return nil
 }
 
 // registerOverlay exposes the in-flight result under the register name (and
@@ -1204,7 +1291,10 @@ func (r *Runner) remoteTmp(vctx *vars.Context) string {
 // the delegate's connection (its own connection vars); the returned target
 // names where it ran.
 func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.Task, play *playbook.Play, vctx *vars.Context) (*actions.Context, string, error) {
-	become := r.effectiveBecome(play, task)
+	become, err := r.effectiveBecome(play, task, vctx)
+	if err != nil {
+		return nil, host, err
+	}
 	kw := connection.Keywords{
 		Connection: firstNonEmpty(task.Connection, play.Connection),
 		RemoteUser: firstNonEmpty(task.RemoteUser, play.RemoteUser),
@@ -1219,7 +1309,6 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 	}
 	var conn connection.Connection
 	var inProcess bool
-	var err error
 	if target != host && (target == "localhost" || target == "127.0.0.1") && r.Inv.Hosts[target] == nil {
 		// Implicit localhost: the control node, over the local connection.
 		conn, inProcess = connection.NewLocal(), true
@@ -1234,8 +1323,8 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		Vars:         vctx,
 		Conn:         conn,
 		Become:       become,
-		CheckMode:    r.effectiveCheckMode(task),
-		Diff:         r.effectiveDiff(task),
+		CheckMode:    r.effectiveCheckMode(play, task),
+		Diff:         r.effectiveDiff(play, task),
 		Background:   task.Async > 0,
 		AsyncTimeout: task.Async,
 		BaseDir:      r.Opts.BaseDir,
@@ -1243,6 +1332,7 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		TaskDir:      taskDir(task),
 		Verbosity:    r.Opts.Verbosity,
 		RemoteTmp:    r.remoteTmp(vctx),
+		ArgPos:       task.ArgPos,
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
 			return r.runModule(ctx, host, target, kw, inProcess, become, task, req, payload)
 		},
@@ -1294,9 +1384,12 @@ func (e *unreachableError) Error() string { return e.err.Error() }
 // effectiveCheckMode resolves the run-level flag against a task's
 // check_mode: override (check_mode: false forces execution during a
 // --check run; true forces a dry run of that task).
-func (r *Runner) effectiveCheckMode(task *playbook.Task) bool {
+func (r *Runner) effectiveCheckMode(play *playbook.Play, task *playbook.Task) bool {
 	if task.CheckMode != nil {
 		return *task.CheckMode
+	}
+	if play != nil && play.CheckMode != nil {
+		return *play.CheckMode
 	}
 	return r.Opts.CheckMode
 }
@@ -1310,35 +1403,145 @@ func taskDir(task *playbook.Task) string {
 }
 
 // effectiveDiff resolves --diff against a task's diff: keyword.
-func (r *Runner) effectiveDiff(task *playbook.Task) bool {
+func (r *Runner) effectiveDiff(play *playbook.Play, task *playbook.Task) bool {
 	if task.Diff != nil {
 		return *task.Diff
+	}
+	if play != nil && play.Diff != nil {
+		return *play.Diff
 	}
 	return r.Opts.Diff
 }
 
-func (r *Runner) effectiveBecome(play *playbook.Play, task *playbook.Task) *connection.BecomeSpec {
+// effectiveBecome resolves privilege escalation for a task on a host the
+// way PlayContext does: command-line options, then play, block and task
+// keywords, then the host's connection variables (ansible_become,
+// ansible_become_method/_user/_password/_exe/_flags and the per-method
+// ansible_<method>_* forms), which outrank keywords.
+func (r *Runner) effectiveBecome(play *playbook.Play, task *playbook.Task, vctx *vars.Context) (_ *connection.BecomeSpec, err error) {
+	defer func() {
+		// Resolving a host variable panics on a template error.
+		if p := recover(); p != nil {
+			e, ok := p.(error)
+			if !ok {
+				panic(p)
+			}
+			err = e
+		}
+	}()
 	on := r.Opts.Become
-	user := r.Opts.BecomeUser
-	if play.Become.Become != nil {
-		on = *play.Become.Become
+	spec := &connection.BecomeSpec{User: r.Opts.BecomeUser, Method: r.Opts.BecomeMethod, Password: r.Opts.BecomePass}
+	for _, bf := range []playbook.BecomeFields{play.Become, task.Become} {
+		if bf.Become != nil {
+			on = *bf.Become
+		}
+		if bf.BecomeUser != "" {
+			spec.User = bf.BecomeUser
+		}
+		if bf.Method != "" {
+			spec.Method = bf.Method
+		}
+		if bf.Exe != "" {
+			spec.Exe = bf.Exe
+		}
+		if bf.Flags != nil {
+			spec.Flags = bf.Flags
+		}
 	}
-	if play.Become.BecomeUser != "" {
-		user = play.Become.BecomeUser
+	str := func(v any) (string, error) {
+		if s, ok := v.(string); ok {
+			out, err := vctx.TemplateString(s)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%v", out), nil
+		}
+		return fmt.Sprintf("%v", v), nil
 	}
-	if task.Become.Become != nil {
-		on = *task.Become.Become
+	hostVar := func(names ...string) (string, bool, error) {
+		for _, n := range names {
+			if v, ok := vctx.Get(n); ok && v != nil {
+				s, err := str(v)
+				return s, true, err
+			}
+		}
+		return "", false, nil
 	}
-	if task.Become.BecomeUser != "" {
-		user = task.Become.BecomeUser
+	if v, ok := vctx.Get("ansible_become"); ok {
+		switch t := v.(type) {
+		case bool:
+			on = t
+		case string:
+			s, err := str(t)
+			if err != nil {
+				return nil, err
+			}
+			on = template.Truthy(s) && !strings.EqualFold(s, "false") && !strings.EqualFold(s, "no") && s != "0"
+		}
 	}
 	if !on {
-		return nil
+		return nil, nil
 	}
-	if user == "" {
-		user = "root"
+	m, _, err := hostVar("ansible_become_method")
+	if err != nil {
+		return nil, err
 	}
-	return &connection.BecomeSpec{User: user, Method: "sudo", Password: r.Opts.BecomePass}
+	if m != "" {
+		spec.Method = m
+	}
+	if strings.Contains(spec.Method, "{{") {
+		if spec.Method, err = str(spec.Method); err != nil {
+			return nil, err
+		}
+	}
+	if spec.Method != "" {
+		norm := playbook.NormalizeBecomeMethod(spec.Method)
+		if norm == "" {
+			return nil, fmt.Errorf("become_method %q is not supported (supported: sudo, su, doas)", spec.Method)
+		}
+		spec.Method = norm
+	} else {
+		spec.Method = "sudo"
+	}
+	meth := spec.Method
+	if s, ok, err := hostVar("ansible_become_user", "ansible_"+meth+"_user"); err != nil {
+		return nil, err
+	} else if ok {
+		spec.User = s
+	}
+	if s, ok, err := hostVar("ansible_become_password", "ansible_become_pass", "ansible_"+meth+"_password", "ansible_"+meth+"_pass"); err != nil {
+		return nil, err
+	} else if ok {
+		spec.Password = s
+	}
+	if s, ok, err := hostVar("ansible_become_exe", "ansible_"+meth+"_exe"); err != nil {
+		return nil, err
+	} else if ok {
+		spec.Exe = s
+	}
+	if s, ok, err := hostVar("ansible_become_flags", "ansible_"+meth+"_flags"); err != nil {
+		return nil, err
+	} else if ok {
+		spec.Flags = &s
+	}
+	for _, p := range []*string{&spec.User, &spec.Exe} {
+		if strings.Contains(*p, "{{") {
+			if *p, err = str(*p); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if spec.Flags != nil && strings.Contains(*spec.Flags, "{{") {
+		f, err := str(*spec.Flags)
+		if err != nil {
+			return nil, err
+		}
+		spec.Flags = &f
+	}
+	if spec.User == "" {
+		spec.User = "root"
+	}
+	return spec, nil
 }
 
 // runModule executes a module request: in-process for local connections,
@@ -1835,4 +2038,86 @@ func (r *Runner) runParallel(ctx context.Context, play *playbook.Play, tasks []*
 		})
 	}
 	return g.Wait()
+}
+
+func isAssertModule(m string) bool {
+	return m == "assert" || m == "ansible.builtin.assert" || m == "ansible.legacy.assert"
+}
+
+func assertThat(vctx *vars.Context, raw any) any {
+	s, ok := raw.(string)
+	if !ok {
+		return raw
+	}
+	if !(strings.HasPrefix(s, "{{") && strings.HasSuffix(s, "}}") ||
+		strings.HasPrefix(s, "{%") && strings.HasSuffix(s, "%}")) {
+		return raw
+	}
+	v, err := vctx.TemplateValue(raw)
+	if err != nil {
+		return raw
+	}
+	if l, isList := v.([]any); isList {
+		return l
+	}
+	return raw
+}
+
+func (r *Runner) quitRequested() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.userQuit
+}
+
+// requestQuit stops the run after the debugger's quit.
+func (r *Runner) requestQuit() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.userQuit, r.aborted, r.playEnded = true, true, true
+}
+
+// hostSnapshot is the per-host state a debugger redo rolls back.
+type hostSnapshot struct {
+	failed   bool
+	failedIn map[int]bool
+	blockF   map[int]bool
+}
+
+func (r *Runner) snapshotHost(host string) hostSnapshot {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return hostSnapshot{failed: r.failed[host],
+		failedIn: maps.Clone(r.failedIn[host]), blockF: maps.Clone(r.blockFailed[host])}
+}
+
+// restoreHost undoes a recorded result for a redo the way ansible-core's
+// debugger does: the host's failed state is rolled back, and the stats
+// are decremented (never below zero) for each of failed, unreachable,
+// changed and skipped the result has, plus ok, whether or not the result
+// was counted that way.
+func (r *Runner) restoreHost(host string, snap hostSnapshot, res *agentproto.Result) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.stats[host]
+	dec := func(n *int) {
+		if *n > 0 {
+			*n--
+		}
+	}
+	if res.Failed {
+		dec(&st.Failed)
+	}
+	if res.Extra != nil && res.Extra["unreachable"] == true {
+		dec(&st.Unreachable)
+	}
+	if res.Changed {
+		dec(&st.Changed)
+	}
+	if res.Skipped {
+		dec(&st.Skipped)
+	}
+	dec(&st.OK)
+	r.failed[host] = snap.failed
+	r.failedIn[host] = snap.failedIn
+	r.blockFailed[host] = snap.blockF
 }

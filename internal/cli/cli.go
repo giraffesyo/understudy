@@ -330,8 +330,11 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 	if privateKey == "" {
 		privateKey = cfg.PrivateKeyFile
 	}
-	if p.becomeMethod != "" && p.becomeMethod != "sudo" {
-		return executor.Options{}, fmt.Errorf("become method %q is not supported (only sudo)", p.becomeMethod)
+	becomeMethod := ""
+	if p.becomeMethod != "" {
+		if becomeMethod = playbook.NormalizeBecomeMethod(p.becomeMethod); becomeMethod == "" {
+			return executor.Options{}, fmt.Errorf("become method %q is not supported (supported: sudo, su, doas)", p.becomeMethod)
+		}
 	}
 	timeout := cfg.Timeout
 	if p.timeout > 0 {
@@ -348,6 +351,7 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		ExtraVars:     p.extraVars,
 		Become:        p.become,
 		BecomeUser:    p.becomeUser,
+		BecomeMethod:  becomeMethod,
 		Connection:    p.connection,
 		BaseDir:       baseDir,
 		Tags:          splitCSV(p.tags),

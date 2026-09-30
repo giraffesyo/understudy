@@ -282,6 +282,10 @@ func (d *Default) indent(verboseAlways bool) int {
 // invocation/diff (below -vvv) and exception are dropped, debug output is
 // trimmed to its message, and keys are sorted in Python-json form.
 func (d *Default) dump(task *playbook.Task, res *agentproto.Result) string {
+	return d.dumpRaw(task, res, true)
+}
+
+func (d *Default) dumpRaw(task *playbook.Task, res *agentproto.Result, clean bool) string {
 	m := res.ToVars()
 	delete(m, "failed")
 	delete(m, "skipped")
@@ -300,7 +304,7 @@ func (d *Default) dump(task *playbook.Task, res *agentproto.Result) string {
 	if _, loop := m["results"]; loop && task.Loop != nil {
 		delete(m, "results")
 	}
-	if isDebug(task.Module) {
+	if clean && isDebug(task.Module) {
 		if msg, hasMsg := m["msg"]; hasMsg {
 			for k := range m {
 				if !debugAllowedKeys[k] {
@@ -388,6 +392,12 @@ func (d *Default) taskErrorChain(task *playbook.Task, ec *agentproto.ErrorChain)
 	}
 	b.WriteString("\n<<< caused by >>>\n\n")
 	switch {
+	case ec.InnerFile != "" && ec.InnerLine > 0:
+		fmt.Fprintf(&b, "%s\nOrigin: %s:%d:%d\n\n", ec.Inner, ec.InnerFile, ec.InnerLine, ec.InnerCol)
+		b.WriteString(d.excerpt(ec.InnerFile, ec.InnerLine, ec.InnerCol))
+		if ec.Help != "" {
+			b.WriteString("\n" + ec.Help)
+		}
 	case ec.Help != "" && !strings.Contains(ec.Inner, "\n") && !strings.Contains(ec.Help, "\n"):
 		b.WriteString(ec.Inner + " " + ec.Help)
 	case ec.Help != "":
@@ -440,8 +450,9 @@ func (d *Default) Retrying(host string, task *playbook.Task, name string, left i
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	line := fmt.Sprintf("FAILED - RETRYING: [%s]: %s (%d retries left).", host, name, left)
-	if d.Verbosity > 2 {
-		line += "Result was: " + d.dump(task, res)
+	if d.Verbosity >= 2 || res.VerboseAlways {
+		// v2_runner_retry dumps without _clean_results (no debug trim).
+		line += "Result was: " + d.dumpRaw(task, res, false)
 	}
 	d.display(cDebug, line)
 }

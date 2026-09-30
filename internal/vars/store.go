@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/giraffesyo/understudy/internal/template"
@@ -382,6 +383,23 @@ func (c *Context) EvalWhen(exprs []string) (ok bool, err error) {
 		if e == "" {
 			continue
 		}
+		if isAllTemplate(e) {
+			// ansible-core resolves a conditional wrapped entirely in
+			// template delimiters; a string result is then evaluated as an
+			// expression (indirection), anything else is the result.
+			v, err := c.store.engine.RenderTemplate(e, c, c.pos)
+			if err != nil {
+				return false, err
+			}
+			s, isStr := v.(string)
+			if !isStr {
+				if !template.Truthy(v) {
+					return false, nil
+				}
+				continue
+			}
+			e = s
+		}
 		b, err := c.store.engine.EvalBool(e, c, c.pos)
 		if err != nil {
 			return false, err
@@ -427,4 +445,11 @@ func (s *Store) extraVar(name string) (any, bool) {
 	}
 	v, ok := s.layers[LExtraVars][""][name]
 	return v, ok
+}
+
+// isAllTemplate is is_possibly_all_template: the string starts and ends
+// with Jinja delimiters.
+func isAllTemplate(s string) bool {
+	return strings.HasPrefix(s, "{{") && strings.HasSuffix(s, "}}") ||
+		strings.HasPrefix(s, "{%") && strings.HasSuffix(s, "%}")
 }

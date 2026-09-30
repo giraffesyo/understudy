@@ -25,19 +25,20 @@ type Playbook []Play
 
 // Play targets a host pattern with tasks, mirroring an Ansible play.
 type Play struct {
-	Name        string
-	Hosts       string // host pattern; required
-	Vars        map[string]any
-	VarsFiles   []string
-	GatherFacts *bool // nil = gather (Ansible default)
-	Become      bool
-	BecomeUser  string
-	Tags        []string
-	Environment map[string]any
-	PreTasks    []Task
-	Tasks       []Task
-	PostTasks   []Task
-	Handlers    []Task
+	Name         string
+	Hosts        string // host pattern; required
+	Vars         map[string]any
+	VarsFiles    []string
+	GatherFacts  *bool // nil = gather (Ansible default)
+	Become       bool
+	BecomeUser   string
+	BecomeMethod string // sudo (default), su or doas
+	Tags         []string
+	Environment  map[string]any
+	PreTasks     []Task
+	Tasks        []Task
+	PostTasks    []Task
+	Handlers     []Task
 }
 
 // Task is one unit of work. Action is required; everything else mirrors
@@ -57,6 +58,7 @@ type Task struct {
 	Delay        int
 	Become       *bool // nil = inherit from play
 	BecomeUser   string
+	BecomeMethod string // "" = inherit from play
 	Vars         map[string]any
 	Environment  map[string]any
 	Notify       []string

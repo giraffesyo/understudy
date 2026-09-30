@@ -1,0 +1,80 @@
+# check_mode: and diff: set at play and block level are inherited by the
+# tasks (and nested blocks) below them; the nearest explicit setting wins
+# and overrides the command line.
+- name: play-level check_mode and diff
+  hosts: all
+  gather_facts: false
+  check_mode: true
+  diff: true
+  tasks:
+    - name: play check_mode predicts, play diff shows
+      copy: {content: "one\n", dest: "{{ workdir }}/a.txt"}
+    - name: ansible_check_mode under play check_mode
+      debug: {var: ansible_check_mode}
+    - name: task overrides play
+      copy: {content: "two\n", dest: "{{ workdir }}/b.txt"}
+      check_mode: false
+      diff: false
+    - name: block overrides play
+      check_mode: false
+      block:
+        - name: block runs for real, still with play diff
+          copy: {content: "three\n", dest: "{{ workdir }}/c.txt"}
+        - name: nested block back to check mode without diff
+          check_mode: true
+          diff: false
+          block:
+            - copy: {content: "four\n", dest: "{{ workdir }}/d.txt"}
+            - name: task wins over nested block
+              copy: {content: "five\n", dest: "{{ workdir }}/e.txt"}
+              diff: true
+      rescue:
+        - debug: {msg: not reached}
+      always:
+        - name: always inherits the block keywords too
+          copy: {content: "six\n", dest: "{{ workdir }}/f.txt"}
+    - stat: {path: "{{ workdir }}/{{ item }}"}
+      loop: [a.txt, b.txt, c.txt, d.txt, e.txt, f.txt]
+      register: st
+    - debug: {msg: "{{ st.results | map(attribute='stat.exists') | list }}"}
+  handlers:
+    - name: never
+      debug: {msg: never}
+
+- name: block-level only
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: block check_mode and diff
+      check_mode: true
+      diff: true
+      block:
+        - copy: {content: "seven\n", dest: "{{ workdir }}/g.txt"}
+        - name: ansible_check_mode in a check_mode block
+          debug: {var: ansible_check_mode}
+    - copy: {content: "eight\n", dest: "{{ workdir }}/h.txt"}
+    - stat: {path: "{{ workdir }}/g.txt"}
+      register: g
+    - debug: {var: g.stat.exists}
+
+- name: play check_mode false with handlers
+  hosts: all
+  gather_facts: false
+  check_mode: false
+  diff: true
+  tasks:
+    - copy: {content: "nine\n", dest: "{{ workdir }}/i.txt"}
+      notify: h
+  handlers:
+    - name: h
+      copy: {content: "ten\n", dest: "{{ workdir }}/j.txt"}
+
+- name: role entry check_mode and diff
+  hosts: all
+  gather_facts: false
+  roles:
+    - {role: writer, check_mode: true, diff: true}
+  tasks:
+    - stat: {path: "{{ workdir }}/role.txt"}
+      register: rs
+    - debug: {var: rs.stat.exists}

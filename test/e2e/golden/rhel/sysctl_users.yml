@@ -57,3 +57,44 @@
 
     - name: append again is a no-op
       user: {name: deploy, groups: [wheel2], append: true}
+
+# sysctl runs the sysctl binary, so an unprivileged set fails with its
+# message; the asserts pin the exact text on both tools.
+- name: sysctl failures without privilege
+  hosts: all
+  gather_facts: false
+  vars:
+    denied_msg: "setting user.max_user_namespaces failed: sysctl: permission denied on key \"user.max_user_namespaces\"\n"
+  tasks:
+    - name: unprivileged sysctl_set
+      sysctl:
+        name: user.max_user_namespaces
+        value: "12345"
+        sysctl_set: true
+        reload: false
+        sysctl_file: /tmp/understudy-golden-sysctl.conf
+      register: denied
+      ignore_errors: true
+    - name: the failure carries sysctl's own message
+      assert:
+        that:
+          - denied is failed
+          - denied.msg == denied_msg
+    - name: unprivileged reload
+      sysctl:
+        name: vm.swappiness
+        value: "11"
+        sysctl_file: /tmp/understudy-golden-sysctl.conf
+      register: reload
+      ignore_errors: true
+    - name: the reload failure carries sysctl's message
+      assert:
+        that:
+          - reload is failed
+          - reload.msg is match("Failed to reload sysctl. sysctl. permission denied on key")
+    - name: the reload's file was written (the failed set stopped before its write)
+      command: cat /tmp/understudy-golden-sysctl.conf
+      register: conf
+      changed_when: false
+    - assert:
+        that: conf.stdout_lines == ['vm.swappiness=11']

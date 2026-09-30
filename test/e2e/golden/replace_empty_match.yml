@@ -1,0 +1,27 @@
+# Python's re.sub allows an empty match right after a non-empty one
+# (3.7+), which Go's regexp skips: replacement counts and results must
+# follow Python for the replace module and the regex filters.
+- hosts: all
+  gather_facts: false
+  tasks:
+    - copy:
+        dest: "{{ workdir }}/f.txt"
+        content: "ab  \nxxyy\nkey = value   \n"
+    - name: trailing whitespace pattern matches twice per line
+      replace: {path: "{{ workdir }}/f.txt", regexp: '[ \t]*$', replace: "!"}
+      register: r1
+    - debug: {var: r1}
+    - name: star pattern around characters
+      replace: {path: "{{ workdir }}/f.txt", regexp: 'x*', replace: "-"}
+      register: r2
+    - debug: {var: r2.msg}
+    - debug: {msg: "{{ lookup('file', workdir ~ '/f.txt') }}"}
+    - name: regex filters
+      debug:
+        msg:
+          - "{{ 'abxd' | regex_replace('x*', '-') }}"
+          - "{{ 'ab  ' | regex_replace('\\s*$', '.') }}"
+          - "{{ 'a12b' | regex_replace('(\\d*)', '<\\1>') }}"
+          - "{{ 'abxd' | regex_findall('x*') }}"
+          - "{{ 'baaac' | regex_replace('a*', '-', count=2) }}"
+          - "{{ 'one two' | regex_replace('\\b', '|') }}"

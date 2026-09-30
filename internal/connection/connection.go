@@ -18,9 +18,11 @@ type ExecResult struct {
 
 // BecomeSpec describes privilege escalation for one execution.
 type BecomeSpec struct {
-	User     string // default "root"
-	Method   string // "sudo" only in v0.1
-	Password string // empty: rely on NOPASSWD (sudo -n)
+	User     string  // default "root"
+	Method   string  // sudo (default), su or doas
+	Password string  // empty: rely on NOPASSWD (sudo -n, doas -n) / root su
+	Exe      string  // become_exe: the escalation binary (default: the method)
+	Flags    *string // become_flags (nil: the method's default, "-H -S -n" for sudo)
 }
 
 // ExecOptions modify one Exec call.

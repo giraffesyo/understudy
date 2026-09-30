@@ -16,6 +16,12 @@ type Local struct{}
 func NewLocal() *Local { return &Local{} }
 
 func (l *Local) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error) {
+	if opts.Become.needsPTY() {
+		plain := func(ctx context.Context, c string, in io.Reader) (ExecResult, error) {
+			return l.Exec(ctx, c, ExecOptions{Stdin: in, Timeout: opts.Timeout})
+		}
+		return execPTYBecome(ctx, plain, startLocalPTY, cmd, opts)
+	}
 	shellCmd, stdin := applyBecome(cmd, opts)
 	c := exec.CommandContext(ctx, "/bin/sh", "-c", shellCmd)
 	if stdin != nil {

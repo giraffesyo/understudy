@@ -25,6 +25,9 @@ type Play struct {
 	Handlers    []*Task
 	Tags        []string
 	Environment map[string]any
+	CheckMode   *bool // play-level check_mode (nil = the run's --check)
+	Debugger    string
+	Diff        *bool // play-level diff (nil = the run's --diff)
 
 	// Serial batches the play across hosts (rolling execution). Entries are
 	// host counts or "N%" strings; nil runs all hosts in one batch.
@@ -51,6 +54,9 @@ type Play struct {
 type BecomeFields struct {
 	Become     *bool
 	BecomeUser string
+	Method     string // become_method: sudo, su or doas ("" = inherit)
+	Flags      *string
+	Exe        string
 }
 
 // Block sections, recorded on tasks via BlockRef.
@@ -93,6 +99,8 @@ type Task struct {
 	ChangedWhen    []string
 	Until          string
 	Retries        int
+	RetriesSet     bool   // retries keyword given (else 3 when until is set)
+	Debugger       string // debugger keyword (task, else inherited block/play)
 	Delay          int
 	Become         BecomeFields
 	Vars           map[string]any
@@ -110,6 +118,7 @@ type Task struct {
 	SrcDir         string     // role root for src resolution ("" = playbook dir)
 	RoleName       string     // owning role (for "role : task" banners); "" = play task
 	Src            Pos
+	ArgPos         map[string]Pos // source position of each map-form module arg value
 }
 
 // RoleRef is one entry in a play's roles: list.
@@ -118,7 +127,9 @@ type RoleRef struct {
 	Params map[string]any // role vars from the ref (high precedence)
 	When   []string
 	Tags   []string
-	Src    Pos
+	// CheckMode/Diff are the role entry's check_mode/diff keywords.
+	CheckMode, Diff *bool
+	Src             Pos
 }
 
 // VarPrompt is one vars_prompt entry.
