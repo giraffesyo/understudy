@@ -1443,6 +1443,10 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 	if err != nil {
 		return nil, target, &unreachableError{host: host, err: err}
 	}
+	envKeys, env, err := r.taskEnvironment(play, task, vctx)
+	if err != nil {
+		return nil, target, err
+	}
 	return &actions.Context{
 		Host:         host,
 		Vars:         vctx,
@@ -1459,7 +1463,7 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		RemoteTmp:    r.remoteTmp(vctx),
 		ArgPos:       argPositions(task),
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
-			return r.runModule(ctx, host, target, kw, inProcess, become, task, taskEnvironment(play, task), req, payload)
+			return r.runModule(ctx, host, target, kw, inProcess, become, task, envKeys, env, req, payload)
 		},
 		SetFact: func(name string, value any) {
 			for _, h := range r.factHosts(host, target, task) {
@@ -1683,37 +1687,93 @@ func (r *Runner) effectiveBecome(play *playbook.Play, task *playbook.Task, vctx 
 	return spec, nil
 }
 
-// runModule executes a module request: in-process for local connections,
-// via the remote agent otherwise (bootstrapped lazily on first use).
-// taskEnvironment is the task's effective environment keyword: the
-// play's, overridden key by key by the task's (blocks and roles are
-// already merged into the task at parse time).
-func taskEnvironment(play *playbook.Play, task *playbook.Task) map[string]any {
-	if play == nil || len(play.Environment) == 0 {
-		return task.Environment
+// taskEnvironment is the task's environment for a host, as
+// Task._post_validate_environment builds it: the play's entries, then the
+// role's, the enclosing blocks' and the task's own (merged at parse
+// time), in order. A mapping entry's values are templated one by one (an
+// omitted value is left out); any other entry is a template that must
+// yield a mapping. keys lists the variables in the order ansible-core
+// writes them, where a variable keeps the place it was first set at.
+func (r *Runner) taskEnvironment(play *playbook.Play, task *playbook.Task, vctx *vars.Context) (keys []string, env map[string]string, err error) {
+	var entries []any
+	if play != nil {
+		entries = append(entries, play.Environment...)
 	}
-	merged := make(map[string]any, len(play.Environment)+len(task.Environment))
-	for k, v := range play.Environment {
-		merged[k] = v
+	entries = append(entries, task.Environment...)
+	if len(entries) == 0 {
+		return nil, nil, nil
 	}
-	for k, v := range task.Environment {
-		merged[k] = v
+	if pos, ok := task.KeywordPos["environment"]; ok {
+		vctx = vctx.At(pos)
 	}
-	return merged
+	env = map[string]string{}
+	set := func(k string, v any) {
+		if _, seen := env[k]; !seen {
+			keys = append(keys, k)
+		}
+		env[k] = template.PyStr(v)
+	}
+	for _, entry := range entries {
+		if m, ok := envMapping(entry); ok {
+			for _, k := range m.keys {
+				v, err := vctx.TemplateValue(m.get(k))
+				if err != nil {
+					// Fact gathering tolerates an environment built from
+					// the facts it is about to gather.
+					if task.Module == "setup" && strings.Contains(err.Error(), "ansible_env") {
+						continue
+					}
+					return nil, nil, err
+				}
+				if _, omitted := v.(template.Omit); omitted {
+					continue
+				}
+				set(k, v)
+			}
+			continue
+		}
+		v, err := vctx.TemplateValue(entry)
+		if err != nil {
+			return nil, nil, err
+		}
+		if _, omitted := v.(template.Omit); omitted {
+			continue
+		}
+		m, ok := envMapping(v)
+		if !ok {
+			r.warn("could not parse environment value, skipping: " + template.PyRepr(entries))
+			continue
+		}
+		for _, k := range m.keys {
+			set(k, m.get(k))
+		}
+	}
+	return keys, env, nil
 }
 
-func (r *Runner) runModule(ctx context.Context, host, target string, kw connection.Keywords, inProcess bool, become *connection.BecomeSpec, task *playbook.Task, environment map[string]any, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
-	if len(environment) > 0 {
-		env := make(map[string]string, len(environment))
-		vctx := r.Store.NewContext(host, template.Position{File: task.Src.File, Line: task.Src.Line})
-		for k, v := range environment {
-			tv, err := vctx.TemplateValue(v)
-			if err != nil {
-				return nil, err
-			}
-			env[k] = fmt.Sprintf("%v", tv)
-		}
-		req.Env = env
+// orderedMapping is a mapping's keys in order, with a getter.
+type orderedMapping struct {
+	keys []string
+	get  func(string) any
+}
+
+// envMapping views v as a mapping in its key order (a plain map's keys
+// sorted).
+func envMapping(v any) (orderedMapping, bool) {
+	switch t := template.Undeprecate(v).(type) {
+	case *yaml.OMap:
+		return orderedMapping{keys: t.Keys(), get: t.Get}, true
+	case map[string]any:
+		return orderedMapping{keys: slices.Sorted(maps.Keys(t)), get: func(k string) any { return t[k] }}, true
+	}
+	return orderedMapping{}, false
+}
+
+// runModule executes a module request: in-process for local connections,
+// via the remote agent otherwise (bootstrapped lazily on first use).
+func (r *Runner) runModule(ctx context.Context, host, target string, kw connection.Keywords, inProcess bool, become *connection.BecomeSpec, task *playbook.Task, envKeys []string, env map[string]string, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
+	if len(env) > 0 {
+		req.Env, req.EnvOrder = env, envKeys
 	}
 	if become != nil && become.User != "" {
 		req.BecomeUser = become.User

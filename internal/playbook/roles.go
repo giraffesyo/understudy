@@ -118,7 +118,8 @@ func resolveRoleRef(play *Play, ref *RoleRef, baseDir string, rolesPath []string
 	}
 
 	// The ref's when/tags/params inherit into every role task.
-	inh := &Task{LoopVar: "item", When: ref.When, Tags: ref.Tags, CheckMode: ref.CheckMode, Diff: ref.Diff}
+	inh := &Task{LoopVar: "item", When: ref.When, Tags: ref.Tags, CheckMode: ref.CheckMode, Diff: ref.Diff,
+		Environment: ref.Environment, Timeout: ref.Timeout}
 	for _, t := range role.tasks {
 		applyBlockInheritance(t, inh)
 		if len(ref.Params) > 0 {

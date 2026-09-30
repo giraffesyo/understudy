@@ -31,7 +31,8 @@ type TaskRequest struct {
 	FreeForm     string            `json:"free_form,omitempty"` // command/shell raw params
 	CheckMode    bool              `json:"check_mode,omitempty"`
 	Diff         bool              `json:"diff,omitempty"`
-	Env          map[string]string `json:"env,omitempty"` // task environment: for shell-outs
+	Env          map[string]string `json:"env,omitempty"`       // task environment: for shell-outs
+	EnvOrder     []string          `json:"env_order,omitempty"` // Env's variables in the task's order
 	PayloadLen   int64             `json:"payload_len,omitempty"`
 	BecomeUser   string            `json:"become_user,omitempty"`   // informational
 	Background   bool              `json:"background,omitempty"`    // run as an async job (ansible's async_wrapper)

@@ -1,0 +1,71 @@
+---
+# The environment keyword: play, role, block and task entries merge in
+# that order (a variable keeps the place it was first set at, the nearest
+# value wins), whole-environment templates, the list form, omitted and
+# non-string values. The variables lead the module's environment.
+- name: environment keyword
+  hosts: all
+  gather_facts: false
+  environment:
+    Z_B: play
+    Z_A: play
+    Z_P: "{{ pv }}"
+  vars:
+    pv: templated
+    envd:
+      Z_Y: "1"
+      Z_X: "2"
+  roles:
+    - role: envrole
+      environment:
+        Z_R: role
+        Z_A: role
+  tasks:
+    - name: play environment through a shell
+      shell: env | grep ^Z_
+      register: out
+    - debug: var=out.stdout_lines
+    - block:
+        - name: block and task environment
+          shell: env | grep ^Z_
+          environment:
+            Z_C: task
+            Z_A: task
+          register: out
+        - debug: var=out.stdout_lines
+      environment:
+        Z_D: block
+        Z_B: block
+    - name: a template for the whole environment
+      shell: env | grep ^Z_
+      environment: "{{ envd }}"
+      register: out
+    - debug: var=out.stdout_lines
+    - name: the list form
+      shell: env | grep ^Z_
+      environment:
+        - Z_K: first
+          Z_J: first
+        - Z_J: second
+          Z_I: second
+        - "{{ envd }}"
+      register: out
+    - debug: var=out.stdout_lines
+    - name: values are str()ed, omitted ones left out
+      shell: env | grep ^Z_
+      environment:
+        Z_TRUE: true
+        Z_FLOAT: 1.5
+        Z_LIST: [1, "a"]
+        Z_NONE: null
+        Z_OMIT: "{{ omit }}"
+      register: out
+    - debug: var=out.stdout_lines
+    - name: loop items template into the environment
+      shell: echo $Z_ITEM
+      environment:
+        Z_ITEM: "{{ item }}"
+      loop: [one, two]
+      register: out
+    - debug:
+        msg: "{{ out.results | map(attribute='stdout') | list }}"

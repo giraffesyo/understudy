@@ -7,9 +7,13 @@ package modules
 import (
 	"fmt"
 	"io"
+	"maps"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
+	"strings"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 )
@@ -43,7 +47,49 @@ type RunEnv struct {
 	Payload    io.Reader         // exactly PayloadLen bytes, or nil
 	FreeForm   string            // raw params for command/shell/script
 	Env        map[string]string // task environment: applied to shell-outs
+	EnvOrder   []string          // Env's variables in the task's order
 	Background bool              // fire-and-forget (async + poll: 0)
+}
+
+// Environ is a shell-out's environment under the task's environment
+// keyword: the task's variables first, in the task's order (ansible-core
+// prefixes them to the module's command line, so they lead its
+// environment), then this process's other variables. extra (a module's
+// own environ_update) then updates it as a dict update does: a variable
+// already set keeps its place.
+func (env *RunEnv) Environ(extra ...map[string]string) []string {
+	var out []string
+	at := map[string]int{}
+	set := func(k, v string) {
+		if i, ok := at[k]; ok {
+			out[i] = k + "=" + v
+			return
+		}
+		at[k] = len(out)
+		out = append(out, k+"="+v)
+	}
+	for _, k := range env.EnvOrder {
+		if v, ok := env.Env[k]; ok {
+			set(k, v)
+		}
+	}
+	for _, k := range slices.Sorted(maps.Keys(env.Env)) {
+		if _, done := at[k]; !done {
+			set(k, env.Env[k])
+		}
+	}
+	for _, kv := range os.Environ() {
+		k, v, _ := strings.Cut(kv, "=")
+		if _, done := at[k]; !done {
+			set(k, v)
+		}
+	}
+	for _, m := range extra {
+		for _, k := range slices.Sorted(maps.Keys(m)) {
+			set(k, m[k])
+		}
+	}
+	return out
 }
 
 // ModuleFunc executes one module invocation. Failures are reported in the
@@ -87,6 +133,7 @@ func Run(req *agentproto.TaskRequest, payload io.Reader) (res *agentproto.Result
 		Payload:    payload,
 		FreeForm:   req.FreeForm,
 		Env:        req.Env,
+		EnvOrder:   req.EnvOrder,
 		Background: req.Background,
 	}
 	_, copyAction := req.Args[copyActionKey]

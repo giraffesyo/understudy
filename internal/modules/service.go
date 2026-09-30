@@ -2,7 +2,6 @@ package modules
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -124,8 +123,5 @@ func applyEnv(cmd *exec.Cmd, env *RunEnv) {
 	if len(env.Env) == 0 {
 		return
 	}
-	cmd.Env = os.Environ()
-	for k, v := range env.Env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-	}
+	cmd.Env = env.Environ()
 }
