@@ -1,0 +1,4 @@
+---
+- name: included loop variables
+  debug:
+    msg: "{{ item }} {{ ansible_loop_var | default('-') }} {{ ansible_loop.index | default('-') }}/{{ ansible_loop.length | default('-') }} {{ ansible_loop.previtem | default('none') }}"

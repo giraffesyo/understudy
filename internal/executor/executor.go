@@ -1115,8 +1115,12 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 		return r.runOnce(ctx, play, task, host, base, nil), nil, task
 	}
 
+	lc, err := newLoopControl(task, base, items)
+	if err != nil {
+		return agentproto.Fail("%v", err), nil, task
+	}
+
 	// Loop: aggregate per-item results Ansible-style.
-	agg := &agentproto.Result{Extra: map[string]any{}}
 	var itemResults []any
 	anyChanged, anyFailed, allSkipped := false, false, true
 	for i, item := range items {
@@ -1130,54 +1134,43 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 		if len(override) > 0 {
 			itemCtx = itemCtx.WithOverlay(override)
 		}
-		overlay := map[string]any{task.LoopVar: vars.Final{V: item}}
-		if task.IndexVar != "" {
-			overlay[task.IndexVar] = int64(i)
-		}
-		itemCtx = itemCtx.WithOverlay(overlay)
+		itemCtx = itemCtx.WithOverlay(lc.vars(i))
 		res := r.runOnce(ctx, play, task, host, itemCtx, item)
 		// Per-item results carry the loop variable(s), as Ansible's do.
 		if res.Extra == nil {
 			res.Extra = map[string]any{}
 		}
-		res.Extra["ansible_loop_var"] = task.LoopVar
-		res.Extra[task.LoopVar] = item
-		if task.IndexVar != "" {
-			res.Extra["ansible_index_var"] = task.IndexVar
-			res.Extra[task.IndexVar] = int64(i)
-		}
-		label := item
-		if task.LoopLabel != nil {
-			if l, err := itemCtx.TemplateValue(task.LoopLabel); err == nil {
-				label = l
-			}
-		}
-		r.Callback.HostResult(host, task, shown(task, res), false, label)
+		lc.annotate(res.Extra, i)
+		r.Callback.HostResult(host, task, shown(task, res), false, lc.label(itemCtx, i))
 		m := orderedResult(task, task.Module, res.ToVars())
 		itemResults = append(itemResults, m)
 		anyChanged = anyChanged || res.Changed
 		anyFailed = anyFailed || res.Failed
 		allSkipped = allSkipped && res.Skipped
 	}
-	agg.Changed = anyChanged
-	agg.Failed = anyFailed
-	agg.Skipped = allSkipped
 	if itemResults == nil {
 		itemResults = []any{}
 	}
-	agg.Extra["results"] = itemResults
+	return loopResult(itemResults, anyChanged, anyFailed, allSkipped), itemResults, task
+}
+
+// loopResult is a loop's aggregate result (build_loop_result): the
+// per-item results under "results".
+func loopResult(itemResults []any, changed, failed, allSkipped bool) *agentproto.Result {
+	agg := &agentproto.Result{Changed: changed, Failed: failed, Skipped: allSkipped,
+		Extra: map[string]any{"results": itemResults}}
 	switch {
-	case len(items) == 0:
+	case len(itemResults) == 0:
 		agg.Extra["skip_reason"] = "No items in the list"
 		agg.Extra["skipped_reason"] = deprecate(deprecatedSkippedReason, "No items in the list")
-	case anyFailed:
+	case failed:
 		agg.Msg = "One or more items failed"
 	case allSkipped:
 		agg.Msg = "All items skipped"
 	default:
 		agg.Msg = "All items completed"
 	}
-	return agg, itemResults, task
+	return agg
 }
 
 // resolveLoop templates the loop value. Returns isLoop=false when absent.
