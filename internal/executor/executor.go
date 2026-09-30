@@ -1249,7 +1249,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			args[k] = assertThat(vctx.At(argPos(task, k)), raw)
 			continue
 		}
-		v, err := argsCtx.At(argPos(task, k)).TemplateValue(raw)
+		v, err := argsCtx.At(argPos(task, k)).Sourced().TemplateValue(raw)
 		if err != nil {
 			return agentproto.Fail("error templating argument %q: %v", k, err)
 		}

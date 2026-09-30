@@ -119,6 +119,7 @@ func (p *parser) parseNode(allowIndentless bool) (*Node, error) {
 	case tokScalar:
 		p.next()
 		node = &Node{Kind: ScalarNode, Value: t.val, Style: t.style, Line: t.line, Column: t.col}
+		recordOrigin(t.val, p.name, t.line, t.col)
 	case tokAlias:
 		p.next()
 		if anchor != "" || tag != "" {
