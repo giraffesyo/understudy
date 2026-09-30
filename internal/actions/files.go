@@ -586,3 +586,15 @@ func copyLocalTree(ctx context.Context, actx *Context, args map[string]any, src,
 	}
 	return &agentproto.Result{Changed: changed, Extra: map[string]any{"dest": dest, "src": source}}
 }
+
+// SearchNeedle exposes the control-side file search (_find_needle) to the
+// executor's own actions (include_vars): the found path, or "" plus the
+// searched candidates.
+func SearchNeedle(actx *Context, dirname, source string) (string, []string) {
+	return searchNeedle(actx, dirname, source)
+}
+
+// FileNotFound is AnsibleFileNotFound's message.
+func FileNotFound(source string, searched []string) string {
+	return fileNotFound(source, searched)
+}

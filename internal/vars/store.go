@@ -29,7 +29,8 @@ const (
 	LRoleVars // role vars/main.yml: outrank play vars (Ansible precedence)
 	LTaskVars
 	LFacts
-	LHostFacts // set_fact + register; persists across plays
+	LIncludeVars // include_vars: raw (templated on use); persists across plays
+	LHostFacts   // set_fact + register; persists across plays
 	LExtraVars // -e always wins
 	layerCount
 )
@@ -100,6 +101,18 @@ type Final struct{ V any }
 // SetHostFact records set_fact/register results for one host.
 func (s *Store) SetHostFact(host, name string, value any) {
 	s.set(LHostFacts, host, map[string]any{name: Final{value}})
+}
+
+// SetIncludeVars records include_vars results for one host. Unlike
+// set_fact values they stay raw: templates inside are resolved on use.
+func (s *Store) SetIncludeVars(host string, vars map[string]any) {
+	s.set(LIncludeVars, host, vars)
+}
+
+// SetHostVarRaw registers a value that is templated on use (a registered
+// include_vars result, whose data Ansible keeps trusted).
+func (s *Store) SetHostVarRaw(host, name string, value any) {
+	s.set(LHostFacts, host, map[string]any{name: value})
 }
 
 // SetInventoryVars installs a host's merged inventory vars (group vars in

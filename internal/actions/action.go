@@ -34,6 +34,9 @@ type Context struct {
 	RunModule func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error)
 	// SetFact persists a fact for this host (set_fact, setup).
 	SetFact func(name string, value any)
+	// SetIncludeVars stores include_vars results at their precedence layer
+	// for this host (or its delegate / run_once batch).
+	SetIncludeVars func(vars map[string]any)
 }
 
 // Action runs one task occurrence. args/freeForm are already templated.

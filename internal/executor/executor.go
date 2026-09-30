@@ -1236,6 +1236,11 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 				r.Store.SetHostFact(h, name, value)
 			}
 		},
+		SetIncludeVars: func(vars map[string]any) {
+			for _, h := range r.factHosts(host, target, task) {
+				r.Store.SetIncludeVars(h, vars)
+			}
+		},
 	}, target, nil
 }
 
@@ -1382,6 +1387,9 @@ func moduleOrigin(res *agentproto.Result) string {
 
 // dispatch routes to a control-side action or the module runtime.
 func (r *Runner) dispatch(ctx context.Context, task *playbook.Task, actx *actions.Context, args map[string]any, freeForm string) *agentproto.Result {
+	if task.Module == "include_vars" {
+		return r.runIncludeVars(task, actx, args)
+	}
 	if a := actions.Lookup(task.Module); a != nil {
 		res := a.Run(ctx, actx, args, freeForm)
 		if res != nil && res.Origin == "" {
@@ -1415,6 +1423,11 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	}
 	if task.Register != "" {
 		for _, h := range r.fanOut(host, task) {
+			if task.Module == "include_vars" {
+				// include_vars data stays trusted (templated on use).
+				r.Store.SetHostVarRaw(h, task.Register, res.ToVars())
+				continue
+			}
 			r.Store.SetHostFact(h, task.Register, res.ToVars())
 		}
 	}

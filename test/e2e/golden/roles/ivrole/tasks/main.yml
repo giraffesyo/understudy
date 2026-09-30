@@ -1,0 +1,12 @@
+---
+- name: include a file from the role vars dir
+  include_vars: extra.yml
+
+- name: include a directory under the role vars dir
+  include_vars:
+    dir: more
+  register: role_dir_res
+
+- name: show the role dir result files
+  debug:
+    msg: "{{ role_dir_res.ansible_included_var_files | map('basename') | list }}"

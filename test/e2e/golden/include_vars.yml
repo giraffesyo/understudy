@@ -1,0 +1,99 @@
+---
+# include_vars: free-form and file: forms found through the vars/ search
+# path, name: scoping, templated names, dir: loading with files_matching /
+# ignore_files / depth, role vars/ lookup, first_found loops, precedence
+# over play vars, and the not-found / not-a-mapping / mixed-args failures.
+- name: include_vars
+  hosts: all
+  gather_facts: false
+  vars:
+    iv_color: play
+  tasks:
+    - name: free-form include from the vars dir
+      include_vars: iv_basic.yml
+
+    - name: include_vars outranks play vars
+      debug:
+        msg: "{{ iv_color }} {{ iv_list | join(',') }} {{ iv_templated }}"
+
+    - name: file with name scopes the result
+      include_vars:
+        file: iv_basic.yml
+        name: scoped
+      register: scoped_res
+
+    - name: show the scoped vars
+      debug:
+        var: scoped
+
+    - name: show the registered result
+      debug:
+        var: scoped_res.ansible_facts
+
+    - name: templated file name
+      ansible.builtin.include_vars: "iv_{{ 'other' }}.yml"
+
+    - name: later include overrides earlier
+      debug:
+        var: iv_color
+
+    - name: dir with files_matching
+      include_vars:
+        dir: vars/ivdir
+        files_matching: "^[ab]"
+        name: fromdir
+      register: dir_res
+
+    - name: show dir result
+      debug:
+        var: fromdir
+
+    - name: dir with ignore_files and depth
+      include_vars:
+        dir: vars/ivdir
+        ignore_files: ["b.yml"]
+        depth: 1
+        name: shallow
+
+    - name: show shallow dir result
+      debug:
+        var: shallow
+
+    - name: first_found skip with nothing found
+      include_vars: "{{ item }}"
+      with_first_found:
+        - files:
+            - does-not-exist.yml
+          skip: true
+
+    - name: first_found picks the first existing file
+      include_vars: "{{ lookup('first_found', params) }}"
+      vars:
+        params:
+          files:
+            - nope.yml
+            - iv_other.yml
+          paths:
+            - vars
+
+    - name: include inside a role searches the role vars dir
+      include_role:
+        name: ivrole
+
+    - name: role-included vars stay visible after the role
+      debug:
+        msg: "{{ ivrole_value }} {{ ivrole_dir_value | default('unset') }}"
+
+    - name: a missing file fails
+      include_vars: missing.yml
+      ignore_errors: true
+
+    - name: a list file is not a mapping
+      include_vars: iv_list.yml
+      ignore_errors: true
+
+    - name: mixing file and dir arguments fails
+      include_vars:
+        file: iv_basic.yml
+        dir: vars
+      ignore_errors: true
