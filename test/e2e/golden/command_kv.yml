@@ -19,4 +19,4 @@
       register: kv
       changed_when: false
     - debug:
-        msg: "{{ pw.stdout == workdir }} {{ kv.stdout }} {{ kv.cmd }}"
+        msg: "{{ pw.rc }} {{ pw.cmd }} {{ kv.stdout }} {{ kv.cmd }}"
