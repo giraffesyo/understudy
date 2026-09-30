@@ -255,7 +255,7 @@ system-administration surface:
 |-------------|---------|
 | Commands    | `command`, `shell`, `raw`, `script` |
 | Files       | `copy`, `template`, `file`, `stat`, `lineinfile`, `blockinfile`, `ini_file`, `get_url`, `unarchive`, `find`, `slurp`, `tempfile` |
-| Packages    | `package`, `apt`, `yum`, `dnf`, `apk`, `pip`, `package_facts` |
+| Packages    | `package`, `apt`, `yum`, `dnf`, `dnf5`, `apk`, `pip`, `package_facts` |
 | Repos/keys  | `apt_repository`, `deb822_repository`, `yum_repository`, `rpm_key` |
 | Services    | `service`, `systemd`, `service_facts` |
 | Users       | `user`, `group`, `authorized_key` |
@@ -335,6 +335,51 @@ than silently diverging. Known boundaries:
   `update_task` crashes); `u` is accepted as a no-op.
 - **`dig` lookup**: covers A, AAAA, CNAME, MX, NS, TXT, PTR and SRV (not
   yet byte-compared: Ansible's needs dnspython).
+- **Output that depends on the target's Python**: understudy never runs
+  Python, but some of ansible's output comes from the Python that runs its
+  modules. understudy identifies that interpreter as ansible would (the
+  task's `ansible_python_interpreter`, else `ANSIBLE_PYTHON_INTERPRETER`,
+  else discovery's `python3.14` ... `python3.9`, `/usr/bin/python3`
+  order) and reads what it needs off the filesystem: the version from the
+  interpreter's path, installed libraries from the `.dist-info`/
+  `.egg-info` metadata in its site directories (venv `pyvenv.cfg` and
+  `.pth` files included). The rule: where the target has a Python,
+  modules behave as ansible's would with it; where it has none (where
+  ansible could not run at all), the native implementation stands in.
+  - `uri`/TLS errors: CPython appends the `_ssl.c` line that raised
+    (`... self-signed certificate (_ssl.c:1082)`). That line changes
+    between CPython releases and even between distribution builds of one
+    release, so understudy adds it only for builds it has measured,
+    identified by the interpreter's install path (Homebrew, pyenv, uv) or
+    its dpkg/apk/rpm package version (Ubuntu 24.04, Debian 12, Alpine
+    3.20, Rocky Linux 9); for any other build the location is left out
+    rather than claimed.
+  - `uri` with `file://` and `ftp://`: urllib opens them, but their
+    responses have no status, so in ansible-core 2.21 a successful one
+    crashes the module (`int() argument must be ... not 'NoneType'`, worded
+    per Python version) and failures are ordinary URLErrors; understudy
+    reproduces both, FileHandler's host checks by Python version included.
+    `form-multipart` part types come from the target's `mimetypes`,
+    which reads its `mime.types` files (`/etc/mime.types`,
+    `/etc/apache2/mime.types` on macOS) over Python's built-in table.
+  - `mysql_*`: `connector_name`/`connector_version` (and the connection
+    attributes) name the driver ansible's modules would import there:
+    PyMySQL, else mysqlclient (MySQLdb, with its deprecation warning). A
+    target Python with neither fails with `mysql_driver_fail_msg`, as
+    ansible does; a target without Python reports the native client's
+    identity, PyMySQL 1.1.2, the release whose behavior it reproduces.
+  - `openssh_keypair`: the `cryptography` backend is implemented natively
+    (OpenSSH, PKCS1 and PKCS8 keys, passphrases, cryptography's quirks such
+    as an encrypted PKCS8 key never matching `private_key_format: pkcs8`).
+    `backend: auto` picks as ansible does (ssh-keygen unless a passphrase
+    is set); where the target has a Python, the backend is available only
+    if ansible's would be (python `cryptography` >= 3.3, and `bcrypt` for
+    passphrases, else ansible's errors).
+- **`dnf` results**: the transaction runs through the dnf CLI, and
+  `results` lists it as the modules do (`Installed: <nevra>`,
+  `Removed: <nevra>`). dnf4's module iterates a set, so for multi-package
+  transactions understudy lists the requested packages first and their
+  dependencies after, by name.
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
   strings; regular expressions use Go's RE2 (lookaround and backreferences
   in *patterns* are rejected with a clear error rather than mis-matched),
@@ -363,9 +408,11 @@ plugins) and `passlib`, e.g. `pip install ansible passlib`, with the
 matching `ansible-core` release. Set `ANSIBLE_PYTHON_INTERPRETER` to that
 Python (CI does), or the output picks up interpreter-discovery warnings.
 With Docker available, `test/e2e/golden/linux/*.yml` (modules that need
-root: `user`, `hostname`, `alternatives`) also run at `-v` against fresh
-Ubuntu, Alpine and Rocky Linux containers, one per tool, and must match
-byte for byte.
+root or a real Linux target: `user`, `hostname`, `alternatives`, `dnf`,
+package parameters, git over ssh, uri's Python-dependent output, and on a
+booted systemd Rocky container `systemd`, `firewalld` and `selinux`) also
+run at `-v` against fresh Ubuntu, Alpine and Rocky Linux containers, one
+per tool, and must match byte for byte.
 
 CI (`.github/workflows/ci.yml`) runs gofmt, `go vet`, `make depcheck`, the
 unit suite on Linux and macOS, the cross-compile check, the golden suite
