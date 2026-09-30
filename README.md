@@ -234,7 +234,8 @@ rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 `sequence`, `dict`, `indexed_items`, `flattened`, `lines`, `fileglob`, ...), `register`,
 `until`/`retries`/`delay`, `changed_when`, `failed_when`, `ignore_errors`,
 `become`/`become_user`/`become_method`/`become_flags`/`become_exe`, `vars`,
-`environment`, `no_log`, `check_mode` and `diff` (also inherited from
+`environment` (mappings, templates or a list of them, merged play, role,
+block, task), `timeout`, `no_log`, `check_mode` and `diff` (also inherited from
 blocks, role entries and plays),
 `delegate_to` (any host) and `delegate_facts`, `run_once`, `any_errors_fatal`,
 `connection`/`remote_user`, `action`/`local_action`, `async`/`poll` (including
@@ -323,11 +324,21 @@ than silently diverging. Known boundaries:
   Older ansible-core releases word some messages differently (for example
   2.14's `non-zero return code`); task outcomes are the same.
 - **Deprecation warnings**: reading a value ansible-core 2.21 deprecates
-  (a registered empty loop's `skipped_reason`, `play_hosts`, `vars`,
-  facts injected as top-level variables) prints its `[DEPRECATION
-  WARNING]` on stderr with the same origin and de-duplication;
+  (a registered empty loop's `skipped_reason`, a timed-out task's
+  `timedout.frame`, `play_hosts`, `vars`, facts injected as top-level
+  variables) prints its `[DEPRECATION WARNING]` on stderr with the same
+  origin (a variable's definition, a list entry, `<<container>>`) and
+  de-duplication; filters warn only for the values they read.
   `deprecation_warnings = False` (or `ANSIBLE_DEPRECATION_WARNINGS`)
   silences them.
+- **Exit codes**: as ansible-playbook, the result of the last play run
+  (failed and unreachable hosts carry over between plays until
+  `clear_host_errors`); several playbooks each end with a recap, and one
+  that fails is the last run.
+- **Environment order**: the task's variables lead the module's
+  environment in ansible-core's merge order; where a module runs through
+  `/bin/sh` (`shell`), the shell reorders them as it does under
+  ansible-core.
 - **Task debugger**: the `debug` strategy and `debugger` keyword follow
   ansible-core's debugger session (`p`, `c`, `r`, `q`, `help`); `p`
   evaluates Jinja expressions rather than Python. Edits to `task_vars` or
