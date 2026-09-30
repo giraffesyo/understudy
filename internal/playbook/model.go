@@ -113,7 +113,7 @@ type Task struct {
 
 	// KeywordTemplates holds keywords given as templates ("{{ x }}"),
 	// resolved per host at run time: no_log, ignore_errors, become,
-	// check_mode, retries, delay.
+	// check_mode, diff, retries, delay.
 	KeywordTemplates map[string]string
 	// Orig is the parsed task a per-host resolved copy was made from (nil
 	// on parsed tasks); Identity() is stable across copies.

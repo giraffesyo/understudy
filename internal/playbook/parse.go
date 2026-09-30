@@ -875,11 +875,13 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 		case "connection":
 			task.Connection, _ = val.Str()
 		case "diff":
-			b, err := decodeBool(val, file, "diff")
+			b, ok, err := decodeBoolKW(task, val, file, "diff")
 			if err != nil {
 				return nil, err
 			}
-			task.Diff = &b
+			if ok {
+				task.Diff = &b
+			}
 		case "throttle", "timeout", "ignore_unreachable", "collections",
 			"module_defaults", "debugger", "become_flags", "become_exe", "port":
 			// Accepted: no effect on execution outcome here.

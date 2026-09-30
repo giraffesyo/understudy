@@ -50,6 +50,8 @@ func resolveKeywords(task *playbook.Task, vctx *vars.Context) (*playbook.Task, e
 				t.Become.Become = &b
 			case "check_mode":
 				t.CheckMode = &b
+			case "diff":
+				t.Diff = &b
 			}
 		}
 	}

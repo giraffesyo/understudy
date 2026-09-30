@@ -71,3 +71,8 @@
             msg: visible
           no_log: false
       no_log: "{{ hide }}"
+
+    - name: templated diff keyword
+      debug:
+        msg: diffed
+      diff: "{{ hide }}"
