@@ -1,57 +1,40 @@
 package yaml
 
-// tokKind enumerates scanner token types. The scanner owns all indentation
-// logic: block structure arrives as synthetic *Start/End tokens so the parser
-// is a plain grammar walk.
+// tokKind enumerates libyaml's token types. The scanner owns all
+// indentation logic: block structure arrives as BLOCK-*-START/BLOCK-END
+// tokens so the parser is a plain grammar walk.
 type tokKind uint8
 
 const (
-	tokStreamEnd tokKind = iota
-	tokDocStart          // ---
-	tokDocEnd            // ...
-	tokBlockMapStart
+	tokStreamStart tokKind = iota
+	tokStreamEnd
+	tokVersionDirective // %YAML
+	tokTagDirective     // %TAG
+	tokDocStart         // ---
+	tokDocEnd           // ...
 	tokBlockSeqStart
+	tokBlockMapStart
 	tokBlockEnd
-	tokBlockEntry // "-" in block context
-	tokFlowMapStart
-	tokFlowMapEnd
 	tokFlowSeqStart
 	tokFlowSeqEnd
-	tokFlowEntry // "," in flow context
+	tokFlowMapStart
+	tokFlowMapEnd
+	tokBlockEntry // "-" in block context
+	tokFlowEntry  // "," in flow context
 	tokKey
 	tokValue // ":"
+	tokAlias
+	tokAnchor
+	tokTag
 	tokScalar
-	tokAnchor // &name
-	tokAlias  // *name
-	tokTag    // !name, !!name
 )
 
-var tokNames = map[tokKind]string{
-	tokStreamEnd:     "end of stream",
-	tokDocStart:      "'---'",
-	tokDocEnd:        "'...'",
-	tokBlockMapStart: "start of block mapping",
-	tokBlockSeqStart: "start of block sequence",
-	tokBlockEnd:      "end of block collection",
-	tokBlockEntry:    "'-'",
-	tokFlowMapStart:  "'{'",
-	tokFlowMapEnd:    "'}'",
-	tokFlowSeqStart:  "'['",
-	tokFlowSeqEnd:    "']'",
-	tokFlowEntry:     "','",
-	tokKey:           "mapping key",
-	tokValue:         "':'",
-	tokScalar:        "scalar",
-	tokAnchor:        "anchor",
-	tokAlias:         "alias",
-	tokTag:           "tag",
-}
-
-func (k tokKind) String() string { return tokNames[k] }
-
 type token struct {
-	kind      tokKind
-	val       string
-	style     Style // for tokScalar
-	line, col int   // 1-based start position
+	kind       tokKind
+	start, end mark
+	val        string // scalar text, anchor/alias name, tag or %TAG handle
+	suffix     string // tag suffix, %TAG prefix
+	style      Style  // scalars
+	major      int    // %YAML version
+	minor      int
 }

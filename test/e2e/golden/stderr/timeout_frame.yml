@@ -1,0 +1,19 @@
+---
+# A timed-out task's timedout.frame is deprecated: reading it warns at the
+# origin of the template that read it (period does not), and copies stay
+# deprecated.
+- name: timedout.frame
+  hosts: all
+  gather_facts: false
+  tasks:
+    - command: sleep 3
+      timeout: 1
+      register: r
+      ignore_errors: true
+    - debug: var=r
+    - debug: msg="{{ r.timedout.period }}"
+    - debug: msg="{{ r.timedout.frame }}"
+    - set_fact:
+        copied: "{{ r.timedout }}"
+    - debug: var=copied
+    - debug: msg="{{ r.timedout | dict2items | map(attribute='key') | list }}"

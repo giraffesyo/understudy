@@ -216,7 +216,7 @@ func mergeVarsFile(path string, into map[string]any) error {
 			return fmt.Errorf("%s: %w", path, err)
 		}
 	}
-	v, err := yaml.Unmarshal(data, path)
+	v, err := yaml.Unmarshal(data, absPath(path))
 	if err != nil {
 		return err
 	}

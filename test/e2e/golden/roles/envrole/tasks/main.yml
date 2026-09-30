@@ -1,0 +1,12 @@
+---
+- name: role environment
+  shell: env | grep ^Z_
+  register: out
+- debug: var=out.stdout_lines
+- name: role and task environment
+  shell: env | grep ^Z_
+  environment:
+    Z_T: task
+    Z_R: task
+  register: out
+- debug: var=out.stdout_lines

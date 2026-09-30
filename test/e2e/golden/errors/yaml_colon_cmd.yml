@@ -1,0 +1,5 @@
+# YAML load error: a free-form command with ": " in it
+- hosts: all
+  gather_facts: false
+  tasks:
+    - command: echo name: ansible

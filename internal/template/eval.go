@@ -520,11 +520,10 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !passThroughFilters[t.name] {
-		// The filter reads the deprecated values it was given (to_json,
-		// dict2items, ...); those it passes on stay deprecated.
-		walkDeprecated(in, ec.deprecated, false)
-	}
+	// The filter reads some of the deprecated values it was given
+	// (to_json all of them, dict2items the values); those it passes on
+	// stay deprecated.
+	ec.filterReads(t.name, in, args, kwargs)
 	out, err := fn(ec, in, args, kwargs)
 	if err != nil {
 		if _, ok := err.(*TemplateError); ok {
@@ -536,12 +535,6 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 		return nil, ec.errf(t.off, "filter %q: %s", t.name, err)
 	}
 	return out, nil
-}
-
-// passThroughFilters return their input or only measure it: deprecated
-// values inside pass through unread.
-var passThroughFilters = map[string]bool{
-	"default": true, "d": true, "mandatory": true, "length": true, "count": true,
 }
 
 // undefinedTolerantTests may receive an Undefined input.
@@ -616,6 +609,29 @@ func (ec *EvalCtx) evalCall(t *callExpr) (any, error) {
 	}
 	if err := ec.rejectUndefined(fn, t.off); err != nil {
 		return nil, err
+	}
+	if f, ok := fn.(kwOrderFunc); ok {
+		// Keyword arguments in call order (dict(b=1, a=2) keeps b first).
+		args, _, err := ec.evalArgs(t.args, nil)
+		if err != nil {
+			return nil, err
+		}
+		kw := yaml.NewOMap()
+		for _, k := range t.kwargs {
+			v, err := ec.eval(k.val)
+			if err != nil {
+				return nil, err
+			}
+			if err := ec.rejectUndefined(v, k.val.exprOff()); err != nil {
+				return nil, err
+			}
+			kw.Set(k.name, v)
+		}
+		out, err := f(ec, args, kw)
+		if err != nil {
+			return nil, ec.errf(t.off, "%s", err)
+		}
+		return out, nil
 	}
 	args, kwargs, err := ec.evalArgs(t.args, t.kwargs)
 	if err != nil {

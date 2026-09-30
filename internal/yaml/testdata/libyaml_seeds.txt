@@ -1,0 +1,794 @@
+a: 1
+b: [x, y, {z: 1}]
+c: {p: q, r: [1, 2]}
+#####
+- a
+- b:
+    c: d
+  e: f
+- - nested
+  - seq
+#####
+key: |
+  literal
+   more
+  end
+
+other: >-
+  folded
+  text
+
+  para
+keep: |+
+  x
+
+strip: |2-
+    indented
+#####
+anchors:
+  base: &b {x: 1, y: 2}
+  use: *b
+  merged:
+    <<: *b
+    z: 3
+#####
+%YAML 1.1
+---
+tagged: !!str 123
+custom: !foo bar
+vault: !vault |
+  $ANSIBLE_VAULT;1.1;AES256
+  6162
+unsafe: !unsafe '{{ x }}'
+#####
+--- first
+--- second
+...
+#####
+? complex
+: value
+? [a, b]
+: seq key
+#####
+"double \t \x41 ☺ \
+ continued": 'single ''quoted''
+  folded'
+#####
+plain: this is
+  a multi line
+  plain scalar
+next: x
+#####
+- hosts: all
+  vars:
+    msg: "hello: world"
+  tasks:
+    - name: say
+      debug: msg="{{ msg }}"
+      when: x is defined
+    - command: echo hi
+      args:
+        chdir: /tmp
+#####
+flow: [a: 1, b: 2, ? c : 3]
+empty: {}
+emptyseq: []
+nulls: [~, null, , ]
+#####
+- &anchor value
+- *anchor
+- !!map {a: b}
+- !!seq [a]
+- ! nonspecific
+- !<tag:yaml.org,2002:str> verbatim
+#####
+a:
+- b
+- c
+d:
+  - e
+#####
+url: http://example.com:8080/path
+time: 12:30:45
+colon_in_flow: [http://x, a:b]
+#####
+multi:
+  "quoted
+  key": v
+#####
+- x: 1
+  y:
+- z
+#####
+{a: 1,
+ b: 2,
+ c: [x,
+  y]}
+#####
+top
+#####
+
+#####
+# only a comment
+#####
+---
+...
+#####
+a: "tab	inside"
+b: 'x'  # comment
+c: - not a seq
+#####
+k: v
+ bad: indent
+#####
+- one
+two: 2
+#####
+a: b: c
+#####
+a: *undefined
+#####
+&x a: &x b
+#####
+[unclosed
+#####
+{unclosed: map
+#####
+"unclosed
+#####
+a: 'unterminated
+b: c
+#####
+	tab: start
+#####
+a:
+	b: tab
+#####
+a: |
+	tab in block
+#####
+a: b	# tab before comment
+c:	d
+#####
+- [a, b]: c
+#####
+%TAG !e! tag:example.com,2000:app/
+---
+- !e!foo bar
+#####
+%YAML 1.2
+---
+a: 1
+#####
+%YAML 2.0
+---
+a: 1
+#####
+%YAML 1.1
+%YAML 1.1
+--- a
+#####
+a: @b
+#####
+a: `b`
+#####
+a: %b
+#####
+a: !<unclosed b
+#####
+a: &
+#####
+a: *
+#####
+a: |0
+  x
+#####
+a: |++
+  x
+#####
+a: |1-x
+  x
+#####
+a: "\z"
+#####
+a: "\x4"
+#####
+a: "\U0011FFFF"
+#####
+- a
+ - b
+#####
+a:
+  - b
+  c: d
+#####
+a: [b, c
+d: e
+#####
+a: {b: c, d
+#####
+a: [b
+  , c]
+#####
+? a
+? b
+: c
+#####
+- ? a
+  : b
+- ? c
+#####
+a:
+  b:
+    c:
+      d: e
+  f: g
+h: i
+#####
+- - - a
+    - b
+  - c
+- d
+#####
+a: -1
+b: - 1
+#####
+a: >
+  folded
+    more indented
+  back
+
+  para
+#####
+key with spaces: value with spaces
+"quoted key": 'quoted value'
+#####
+x: 1
+x: 2
+#####
+a: 'it''s'
+b: "say \"hi\""
+c: "\/\0\a\b\e\f\n\r\t\v\N\_\L\P\ "
+#####
+- |
+ one space
+- >2
+   two plus one
+#####
+...
+a: b
+#####
+--- |
+  doc literal
+--- >
+  doc folded
+#####
+a: [
+]
+b: {
+}
+#####
+- {a: [b, {c: d}], e: f}
+- [[1, 2], [3, 4]]
+#####
+a: {b}
+c: [d: ]
+e: {? f}
+#####
+- - a
+  -
+-
+-
+#####
+a:
+  b
+#####
+a: 1 # comment
+# comment
+b: 2
+    # indented comment
+c: 3
+#####
+x: "multi
+  line
+
+  quoted"
+#####
+x: 'a
+
+  b'
+#####
+- a: 1
+  - b
+#####
+- !!str
+- !!null ''
+- &a
+- *a
+#####
+a: *a
+#####
+a: &a [*a]
+#####
+[a, b]: c
+#####
+{a: b}: c
+#####
+a:
+  - b
+ - c
+#####
+- a:
+    b
+  c: d
+#####
+foo: bar
+  baz: qux
+#####
+- debug: msg=hi: there
+#####
+- name: foo
+  command: echo "a" "b"
+  when: "x" in y
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: *
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: &a *b
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: & foo
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: &x
+      msg: 1
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: @x
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: `x`
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "a\x4gb"
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=1
+      name: x
+     when: true
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=1
+   - debug: msg=2
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: a\377b
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: 1
+        - two
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=1
+      when: - true
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: |x
+          text
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: |0
+          text
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - command: echo name: ansible
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=hi: there
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: foo: bar
+      debug: msg=x
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        ? [a]
+        : b
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: a\001b
+
+#####
+%YAML 1.1
+- hosts: all
+  gather_facts: false
+  tasks:
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=1
+... x
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=1
+--- x
+foo: bar
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: &a x
+      vars:
+        y: &a z
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        : x
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "a
+
+
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: [a
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: {msg: x}: y
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: {a: 1 b: 2}
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: [a, - b]
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: [a, {b]
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+- hosts: all
+  tasks:
+  - debug: msg=1
+   when: true
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: !!int abc
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        <<: 1
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+- hosts: all
+  gather_facts
+
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=1
+      name
+      when: true
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: this is
+          a: multiline
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: %x
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: [? a]
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=x
+      when: "foo" in bar
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=x
+      when: "foo" in "bar"
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:	msg=x
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=x	
+      when: true
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+	- debug: msg=x
+
+#####
+%TAG !e! tag:example.com,2000:
+---
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=x
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: [a] b
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "a" b
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=1
+---
+- hosts: all
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "hello
+    - debug: msg=two
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "hello
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: {a: 1
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: [1, 2
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: 'hello
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: *foo
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: !e!foo bar
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: {[a]: b}
+
+#####
+%FOO bar
+---
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=x
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "a\qb"
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: !foo bar
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: {{ foo }}
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: var={{ foo }}
+      with_items: {{ bar }}
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: !unsafe {a: b}
+
+#####
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: !vault {a: b}
+
+#####
+%YAML 2.0
+---
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=x
+
+#####
+%YAML 1.1
+%YAML 1.1
+---
+- hosts: all
+  gather_facts: false
+  tasks:

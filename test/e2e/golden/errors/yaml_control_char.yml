@@ -1,0 +1,6 @@
+# YAML load error: a control character (a reader error: no line)
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: ab

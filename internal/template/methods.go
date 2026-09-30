@@ -14,6 +14,9 @@ type boundMethod func(ec *EvalCtx, args []any, kwargs map[string]any) (any, erro
 // globalFunc is a callable global (range, dict, lookup, query).
 type globalFunc func(ec *EvalCtx, args []any, kwargs map[string]any) (any, error)
 
+// kwOrderFunc is a global that needs its keyword arguments in call order.
+type kwOrderFunc func(ec *EvalCtx, args []any, kwargs *yaml.OMap) (any, error)
+
 // lookupMethod resolves builtin str/list/dict methods for getattr.
 func lookupMethod(x any, name string) (boundMethod, bool) {
 	if s, ok := asString(x); ok {
@@ -28,7 +31,8 @@ func lookupMethod(x any, name string) (boundMethod, bool) {
 	case map[string]any:
 		if m, ok := dictMethods[name]; ok {
 			return func(ec *EvalCtx, args []any, kwargs map[string]any) (any, error) {
-				return m(sortedKeys(t), t, args)
+				out, err := m(sortedKeys(t), t, args)
+				return ec.dictMethodReads(name, t, out, err)
 			}, true
 		}
 	case Mapping:
@@ -37,7 +41,8 @@ func lookupMethod(x any, name string) (boundMethod, bool) {
 			keys := t.Keys()
 			mm := mappingToMap(t)
 			return func(ec *EvalCtx, args []any, kwargs map[string]any) (any, error) {
-				return m(keys, mm, args)
+				out, err := m(keys, mm, args)
+				return ec.dictMethodReads(name, mm, out, err)
 			}, true
 		}
 	case []any:
@@ -289,6 +294,24 @@ var dictMethods = map[string]func(keys []string, m map[string]any, args []any) (
 		}
 		return nil, nil
 	},
+}
+
+// dictMethodReads reports the deprecated values a dict method reads, as
+// a lazy mapping's items() and get() retrieve them: items() every value
+// (which stay deprecated in its pairs), get() the value it returns.
+func (ec *EvalCtx) dictMethodReads(name string, m map[string]any, out any, err error) (any, error) {
+	if err != nil {
+		return out, err
+	}
+	switch name {
+	case "items":
+		for _, k := range sortedKeys(m) {
+			ec.readValue(m[k])
+		}
+	case "get":
+		return ec.access(out), nil
+	}
+	return out, nil
 }
 
 var listMethods = map[string]func(l []any, args []any) (any, error){

@@ -1,0 +1,67 @@
+---
+# Dict key order through filters and globals: dict() (kwargs in call order,
+# from a mapping or pairs), items2dict, combine, dict2items, from_json and
+# from_yaml keep insertion order; to_json keeps it unless sort_keys; loop
+# results and set_fact copies of registered results keep theirs.
+- hosts: all
+  gather_facts: false
+  vars:
+    lit: {zeta: 1, alpha: 2, mid: {b: 1, a: 2}}
+    lst: [{k: z, v: 1}, {k: a, v: 2}]
+  tasks:
+    - name: literals
+      debug:
+        msg: "{{ lit }} | {{ {'b': 1, 'a': 2, 'c': {'y': 1, 'x': 2}} }} | {{ dict(z=1, a=2, m=3) }} | {{ dict([['z', 1], ['a', 2]]) }}"
+    - name: combine
+      debug:
+        msg: "{{ lit | combine({'beta': 3, 'zeta': 9}) }} | {{ lit | combine({'mid': {'c': 3, 'a': 0}}, recursive=true) }} | {{ {'x': 1} | combine(lit) }}"
+    - name: items
+      debug:
+        msg: "{{ lit | dict2items }} | {{ lit | dict2items | items2dict }} | {{ lst | items2dict(key_name='k', value_name='v') }}"
+    - name: json
+      debug:
+        msg: "{{ lit | to_json }} | {{ lit | to_nice_json }} | {{ lit | to_json(sort_keys=true) }}"
+    - name: from
+      debug:
+        msg: "{{ '{\"z\": 1, \"a\": 2}' | from_json }} | {{ 'z: 1\na: 2' | from_yaml }}"
+    - set_fact:
+        sf: "{{ lit }}"
+        sf2: "{{ {'q': 1, 'b': 2} }}"
+        sf3:
+          zz: 1
+          aa: 2
+    - name: set_fact
+      debug:
+        msg: "{{ sf }} | {{ sf2 }} | {{ sf3 }} | {{ sf3.keys() | list }}"
+    - name: zip dict
+      debug:
+        msg: "{{ dict(['z', 'a'] | zip([1, 2])) }} | {{ lit.items() | list }} | {{ lit.values() | list }}"
+    - name: loop dict
+      debug:
+        msg: "= {{ item }}"
+      loop: "{{ lit | dict2items }}"
+      register: rl
+    - name: loop result
+      debug:
+        msg: "{{ rl.results | map(attribute='item') | list }} | {{ rl.results[0] }}"
+    - name: with_dict
+      debug:
+        msg: "{{ item.key }}"
+      with_dict: "{{ lit }}"
+    - command: echo hi
+      register: rc
+    - name: register str
+      debug:
+        msg: "= {{ rc | dict2items | map(attribute='key') | list }}"
+    - name: set_fact of result
+      set_fact:
+        copy_of: "{{ rc }}"
+    - name: copy of
+      debug:
+        msg: "= {{ copy_of.keys() | list }}"
+    - name: vars filter
+      debug:
+        msg: "{{ lit | dict2items | selectattr('value', 'number') | list }} | {{ lit | list }}"
+    - name: jinja items
+      debug:
+        msg: "{% for k, v in lit.items() %}{{ k }}={{ v }} {% endfor %} {{ lit | dictsort }}"

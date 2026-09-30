@@ -2,7 +2,6 @@ package playbook
 
 import (
 	"os"
-	"strings"
 	"sync"
 
 	"github.com/giraffesyo/understudy/internal/template"
@@ -23,7 +22,7 @@ func SourceContext(file string, line, col int) string {
 	lines, ok := srcCache[file]
 	if !ok {
 		if data, err := os.ReadFile(file); err == nil {
-			lines = strings.Split(string(data), "\n")
+			lines = template.SourceLines(string(data))
 		}
 		srcCache[file] = lines
 	}

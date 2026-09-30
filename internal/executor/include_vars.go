@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -245,6 +246,10 @@ func (iv *includeVarsRun) loadFile(path string, validateExt bool) (bool, string,
 	}
 	v, err := yaml.Unmarshal(data, path)
 	if err != nil {
+		var ye *yaml.Error
+		if errors.As(err, &ye) {
+			return true, ye.Message(), nil
+		}
 		return true, err.Error(), nil
 	}
 	if v == nil {

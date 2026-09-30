@@ -1,0 +1,4 @@
+# YAML load error in a role's defaults
+- hosts: all
+  gather_facts: false
+  roles: [yaml_bad_defaults]

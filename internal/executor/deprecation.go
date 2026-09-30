@@ -57,7 +57,15 @@ func (r *Runner) deprecation(pos template.Position, d template.Deprecated) {
 		return
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "[DEPRECATION WARNING]: %s This feature will be removed from ansible-core version %s.\n", d.Msg, d.Version)
+	if pos == template.ContainerOrigin {
+		// Found while finishing a templated container: ansible-core
+		// names the container, whose origin it does not know.
+		fmt.Fprintf(&b, "[DEPRECATION WARNING]: While processing '%s': %s This feature will be removed from ansible-core version %s.\n",
+			pos.File, d.Msg, d.Version)
+		fmt.Fprintf(&b, "Origin: <unknown>\n\n%s\n\n", pos.File)
+	} else {
+		fmt.Fprintf(&b, "[DEPRECATION WARNING]: %s This feature will be removed from ansible-core version %s.\n", d.Msg, d.Version)
+	}
 	if pos.File != "" && pos.Line > 0 {
 		fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n%s\n", pos.File, pos.Line, pos.Col, template.SourceExcerpt(pos.File, pos.Line, pos.Col))
 	}

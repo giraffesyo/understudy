@@ -1,0 +1,7 @@
+# YAML load error: a block sequence entry inside a mapping
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: 1
+        - two

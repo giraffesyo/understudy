@@ -1,0 +1,6 @@
+# YAML load error: content after a document end marker
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=1
+... x

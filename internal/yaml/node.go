@@ -35,6 +35,8 @@ type Node struct {
 	Content []*Node // MappingNode: k,v,k,v...; SequenceNode: items
 	Line    int     // 1-based
 	Column  int     // 1-based
+
+	recursive bool // a collection that contains an alias to itself
 }
 
 // File is one parsed YAML file: zero or more documents.
@@ -52,51 +54,93 @@ func (n *Node) resolveAlias() *Node {
 	return n
 }
 
-// MapGet returns the value node for a plain string key, or nil. The receiver
-// may be an alias to a mapping. Merge keys are NOT consulted here (Decode
-// handles them); structural walkers deal in literal keys.
+// entries returns a mapping's key and value nodes as the constructed dict
+// holds them: merge keys expanded, and a repeated key kept at its first
+// position (and key node) with its last value. nil if n is not a mapping.
+func (n *Node) entries() (keys, values []*Node) {
+	n = n.resolveAlias()
+	if n == nil || n.Kind != MappingNode {
+		return nil, nil
+	}
+	pairs, err := n.flatten()
+	if err != nil {
+		pairs = n.Content
+	}
+	index := map[any]int{}
+	for i := 0; i+1 < len(pairs); i += 2 {
+		k := pairs[i].resolveAlias()
+		if k.Kind != ScalarNode {
+			continue
+		}
+		var id any = k.Value
+		if v, err := k.decode(false); err == nil {
+			id = pyKeyIdentity(v)
+		}
+		if j, ok := index[id]; ok {
+			values[j] = pairs[i+1]
+			continue
+		}
+		index[id] = len(keys)
+		keys = append(keys, pairs[i])
+		values = append(values, pairs[i+1])
+	}
+	return keys, values
+}
+
+// keyName is a key node's name as a constructed dict key.
+func keyName(k *Node) string {
+	k = k.resolveAlias()
+	if v, err := k.decode(false); err == nil {
+		return keyString(v)
+	}
+	return k.Value
+}
+
+// MapGet returns the value node for a key, or nil. The receiver may be an
+// alias to a mapping; merge keys are expanded.
 func (n *Node) MapGet(key string) *Node {
-	n = n.resolveAlias()
-	if n == nil || n.Kind != MappingNode {
-		return nil
-	}
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		k := n.Content[i].resolveAlias()
-		if k.Kind == ScalarNode && k.Value == key {
-			return n.Content[i+1]
+	keys, values := n.entries()
+	for i, k := range keys {
+		if keyName(k) == key {
+			return values[i]
 		}
 	}
 	return nil
 }
 
-// MapKeyNode returns the key node for a plain string key, or nil.
+// MapKeyNode returns the key node for a key, or nil.
 func (n *Node) MapKeyNode(key string) *Node {
-	n = n.resolveAlias()
-	if n == nil || n.Kind != MappingNode {
-		return nil
-	}
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		k := n.Content[i].resolveAlias()
-		if k.Kind == ScalarNode && k.Value == key {
-			return n.Content[i]
+	keys, _ := n.entries()
+	for _, k := range keys {
+		if keyName(k) == key {
+			return k
 		}
 	}
 	return nil
 }
 
-// MapKeys returns the scalar keys of a mapping in source order.
+// MapKeys returns a mapping's keys in the constructed dict's order.
 func (n *Node) MapKeys() []string {
-	n = n.resolveAlias()
-	if n == nil || n.Kind != MappingNode {
-		return nil
-	}
-	keys := make([]string, 0, len(n.Content)/2)
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		if k := n.Content[i].resolveAlias(); k.Kind == ScalarNode {
-			keys = append(keys, k.Value)
+	keys, _ := n.entries()
+	if keys == nil {
+		if m := n.resolveAlias(); m == nil || m.Kind != MappingNode {
+			return nil
 		}
 	}
-	return keys
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, keyName(k))
+	}
+	return out
+}
+
+// IsNull reports whether the node is a scalar that constructs to None.
+func (n *Node) IsNull() bool {
+	if n = n.resolveAlias(); n == nil || n.Kind != ScalarNode {
+		return false
+	}
+	v, err := n.Decode()
+	return err == nil && v == nil
 }
 
 // Str returns the node's scalar text if it is a scalar.

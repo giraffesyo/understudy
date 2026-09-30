@@ -1,0 +1,6 @@
+# YAML load error: an unclosed flow sequence
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: [1, 2

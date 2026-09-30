@@ -1,0 +1,14 @@
+---
+# meta: clear_host_errors clears the failure for the exit code, though the
+# recap still counts it.
+- hosts: a:b
+  gather_facts: false
+  tasks:
+    - fail:
+      when: inventory_hostname == 'h1'
+    - meta: clear_host_errors
+    - debug: msg=after
+- hosts: b
+  gather_facts: false
+  tasks:
+    - debug: msg=ok

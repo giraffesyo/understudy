@@ -1,0 +1,7 @@
+# YAML load error: a play key without its colon at end of file
+- hosts: all
+  gather_facts: false
+  tasks:
+- hosts: all
+  gather_facts
+

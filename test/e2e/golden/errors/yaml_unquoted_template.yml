@@ -1,0 +1,6 @@
+# YAML load error: an unquoted {{ }} value (a flow mapping with a mapping key)
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: {{ foo }}

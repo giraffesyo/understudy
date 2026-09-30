@@ -39,6 +39,7 @@ func NewMinimal(verbosity int) *Minimal {
 var _ executor.Callback = (*Minimal)(nil)
 
 func (m *Minimal) PlayStart(*playbook.Play)                                    {}
+func (m *Minimal) NoHostsRemaining()                                           {}
 func (m *Minimal) TaskStart(*playbook.Task, string, bool)                      {}
 func (m *Minimal) Included(*playbook.Task, string, []string, any, bool)        {}
 func (m *Minimal) LoopResult(string, *playbook.Task, *agentproto.Result, bool) {}

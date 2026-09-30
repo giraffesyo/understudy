@@ -1,0 +1,6 @@
+# YAML load error: a value with no key
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        : x

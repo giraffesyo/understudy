@@ -1,0 +1,6 @@
+# YAML load error: a DEL character
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: ab

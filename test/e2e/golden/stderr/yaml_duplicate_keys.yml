@@ -1,0 +1,21 @@
+---
+# Duplicate mapping keys warn (once per distinct warning) at the repeated
+# key, in the order ansible-core constructs mappings (breadth first); the
+# last value wins. Keys equal in Python (1, 1.0, true, yes) are duplicates;
+# a bool key has no origin, a null key no context. Merged keys the mapping
+# overrides count too.
+- hosts: all
+  gather_facts: false
+  hosts: all
+  vars:
+    m: {1: a, 1.0: b, true: c, yes: d, "1": e, null: f, ~: g}
+    base: &base {x: 1, y: 2}
+    over:
+      <<: *base
+      y: 3
+  tasks:
+    - debug: msg=1
+      debug: msg=2
+      vars: {a: 1, a: 2, b: {c: 1, c: 2}}
+    - debug: var=m
+    - debug: var=over

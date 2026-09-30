@@ -6,6 +6,7 @@ import (
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/template"
+	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
 func init() {
@@ -103,6 +104,9 @@ func runAssert(_ context.Context, actx *Context, args map[string]any, _ string) 
 			vctx := actx.Vars
 			if !isList {
 				vctx = vctx.At(actx.ArgPos["that"])
+			} else if file, line, col, ok := yaml.Origin(t); ok {
+				// Each listed conditional reports from its own entry.
+				vctx = vctx.At(template.Position{File: file, Line: line, Col: col})
 			}
 			ok, err = vctx.EvalWhen([]string{t})
 			if err != nil {

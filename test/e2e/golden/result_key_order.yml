@@ -1,0 +1,87 @@
+---
+# Registered results keep ansible-core's key order (as_result_dict: its
+# result fields first, then the module's keys as the module returned them,
+# then stdout_lines/stderr_lines, then a loop's results), which shows in
+# keys(), string conversion and to_json. The default callback sorts keys,
+# so each result prints its key list.
+- hosts: all
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}"
+  tasks:
+    - {command: echo hi, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {command: /usr/bin/false, register: r, ignore_errors: true}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {shell: echo hi >&2, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {raw: echo hi, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {command: {cmd: echo hi, creates: /}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {command: {cmd: cat, stdin: x}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {stat: {path: "{{ d }}"}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }} / {{ r.stat.keys() | join(' ') }}"}
+    - {stat: {path: "{{ d }}/missing"}, register: r}
+    - debug: {msg: "{{ r | to_json }}"}
+    - {file: {path: "{{ d }}/dir", state: directory}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {file: {path: "{{ d }}/dir", state: directory, mode: "0700"}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {file: {path: "{{ d }}/t", state: touch}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {file: {path: "{{ d }}/t", state: absent}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }} {{ r | to_json }}"}
+    - {file: {src: "{{ d }}/dir", dest: "{{ d }}/l", state: link}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {copy: {content: hi, dest: "{{ d }}/c"}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {copy: {content: hi, dest: "{{ d }}/c"}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {template: {src: templates/greet.j2, dest: "{{ d }}/tpl"}, register: r, vars: {who: x}}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {lineinfile: {path: "{{ d }}/c", line: x}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {blockinfile: {path: "{{ d }}/c", block: y}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {replace: {path: "{{ d }}/c", regexp: x, replace: z}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {ini_file: {path: "{{ d }}/i.ini", section: s, option: o, value: v}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {find: {paths: "{{ d }}", patterns: c}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }} / {{ r.files[0].keys() | join(' ') }}"}
+    - {slurp: {src: "{{ d }}/c"}, register: r}
+    - debug: {msg: "{{ r | to_json }}"}
+    - {tempfile: {path: "{{ d }}"}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {ping: {}, register: r}
+    - debug: {msg: "{{ r }}"}
+    - {debug: {msg: hi}, register: r}
+    - debug: {msg: "{{ r }}"}
+    - {set_fact: {a: 1}, register: r}
+    - debug: {msg: "{{ r }}"}
+    - {assert: {that: true}, register: r}
+    - debug: {msg: "{{ r }}"}
+    - {fail: {msg: x}, register: r, ignore_errors: true}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {command: echo, when: false, register: r}
+    - debug: {msg: "{{ r }}"}
+    - {command: "echo {{ item }}", loop: [1], register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }} / {{ r.results[0].keys() | join(' ') }}"}
+    - {debug: {msg: x}, loop: [1], loop_control: {index_var: i}, register: r}
+    - debug: {msg: "{{ r.results[0] }}"}
+    - {command: echo, loop: [1], when: false, register: r}
+    - debug: {msg: "{{ r }}"}
+    - {command: echo, changed_when: false, failed_when: false, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {command: echo, until: true, retries: 2, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}
+    - {include_tasks: includes/inc_a.yml, register: r}
+    - debug: {msg: "{{ r }}"}
+    - {command: "tar cf {{ d }}/a.tar -C {{ d }} c"}
+    # Idempotence runs extract within the same second as the last one;
+    # start clean so the result does not depend on mtime granularity.
+    - {file: {path: "{{ d }}/dir/c", state: absent}}
+    - {unarchive: {src: "{{ d }}/a.tar", dest: "{{ d }}/dir", remote_src: true}, register: r}
+    - debug: {msg: "{{ r.keys() | join(' ') }}"}

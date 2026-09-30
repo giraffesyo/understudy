@@ -1,0 +1,7 @@
+# YAML load error in a vars_files file: the run ends before the play banner
+- hosts: all
+  gather_facts: false
+  vars_files:
+    - files/yaml_bad_vars.yml
+  tasks:
+    - debug: msg=hi
