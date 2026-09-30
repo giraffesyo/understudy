@@ -59,14 +59,38 @@ func knownFreeFormOption(key string) bool {
 	return false
 }
 
-// splitWords tokenizes on whitespace, honoring single/double quotes.
+// splitWords tokenizes on whitespace, honoring single/double quotes and,
+// like Ansible's split_args, Jinja2 blocks: whitespace inside {{ }}, {% %}
+// or {# #} does not split (`name={{ item }} state=present`).
 func splitWords(s string) []string {
 	var out []string
 	var cur strings.Builder
 	inWord := false
 	var quote byte
+	depth := 0 // open Jinja2 delimiters outside quotes
 	for i := 0; i < len(s); i++ {
 		c := s[i]
+		if quote == 0 && i+1 < len(s) {
+			switch pair := s[i : i+2]; pair {
+			case "{{", "{%", "{#":
+				depth++
+				inWord = true
+				cur.WriteString(pair)
+				i++
+				continue
+			case "}}", "%}", "#}":
+				if depth > 0 {
+					depth--
+					cur.WriteString(pair)
+					i++
+					continue
+				}
+			}
+		}
+		if depth > 0 && quote == 0 && (c == ' ' || c == '\t' || c == '\n') {
+			cur.WriteByte(c)
+			continue
+		}
 		switch {
 		case quote != 0:
 			cur.WriteByte(c)
