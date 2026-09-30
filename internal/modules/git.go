@@ -60,6 +60,8 @@ type gitRun struct {
 	params   map[string]any    // module.params['repo'] etc. as given
 	warnings []any
 	result   map[string]any
+
+	restoreUmask func()
 }
 
 func (g *gitRun) fail(msg string, extra map[string]any) {
@@ -258,6 +260,11 @@ func gitModule(env *RunEnv, rawArgs map[string]any) (res *agentproto.Result) {
 		return agentproto.Fail("missing parameter(s) required by 'archive_prefix': archive")
 	}
 	g := &gitRun{env: env, p: p, result: map[string]any{"changed": false}}
+	defer func() {
+		if g.restoreUmask != nil {
+			g.restoreUmask()
+		}
+	}()
 	g.main()
 	return nil
 }
@@ -349,7 +356,10 @@ func (g *gitRun) main() {
 			g.failOnly("umask must be an octal integer", map[string]any{
 				"details": fmt.Sprintf("invalid literal for int() with base 8: %s", pyStrRepr(s))})
 		}
-		syscall.Umask(int(n))
+		// The module process's umask; restored when the module returns,
+		// since in-process runs share the control process.
+		old := syscall.Umask(int(n))
+		g.restoreUmask = func() { syscall.Umask(old) }
 	}
 
 	if strings.HasPrefix(pyExpandUser(repo), "/") {
