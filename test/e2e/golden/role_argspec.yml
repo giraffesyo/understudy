@@ -1,0 +1,28 @@
+---
+# Role argument specs: the implicit "Validating arguments against arg spec"
+# task for roles:, include_role and import_role (tasks_from entry points,
+# meta/main.yml specs) with passing validation. (Failures are covered by
+# unit tests: ansible-core prints the synthesized task's repr as origin.)
+- name: role argument specs
+  hosts: all
+  gather_facts: false
+  roles:
+    - role: argspec_ok
+      as_name: web
+      as_conf:
+        level: 3
+    - role: argspec_meta
+      am_value: "42"
+  tasks:
+    - name: include_role with a tasks_from entry point
+      include_role:
+        name: argspec_ok
+        tasks_from: other
+      vars:
+        as_other: hello
+
+    - name: import_role validates too
+      import_role:
+        name: argspec_meta
+      vars:
+        am_value: 7
