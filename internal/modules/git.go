@@ -184,30 +184,46 @@ func gitCleanArgs(argv []string) string {
 	return strings.Join(out, " ")
 }
 
-// heuristicLogSanitize masks the password of a URL's userinfo.
-func heuristicLogSanitize(s string) string {
-	out := s
-	start := 0
+// heuristicLogSanitize is ansible's heuristic_log_sanitize: whatever
+// looks like the user:password part of a URL (or of ssh's user@host)
+// before an '@' is masked, false positives included
+// ("ssh://user@host" becomes "ssh:********@host").
+func heuristicLogSanitize(data string) string {
+	var output []string
+	begin := len(data)
+	prevBegin := begin
 	for {
-		i := strings.Index(out[start:], "://")
-		if i < 0 {
-			return out
+		end := strings.LastIndex(data[:begin], "@")
+		if end < 0 {
+			output = append([]string{data[:begin]}, output...)
+			break
 		}
-		i += start + 3
-		end := len(out)
-		if j := strings.IndexAny(out[i:], " /\n"); j >= 0 {
-			end = i + j
-		}
-		at := strings.LastIndex(out[i:end], "@")
-		if at >= 0 {
-			cred := out[i : i+at]
-			if c := strings.Index(cred, ":"); c >= 0 {
-				out = out[:i+c+1] + "********" + out[i+at:]
-				end = i + c + 1 + len("********")
+		sep := -1
+		sepSearchEnd := end
+		for sep < 0 {
+			begin = strings.LastIndex(data[:sepSearchEnd], "://")
+			if begin < 0 {
+				begin = 0
 			}
+			if begin+3 < end {
+				if i := strings.Index(data[begin+3:end], ":"); i >= 0 {
+					sep = begin + 3 + i
+					break
+				}
+			}
+			if begin == 0 {
+				output = append([]string{data[:prevBegin]}, output...)
+				break
+			}
+			sepSearchEnd = begin
 		}
-		start = end
+		if sep < 0 {
+			break
+		}
+		output = append([]string{data[begin : sep+1], "********", data[end:prevBegin]}, output...)
+		prevBegin = begin
 	}
+	return strings.Join(output, "")
 }
 
 // shlexWords is shlex.split (the module's command strings never carry
