@@ -602,7 +602,7 @@ func runValidate(env *RunEnv, cmdline string) (int, string, string) {
 	if err != nil || len(argv) == 0 {
 		return 1, "", fmt.Sprintf("%v", err)
 	}
-	c := exec.Command(argv[0], argv[1:]...)
+	c := env.Command(argv[0], argv[1:]...)
 	var stdout, stderr bytes.Buffer
 	c.Stdout, c.Stderr = &stdout, &stderr
 	if err := c.Run(); err != nil {

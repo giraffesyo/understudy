@@ -492,8 +492,8 @@ func (m *mysqlModule) dbImport(db []string, target string, allDatabases bool, co
 	}
 	// Two processes joined by a pipe, as subprocess.Popen does; their
 	// output is bytes, which the module formats with %s (b'...').
-	c1 := exec.Command(comp, "-dc", target)
-	c2 := exec.Command(cmd[0], cmd[1:]...)
+	c1 := m.env.Command(comp, "-dc", target)
+	c2 := m.env.Command(cmd[0], cmd[1:]...)
 	c1.Dir, c2.Dir = chdir, chdir
 	applyEnv(c1, m.env)
 	applyEnv(c2, m.env)

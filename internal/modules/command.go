@@ -113,7 +113,7 @@ func mkCommand(shell bool) ModuleFunc {
 			if v, ok := argString(args, "executable"); ok && v != "" {
 				sh = v
 			}
-			cmd = exec.Command(sh, "-c", cmdline)
+			cmd = env.Command(sh, "-c", cmdline)
 		} else {
 			// run_command's expand_user_and_vars: each argument gets
 			// os.path.expanduser(os.path.expandvars(arg)).
@@ -137,7 +137,7 @@ func mkCommand(shell bool) ModuleFunc {
 				res.Extra = map[string]any{"cmd": strings.Join(quoted, " ")}
 				return res
 			}
-			cmd = exec.Command(path, argv[1:]...)
+			cmd = env.Command(path, argv[1:]...)
 		}
 		if chdir != "" {
 			cmd.Dir = chdir
