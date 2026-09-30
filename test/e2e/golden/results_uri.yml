@@ -1,0 +1,526 @@
+---
+# Result dicts of uri against a local fixture server (files/http_fixture.py,
+# over a unix socket and TCP): response headers as keys, content/json,
+# redirects, cookies, auth, bodies in every body_format, dest downloads,
+# creates/removes, status_code handling and failure messages.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    u: http://localhost
+  tasks:
+    # Fixture setup: no_log keeps per-run values (ports, socket path,
+    # openssl's progress dots) out of the compared output.
+    - name: clear a previous run's fixture state
+      file: {path: "{{ workdir }}/{{ item }}", state: absent}
+      loop: [http.port, https.port, http.sockpath, dl]
+    - name: a self-signed certificate for the HTTPS listener
+      no_log: true
+      command: >-
+        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj /CN=localhost
+        -addext subjectAltName=DNS:localhost
+        -keyout {{ workdir }}/key.pem -out {{ workdir }}/cert.pem
+    - name: start the fixture server
+      shell: nohup python3 {{ playbook_dir }}/files/http_fixture.py {{ workdir }} >/dev/null 2>&1 &
+    - wait_for: {path: "{{ workdir }}/http.port"}
+      no_log: true
+    - set_fact:
+        sock: "{{ lookup('file', workdir + '/http.sockpath') }}"
+        t: "http://127.0.0.1:{{ lookup('file', workdir + '/http.port') }}"
+        tls_port: "{{ lookup('file', workdir + '/https.port') }}"
+      no_log: true
+
+    - name: GET json
+      uri: {url: "{{ u }}/json", unix_socket: "{{ sock }}"}
+      register: r
+    - debug: {var: r}
+
+    - name: GET text with return_content
+      uri: {url: "{{ u }}/text?a=1&b=2", unix_socket: "{{ sock }}", return_content: true}
+      register: r
+    - debug: {var: r}
+
+    - name: GET over TCP
+      uri: {url: "{{ t }}/json"}
+      register: r
+    - debug: {msg: "{{ r.json }} {{ r.status }} {{ r.redirected }} {{ r.msg }}"}
+
+    - name: +json suffix, bad json, xml, latin-1, no type, no length
+      uri: {url: "{{ u }}/{{ item }}", unix_socket: "{{ sock }}", return_content: true}
+      loop: [vnd-json, bad-json, xml, latin1, notype, nolength]
+      register: r
+    - debug: {var: r}
+
+    - name: HEAD
+      uri: {url: "{{ u }}/text", method: HEAD, unix_socket: "{{ sock }}"}
+      register: r
+    - debug: {var: r}
+
+    - name: POST a json body
+      uri:
+        url: "{{ u }}/echo"
+        method: POST
+        unix_socket: "{{ sock }}"
+        body_format: json
+        body: {zed: 1, b: [true, null, 1.5], a: "x", "caf\u00e9": "\u00fc"}
+        headers: {X-Test: yes}
+      register: r
+    - debug: {var: r.json}
+
+    - name: PUT a pre-formatted json string
+      uri:
+        url: "{{ u }}/echo"
+        method: put
+        unix_socket: "{{ sock }}"
+        body_format: json
+        body: '{"pre": "formatted"}'
+        headers: {content-type: application/merge-patch+json}
+      register: r
+    - debug: {var: r.json}
+
+    - name: form-urlencoded from a dict and from a list
+      uri:
+        url: "{{ u }}/echo"
+        method: POST
+        unix_socket: "{{ sock }}"
+        body_format: form-urlencoded
+        body: "{{ item }}"
+      loop:
+        - {name: a b, multi: [1, 2], none: null, amp: "&="}
+        - [[k1, v1], [k2, [x, y]]]
+        - "raw=string&x=1"
+      register: r
+    - debug: {msg: "{{ r.results | map(attribute='json') | list }}"}
+
+    - name: form-multipart
+      uri:
+        url: "{{ u }}/echo"
+        method: POST
+        unix_socket: "{{ sock }}"
+        body_format: form-multipart
+        body:
+          text_field: value
+          inline:
+            content: "inline content"
+            filename: inline.txt
+          typed:
+            content: "{\"k\": 1}"
+            mime_type: application/json
+          upload:
+            filename: files/tree/a.txt
+          upload7:
+            filename: files/tree/a.txt
+            multipart_encoding: 7or8bit
+      register: r
+    - debug: {var: r.json}
+
+    - name: body_format json without a body sends null
+      uri: {url: "{{ u }}/echo", method: POST, unix_socket: "{{ sock }}", body_format: json}
+      register: r
+    - debug: {var: r.json}
+
+    - name: raw body with a content type
+      uri:
+        url: "{{ u }}/echo"
+        method: PATCH
+        unix_socket: "{{ sock }}"
+        body: "just text"
+        headers: {Content-Type: text/plain}
+      register: r
+    - debug: {var: r.json}
+
+    - name: status_code lists
+      uri: {url: "{{ u }}/status/{{ item.code }}", unix_socket: "{{ sock }}", status_code: "{{ item.ok }}"}
+      loop:
+        - {code: 404, ok: [404]}
+        - {code: 201, ok: 201}
+        - {code: 204, ok: "200,204"}
+      register: r
+    - debug: {var: r}
+
+    - name: an unexpected status fails
+      uri: {url: "{{ u }}/status/500", unix_socket: "{{ sock }}"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: an unexpected status with return_content
+      uri: {url: "{{ u }}/status/404", unix_socket: "{{ sock }}", return_content: true}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: a 200 that was not wanted
+      uri: {url: "{{ u }}/json", unix_socket: "{{ sock }}", status_code: [201, 202]}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: follow a redirect (safe)
+      uri: {url: "{{ u }}/redirect/{{ item }}", unix_socket: "{{ sock }}"}
+      loop: [301, 302, 303, 307, 308]
+      register: r
+    - debug: {var: r}
+
+    - name: redirects not followed
+      uri: {url: "{{ u }}/redirect/302", unix_socket: "{{ sock }}", follow_redirects: none, status_code: 302}
+      register: r
+    - debug: {var: r}
+
+    - name: safe does not follow a POST
+      uri: {url: "{{ u }}/redirect/302", method: POST, unix_socket: "{{ sock }}"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: all follows a POST, 307 keeps the method and body
+      uri:
+        url: "{{ u }}/redirect/{{ item }}?echo"
+        method: POST
+        body: "payload"
+        unix_socket: "{{ sock }}"
+        follow_redirects: all
+        headers: {Content-Type: text/plain}
+      loop: [301, 302, 303, 307]
+      register: r
+    - debug: {msg: "{{ r.results | map(attribute='json') | list }}"}
+
+    - name: urllib2 redirects
+      uri: {url: "{{ u }}/redirect/302", method: POST, unix_socket: "{{ sock }}", follow_redirects: urllib2}
+      register: r
+    - debug: {var: r.url}
+
+    - name: absolute redirect location
+      uri: {url: "{{ u }}/redirect-abs", unix_socket: "{{ sock }}", follow_redirects: none, status_code: 302}
+      register: r
+    - debug: {var: r}
+
+    - name: cookies and repeated headers
+      uri: {url: "{{ u }}/cookies", unix_socket: "{{ sock }}"}
+      register: r
+    - debug: {var: r}
+
+    - name: gzip is decompressed
+      uri: {url: "{{ u }}/gzip", unix_socket: "{{ sock }}", return_content: true}
+      register: r
+    - debug: {var: r}
+
+    - name: gzip left alone
+      uri: {url: "{{ u }}/gzip", unix_socket: "{{ sock }}", decompress: false}
+      register: r
+    - debug: {var: r}
+
+    - name: forced basic auth
+      uri: {url: "{{ u }}/basic", unix_socket: "{{ sock }}", url_username: alice, url_password: s3cret, force_basic_auth: true}
+      register: r
+    - debug: {var: r}
+
+    - name: basic auth after a challenge
+      uri: {url: "{{ u }}/basic", unix_socket: "{{ sock }}", user: alice, password: s3cret}
+      register: r
+    - debug: {var: r.json}
+
+    - name: credentials in the url
+      uri: {url: "http://alice:s3cret@localhost/basic", unix_socket: "{{ sock }}", force_basic_auth: true}
+      register: r
+    - debug: {var: r}
+
+    - name: digest auth
+      uri: {url: "{{ u }}/digest", unix_socket: "{{ sock }}", url_username: alice, url_password: s3cret}
+      register: r
+    - debug: {var: r.json}
+
+    - name: digest auth with a wrong password
+      uri: {url: "{{ u }}/digest", unix_socket: "{{ sock }}", url_username: alice, url_password: nope}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: an auth scheme urllib cannot answer
+      uri: {url: "{{ u }}/bearer", unix_socket: "{{ sock }}", url_username: alice, url_password: s3cret}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - copy: {content: "machine localhost login alice password s3cret\n", dest: "{{ workdir }}/netrc", mode: "0600"}
+    - name: credentials from netrc
+      uri: {url: "{{ u }}/basic", unix_socket: "{{ sock }}"}
+      environment: {NETRC: "{{ workdir }}/netrc"}
+      register: r
+    - debug: {var: r.json}
+
+    - name: use_netrc off
+      uri: {url: "{{ u }}/basic", unix_socket: "{{ sock }}", use_netrc: false}
+      environment: {NETRC: "{{ workdir }}/netrc"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r.status}
+
+    - name: a redirect loop
+      uri: {url: "{{ u }}/loop", unix_socket: "{{ sock }}"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: a redirect to an unsupported scheme
+      uri: {url: "{{ u }}/bad-scheme", unix_socket: "{{ sock }}"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: through an HTTP proxy
+      uri: {url: "http://proxied.invalid/proxied?x=1"}
+      environment: {http_proxy: "{{ t }}", no_proxy: ""}
+      register: r
+    - debug: {var: r.json}
+
+    - name: no_proxy bypasses the proxy
+      uri: {url: "{{ t }}/proxied"}
+      environment: {http_proxy: "http://127.0.0.1:1", no_proxy: "127.0.0.1"}
+      register: r
+    - debug: {var: r.json}
+
+    - name: use_proxy off
+      uri: {url: "{{ t }}/proxied", use_proxy: false}
+      environment: {http_proxy: "http://127.0.0.1:1"}
+      register: r
+    - debug: {var: r.json}
+
+    - name: url_password is masked in the result (no_log)
+      uri:
+        url: "{{ u }}/echo?s3cret"
+        method: POST
+        body: "pw=s3cret"
+        unix_socket: "{{ sock }}"
+        url_username: alice
+        url_password: s3cret
+        force_basic_auth: true
+      register: r
+    - debug: {var: r}
+
+    - name: wrong password
+      uri: {url: "{{ u }}/basic", unix_socket: "{{ sock }}", user: alice, password: nope}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: http_agent, force and unredirected headers
+      uri:
+        url: "{{ u }}/redirect/302?echo"
+        unix_socket: "{{ sock }}"
+        http_agent: golden-agent
+        force: true
+        headers: {X-Test: kept, X-Secret: dropped}
+        unredirected_headers: [x-secret]
+      register: r
+    - debug: {var: r.json}
+
+    - file: {path: "{{ workdir }}/dl", state: directory}
+
+    - name: download to a file
+      uri: {url: "{{ u }}/download/file.txt", unix_socket: "{{ sock }}", dest: "{{ workdir }}/dl/file.txt", mode: "0640"}
+      register: r
+    - debug: {var: r}
+
+    - name: download again (If-Modified-Since, 304)
+      uri: {url: "{{ u }}/download/file.txt?cache", unix_socket: "{{ sock }}", dest: "{{ workdir }}/dl/file.txt", status_code: [200, 304]}
+      register: r
+    - debug: {var: r}
+
+    - name: download the same content again
+      uri: {url: "{{ u }}/download/file.txt", unix_socket: "{{ sock }}", dest: "{{ workdir }}/dl/file.txt"}
+      register: r
+    - debug: {var: r}
+
+    - name: download into a directory (url basename)
+      uri: {url: "{{ u }}/download/named.txt", unix_socket: "{{ sock }}", dest: "{{ workdir }}/dl"}
+      register: r
+    - debug: {var: r}
+
+    - name: download into a directory (content-disposition)
+      uri: {url: "{{ u }}/download/x?disposition", unix_socket: "{{ sock }}", dest: "{{ workdir }}/dl/"}
+      register: r
+    - debug: {var: r}
+    - command: cat {{ workdir }}/dl/from-header.txt
+
+    - name: json download with dest
+      uri: {url: "{{ u }}/json", unix_socket: "{{ sock }}", dest: "{{ workdir }}/dl/data.json"}
+      register: r
+    - debug: {var: r}
+
+    - name: creates skips
+      uri: {url: "{{ u }}/json", unix_socket: "{{ sock }}", creates: "{{ workdir }}/dl/file.txt"}
+      register: r
+    - debug: {var: r}
+
+    - name: removes skips
+      uri: {url: "{{ u }}/json", unix_socket: "{{ sock }}", removes: "{{ workdir }}/nope"}
+      register: r
+    - debug: {var: r}
+
+    - name: creates/removes that do not skip
+      uri: {url: "{{ u }}/json", unix_socket: "{{ sock }}", creates: "{{ workdir }}/nope", removes: "{{ workdir }}/dl"}
+      register: r
+    - debug: {var: r.status}
+
+    - name: src uploads a controller file
+      uri: {url: "{{ u }}/echo", method: POST, unix_socket: "{{ sock }}", src: files/tree/a.txt}
+      register: r
+    - debug: {var: r.json}
+
+    - copy: {content: "remote body\n", dest: "{{ workdir }}/body.txt"}
+    - name: remote_src uploads a target file
+      uri: {url: "{{ u }}/echo", method: POST, unix_socket: "{{ sock }}", src: "{{ workdir }}/body.txt", remote_src: true}
+      register: r
+    - debug: {var: r.json}
+
+    - name: remote_src with a missing file
+      uri: {url: "{{ u }}/echo", method: POST, unix_socket: "{{ sock }}", src: "{{ workdir }}/missing.txt", remote_src: true}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: src missing on the controller
+      uri: {url: "{{ u }}/echo", method: POST, unix_socket: "{{ sock }}", src: no-such-file.txt}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: multipart body must be a mapping
+      uri: {url: "{{ u }}/echo", method: POST, unix_socket: "{{ sock }}", body_format: form-multipart, body: "x=1"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: multipart value of a bad type
+      uri: {url: "{{ u }}/echo", method: POST, unix_socket: "{{ sock }}", body_format: form-multipart, body: {a: [1]}}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: multipart value without content or filename
+      uri: {url: "{{ u }}/echo", method: POST, unix_socket: "{{ sock }}", body_format: form-multipart, body: {a: {mime_type: text/plain}}}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: body and src are mutually exclusive
+      uri: {url: "{{ u }}/echo", unix_socket: "{{ sock }}", body: x, src: files/tree/a.txt}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: a bad method
+      uri: {url: "{{ u }}/echo", method: "GET X", unix_socket: "{{ sock }}"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: a bad body_format
+      uri: {url: "{{ u }}/echo", body_format: yaml, unix_socket: "{{ sock }}"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: missing url
+      uri: {method: GET}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: connection refused
+      uri: {url: "http://127.0.0.1:1/"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: a missing unix socket
+      uri: {url: "{{ u }}/json", unix_socket: /tmp/understudy-golden-missing.sock}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: read timeout
+      uri: {url: "{{ u }}/slow", unix_socket: "{{ sock }}", timeout: 1}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: https without certificate validation
+      uri: {url: "https://127.0.0.1:{{ tls_port }}/json", validate_certs: false}
+      register: r
+    - debug: {msg: "{{ r.status }} {{ r.json }}"}
+
+    - name: https against a self-signed certificate
+      uri: {url: "https://127.0.0.1:{{ tls_port }}/json"}
+      register: r
+      ignore_errors: true
+    - debug: {msg: "{{ r.status }} {{ r.msg | regex_replace('127.0.0.1:[0-9]+', 'HOST') }}"}
+
+    - name: https with the certificate as ca_path
+      uri: {url: "https://localhost:{{ tls_port }}/json", ca_path: "{{ workdir }}/cert.pem"}
+      register: r
+    - debug: {msg: "{{ r.status }} {{ r.json }}"}
+
+    - name: https with ca_path and the wrong host name
+      uri: {url: "https://127.0.0.1:{{ tls_port }}/json", ca_path: "{{ workdir }}/cert.pem"}
+      register: r
+      ignore_errors: true
+    - debug: {msg: "{{ r.status }} {{ r.msg | regex_replace('127.0.0.1:[0-9]+', 'HOST') }}"}
+
+    - name: https with a client certificate
+      uri:
+        url: "https://127.0.0.1:{{ tls_port }}/json"
+        validate_certs: false
+        client_cert: "{{ workdir }}/cert.pem"
+        client_key: "{{ workdir }}/key.pem"
+      register: r
+    - debug: {msg: "{{ r.status }}"}
+
+    - name: ciphers
+      uri: {url: "https://127.0.0.1:{{ tls_port }}/json", validate_certs: false, ciphers: [ECDHE-RSA-AES128-GCM-SHA256, ECDHE-RSA-AES256-GCM-SHA384]}
+      register: r
+    - debug: {msg: "{{ r.status }}"}
+
+    - name: no usable cipher
+      uri: {url: "{{ u }}/json", unix_socket: "{{ sock }}", ciphers: [NOT-A-CIPHER]}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: status_code that is not a number
+      uri: {url: "{{ u }}/json", unix_socket: "{{ sock }}", status_code: [200, abc]}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: a url without a scheme
+      uri: {url: "localhost/json"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: a url with an unknown scheme
+      uri: {url: "gopher://localhost/json"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: HEAD with return_content
+      uri: {url: "{{ u }}/text", method: HEAD, unix_socket: "{{ sock }}", return_content: true}
+      register: r
+    - debug: {var: r.content}
+
+    - name: a missing ca_path
+      uri: {url: "https://127.0.0.1:{{ tls_port }}/json", ca_path: "{{ workdir }}/nope.pem"}
+      register: r
+      ignore_errors: true
+    - debug: {msg: "{{ r.status }} {{ r.msg }}"}
+
+    - name: check mode
+      uri: {url: "{{ u }}/json", unix_socket: "{{ sock }}"}
+      check_mode: true
+      register: r
+    - debug: {var: r}
+
+    - name: stop the fixture server
+      uri: {url: "{{ u }}/shutdown", unix_socket: "{{ sock }}"}
