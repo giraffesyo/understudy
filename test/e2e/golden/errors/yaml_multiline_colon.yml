@@ -1,0 +1,7 @@
+# YAML load error: a multi-line plain scalar with ": " on its second line
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: this is
+          a: multiline

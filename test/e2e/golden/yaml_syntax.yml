@@ -1,0 +1,41 @@
+%TAG !e! tag:yaml.org,2002:
+---
+# YAML that libyaml (and so ansible-core) accepts: tabs where no token or
+# indentation is expected, %TAG handles, ? keys in flow collections, the
+# "!" tag and !unsafe resolving scalars as if plain, merge keys (merged
+# keys first, earlier sources winning), NEL and LS characters.
+- hosts: all
+  gather_facts: false
+  vars:
+    tabbed:	after colon
+    tabbed_value: x	
+    handle: !e!str 12
+    flowq: [? a, b: c]
+    unsafe_int: !unsafe 123
+    unsafe_quoted: !unsafe "123"
+    unsafe_list: !unsafe [1, "{{ x }}", yes]
+    bang: ! "123"
+    base: &base {x: 1, y: 2, q: 0}
+    other: &other {y: 20, z: 30, x: 10}
+    merged_list:
+      a: 0
+      <<: [*base, *other]
+    merged_twice:
+      <<: *other
+      k: 1
+      <<: *base
+    nel: "a\Nb"
+    ls: "a b"
+    str_int: !!str 123
+    int_str: !!int "0x1f"
+    float_str: !!float "1_000.5"
+  tasks:
+    - debug: msg="{{ tabbed }}|{{ tabbed_value }}|{{ handle }}"
+    - debug: var=flowq
+    - debug:
+        msg: "{{ unsafe_int | type_debug }} {{ unsafe_quoted | type_debug }} {{ unsafe_list[0] | type_debug }} {{ unsafe_list[2] | type_debug }} {{ bang | type_debug }}"
+    - debug: var=unsafe_list
+    - debug: msg="{{ merged_list }} {{ merged_twice }}"
+    - debug: msg="{{ merged_list | to_json }}"
+    - debug: msg="{{ nel | length }} {{ ls | length }}"
+    - debug: msg="{{ str_int | type_debug }} {{ int_str }} {{ float_str }}"

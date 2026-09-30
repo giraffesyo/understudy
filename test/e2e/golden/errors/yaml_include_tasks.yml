@@ -1,0 +1,7 @@
+# YAML load error in an included task file: fatal to the run, no "included:" line
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=before
+    - include_tasks: files/yaml_bad_tasks.yml
+    - debug: msg=after

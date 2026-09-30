@@ -1,0 +1,6 @@
+# YAML load error: a bad \x escape
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "a\x4gb"

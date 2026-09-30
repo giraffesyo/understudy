@@ -162,27 +162,25 @@ func LoadFile(path string) ([]*Play, error) {
 
 // Load parses playbook YAML into plays.
 func Load(data []byte, filename string) ([]*Play, error) {
-	f, err := yaml.Parse(data, filename)
+	doc, err := yaml.ParseSingle(data, filename)
 	if err != nil {
 		return nil, err
 	}
+	if doc == nil || doc.IsNull() {
+		return nil, &parseError{file: filename, msg: "Empty playbook, nothing to do: " + filename}
+	}
+	items, ok := doc.Seq()
+	if !ok {
+		v, _ := doc.Decode()
+		return nil, errAt(filename, doc, "A playbook must be a list of plays, got a %s instead: %s", pyTaggedType(v), filename)
+	}
 	var plays []*Play
-	for _, doc := range f.Docs {
-		items, ok := doc.Seq()
-		if !ok {
-			if s, isScalar := doc.Str(); isScalar && s == "" {
-				continue // empty document
-			}
-			v, _ := doc.Decode()
-			return nil, errAt(filename, doc, "A playbook must be a list of plays, got a %s instead: %s", pyTaggedType(v), filename)
+	for _, item := range items {
+		play, err := parsePlay(item, filename)
+		if err != nil {
+			return nil, err
 		}
-		for _, item := range items {
-			play, err := parsePlay(item, filename)
-			if err != nil {
-				return nil, err
-			}
-			plays = append(plays, play)
-		}
+		plays = append(plays, play)
 	}
 	return plays, nil
 }
@@ -464,14 +462,11 @@ func parseImportTasks(item, pathNode *yaml.Node, file string, handlers bool, bc 
 	if err != nil {
 		return nil, errAt(file, pathNode, "import_tasks: %v", err)
 	}
-	f, err := yaml.Parse(data, path)
-	if err != nil {
+	doc, err := yaml.ParseSingle(data, path)
+	if err != nil || doc == nil {
 		return nil, err
 	}
-	if len(f.Docs) == 0 {
-		return nil, nil
-	}
-	tasks, err := parseTaskListIn(f.Docs[0], path, handlers, bc, enclosing)
+	tasks, err := parseTaskListIn(doc, path, handlers, bc, enclosing)
 	if err != nil {
 		return nil, err
 	}

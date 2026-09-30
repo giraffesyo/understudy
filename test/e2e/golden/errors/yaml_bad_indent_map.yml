@@ -1,0 +1,7 @@
+# YAML load error: a mapping key dedented out of its mapping
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=1
+      name: x
+     when: true

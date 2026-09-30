@@ -1,0 +1,6 @@
+# YAML load error in an included role's tasks
+- hosts: all
+  gather_facts: false
+  tasks:
+    - include_role: {name: yaml_bad_tasks}
+    - debug: msg=after

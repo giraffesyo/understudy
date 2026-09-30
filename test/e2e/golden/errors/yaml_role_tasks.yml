@@ -1,0 +1,4 @@
+# YAML load error in a play role's tasks
+- hosts: all
+  gather_facts: false
+  roles: [yaml_bad_tasks]

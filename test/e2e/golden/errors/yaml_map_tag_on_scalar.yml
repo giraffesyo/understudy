@@ -1,0 +1,6 @@
+# YAML load error: a !!map tag on a scalar
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: !!map a

@@ -241,7 +241,6 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 	if err := r.promptVars(play); err != nil {
 		return err
 	}
-	r.Callback.PlayStart(play)
 	if play.Dir != "" {
 		// Several playbooks in one run: paths resolve from each play's
 		// own playbook directory.
@@ -290,6 +289,9 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 		}
 		r.Store.AddVarsFile(m)
 	}
+	// ansible-core reads vars_files before the banner: a file that fails
+	// to parse ends the run without one.
+	r.Callback.PlayStart(play)
 
 	allHosts, err := r.resolvePlayHosts(play)
 	if err != nil {
@@ -1084,7 +1086,7 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 			}
 		}
 		r.Callback.HostResult(host, task, shown(task, res), false, label)
-		m := res.ToVars()
+		m := orderedResult(task, task.Module, res.ToVars())
 		itemResults = append(itemResults, m)
 		anyChanged = anyChanged || res.Changed
 		anyFailed = anyFailed || res.Failed
@@ -1325,7 +1327,7 @@ func applyChangedFailedWhen(task *playbook.Task, vctx *vars.Context, res *agentp
 // registerOverlay exposes the in-flight result under the register name (and
 // 'result' when unregistered) for until/failed_when/changed_when.
 func registerOverlay(task *playbook.Task, res *agentproto.Result) map[string]any {
-	m := res.ToVars()
+	m := orderedResult(task, task.Module, res.ToVars())
 	name := task.Register
 	if name == "" {
 		name = "result"
@@ -1790,10 +1792,10 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 		for _, h := range r.fanOut(host, task) {
 			if task.Module == "include_vars" {
 				// include_vars data stays trusted (templated on use).
-				r.Store.SetHostVarRaw(h, task.Register, res.ToVars())
+				r.Store.SetHostVarRaw(h, task.Register, orderedResult(task, task.Module, res.ToVars()))
 				continue
 			}
-			r.Store.SetHostFact(h, task.Register, res.ToVars())
+			r.Store.SetHostFact(h, task.Register, orderedResult(task, task.Module, res.ToVars()))
 		}
 	}
 	// Gathered facts land in the facts layer, both prefixed at top level
@@ -1825,7 +1827,7 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	if res.Failed && !ignored && r.catchInRescue(host, task) {
 		// Rescued: the fatal line printed, but the host stays in the play
 		// and the failure details flow into the rescue section's vars.
-		r.Store.SetHostFact(host, "ansible_failed_result", res.ToVars())
+		r.Store.SetHostFact(host, "ansible_failed_result", orderedResult(task, task.Module, res.ToVars()))
 		r.Store.SetHostFact(host, "ansible_failed_task", map[string]any{
 			"name": task.Name, "action": task.Module,
 		})

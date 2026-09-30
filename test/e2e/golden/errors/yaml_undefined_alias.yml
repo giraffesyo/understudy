@@ -1,0 +1,6 @@
+# YAML load error: an alias to an undefined anchor
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: *foo

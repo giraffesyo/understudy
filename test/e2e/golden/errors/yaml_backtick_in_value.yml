@@ -1,0 +1,6 @@
+# YAML load error: a value starting with a backtick
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: `x`

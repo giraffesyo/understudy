@@ -1,0 +1,6 @@
+# YAML load error: a merge key with a scalar value
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        <<: 1

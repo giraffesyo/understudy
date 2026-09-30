@@ -1,0 +1,6 @@
+# YAML load error: an anchor with no name
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: & foo

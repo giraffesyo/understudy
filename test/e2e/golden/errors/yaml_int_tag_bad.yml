@@ -1,0 +1,6 @@
+# YAML load error: a !!int that is not a number (an error with no line)
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: !!int abc

@@ -7,7 +7,6 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"hash"
 	"hash/fnv"
@@ -21,6 +20,7 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"github.com/giraffesyo/understudy/internal/omap"
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
@@ -237,7 +237,7 @@ func registerAnsibleFilters(e *Engine) {
 		if v, ok := kwargs["value_name"]; ok {
 			valName, _ = asString(v)
 		}
-		out := make(map[string]any, len(items))
+		out := yaml.NewOMap()
 		for _, item := range items {
 			m, ok := anyToMap(item)
 			if !ok {
@@ -252,7 +252,7 @@ func registerAnsibleFilters(e *Engine) {
 			if !ok {
 				ks = toStr(k)
 			}
-			out[ks] = v
+			out.Set(ks, v)
 		}
 		return out, nil
 	}
@@ -507,27 +507,36 @@ func registerAnsibleFilters(e *Engine) {
 	// ---- serialization ----
 	// to_json/to_nice_json match Python's json.dumps: "', '" item and "': '"
 	// key separators (Go's encoding/json omits the spaces), keys sorted.
-	f["to_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		// json.dumps default sort_keys=False: preserve dict insertion order.
-		return pyJSON(in, 0, false), nil
-	}
-	f["to_nice_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		indent := 4
+	// json.dumps' indent and sort_keys pass through.
+	jsonOpts := func(kwargs map[string]any, indent int, sortKeys bool) (int, bool) {
 		if v, ok := kwargs["indent"]; ok {
 			if n, ok := asInt(v); ok {
 				indent = int(n)
 			}
 		}
+		if v, ok := kwargs["sort_keys"]; ok {
+			sortKeys = truthy(v)
+		}
+		return indent, sortKeys
+	}
+	f["to_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		// json.dumps default sort_keys=False: preserve dict insertion order.
+		indent, sortKeys := jsonOpts(kwargs, 0, false)
+		return pyJSON(in, indent, sortKeys), nil
+	}
+	f["to_nice_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		// Ansible's to_nice_json passes sort_keys=True.
-		return pyJSON(in, indent, true), nil
+		indent, sortKeys := jsonOpts(kwargs, 4, true)
+		return pyJSON(in, indent, sortKeys), nil
 	}
 	f["from_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
 		if !ok {
 			return nil, fmt.Errorf("from_json requires a string")
 		}
-		var out any
-		if err := json.Unmarshal([]byte(s), &out); err != nil {
+		// Objects keep their key order, as Python's json.loads builds dicts.
+		out, err := omap.UnmarshalJSON([]byte(s))
+		if err != nil {
 			return nil, err
 		}
 		return normalizeJSON(out), nil
@@ -1554,6 +1563,11 @@ func normalizeJSON(v any) any {
 	case map[string]any:
 		for k, val := range t {
 			t[k] = normalizeJSON(val)
+		}
+		return t
+	case *yaml.OMap:
+		for _, k := range t.Keys() {
+			t.Set(k, normalizeJSON(t.Get(k)))
 		}
 		return t
 	}

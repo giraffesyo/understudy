@@ -1,0 +1,5 @@
+# YAML load error in an imported task file
+- hosts: all
+  gather_facts: false
+  tasks:
+    - import_tasks: files/yaml_bad_tasks.yml
