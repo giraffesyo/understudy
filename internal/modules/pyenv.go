@@ -2,6 +2,7 @@ package modules
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,30 +74,125 @@ func targetPython(env *RunEnv) *pyTarget {
 	return v.(*pyTarget)
 }
 
+// targetHasPython reports whether the task has a Python ansible could
+// run its module with.
+func targetHasPython(env *RunEnv) bool { return len(targetPython(env).paths) > 0 }
+
+// targetPythonExecutable is the module's sys.executable, for messages.
+func targetPythonExecutable(env *RunEnv) string {
+	if t := targetPython(env); len(t.paths) > 0 {
+		return t.paths[0]
+	}
+	return "/usr/bin/python3"
+}
+
+// missingRequiredLibFor is missing_required_lib naming the task's Python.
+func missingRequiredLibFor(env *RunEnv, library string) string {
+	host, _ := os.Hostname()
+	return fmt.Sprintf("Failed to import the required Python library (%s) on %s's Python %s.", library, host, targetPythonExecutable(env)) +
+		" Please read the module documentation and install it in the appropriate location." +
+		" If the required library is installed, but Ansible is using the wrong Python interpreter," +
+		" please consult the documentation on ansible_python_interpreter"
+}
+
+// pyLibAvailable reports whether ansible's module could import a Python
+// library on this host: with a Python, whether the distribution is
+// installed (at least minVersion, when given); without one, true, as
+// understudy's native code stands in for the library where ansible
+// could not run at all.
+func pyLibAvailable(env *RunEnv, dist, minVersion string) bool {
+	if !targetHasPython(env) {
+		return true
+	}
+	v := pyDistVersion(env, dist)
+	return v != "" && (minVersion == "" || !looseVersionLess(v, minVersion))
+}
+
 // targetPythonVersion is the major.minor ("3.12") of the task's Python,
 // or "" when there is none or its version cannot be told from its path.
 func targetPythonVersion(env *RunEnv) string { return targetPython(env).version }
 
 // pySitePackages lists the directories the target's Python imports
-// third-party packages from, most specific first: the interpreter's own
-// prefix, the version's site-packages (lib and lib64, /usr/local and
-// /usr), then Debian's version-less dist-packages.
+// third-party packages from, as site.py builds sys.path: the user site,
+// the interpreter's prefix (a venv's own, plus its base's with
+// include-system-site-packages), the distribution's site- and
+// dist-packages directories, each followed by the directories its .pth
+// files add.
 func pySitePackages(env *RunEnv) []string {
 	t := targetPython(env)
 	v := t.version
+	if v == "" {
+		return []string{"/usr/local/lib/python3/dist-packages", "/usr/lib/python3/dist-packages"}
+	}
+	lib := "python" + v
 	var dirs []string
-	if v != "" {
-		// <prefix>/bin/python -> <prefix>/lib/pythonX.Y/site-packages
-		for _, p := range t.paths {
-			dirs = append(dirs, filepath.Join(filepath.Dir(filepath.Dir(p)), "lib", "python"+v, "site-packages"))
-		}
-		for _, prefix := range []string{"/usr/local/lib", "/usr/local/lib64", "/usr/lib", "/usr/lib64"} {
-			dirs = append(dirs, prefix+"/python"+v+"/site-packages", prefix+"/python"+v+"/dist-packages")
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, ".local", "lib", lib, "site-packages"))
+	}
+	for _, p := range t.paths {
+		prefix := filepath.Dir(filepath.Dir(p))
+		dirs = append(dirs, filepath.Join(prefix, "lib", lib, "site-packages"))
+		if cfg, err := os.ReadFile(filepath.Join(prefix, "pyvenv.cfg")); err == nil {
+			home, system := "", false
+			for _, line := range strings.Split(string(cfg), "\n") {
+				k, val, _ := strings.Cut(line, "=")
+				switch strings.TrimSpace(k) {
+				case "home":
+					home = strings.TrimSpace(val)
+				case "include-system-site-packages":
+					system = strings.EqualFold(strings.TrimSpace(val), "true")
+				}
+			}
+			if system && home != "" {
+				dirs = append(dirs, filepath.Join(filepath.Dir(home), "lib", lib, "site-packages"))
+			}
 		}
 	}
+	for _, prefix := range []string{"/usr/local/lib", "/usr/local/lib64", "/usr/lib", "/usr/lib64"} {
+		dirs = append(dirs, prefix+"/"+lib+"/site-packages", prefix+"/"+lib+"/dist-packages")
+	}
 	dirs = append(dirs, "/usr/local/lib/python3/dist-packages", "/usr/lib/python3/dist-packages")
-	return dirs
+
+	var out []string
+	seen := map[string]bool{}
+	var add func(dir string)
+	add = func(dir string) {
+		if seen[dir] {
+			return
+		}
+		seen[dir] = true
+		out = append(out, dir)
+		pths, _ := filepath.Glob(filepath.Join(dir, "*.pth"))
+		for _, pth := range pths {
+			data, err := os.ReadFile(pth)
+			if err != nil {
+				continue
+			}
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimRight(line, "\r ")
+				switch {
+				case line == "" || strings.HasPrefix(line, "#"):
+				case strings.HasPrefix(line, "import"):
+					// Homebrew's "import site; site.addsitedir('...')".
+					if m := pthAddSiteDirRe.FindStringSubmatch(line); m != nil {
+						add(m[1])
+					}
+				default:
+					if !filepath.IsAbs(line) {
+						line = filepath.Join(dir, line)
+					}
+					add(line)
+				}
+			}
+		}
+	}
+	for _, d := range dirs {
+		add(d)
+	}
+	return out
 }
+
+var pthAddSiteDirRe = regexp.MustCompile(`site\.addsitedir\(['"]([^'"]+)['"]\)`)
 
 // pyDistVersion returns the installed version of a Python distribution
 // (PyMySQL, mysqlclient, ...) from its .dist-info or .egg-info metadata,

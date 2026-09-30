@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
+	"github.com/giraffesyo/understudy/internal/modules/sshkey"
 )
 
 func init() {
@@ -581,8 +583,10 @@ func parsePublicKey(s string, trim string) *sshPublicKey {
 	return &sshPublicKey{typ: parts[0], data: parts[1], comment: &c}
 }
 
-// keypairBackend is KeypairBackendOpensshBin: the ssh-keygen driven
-// implementation (the cryptography backend needs Python's cryptography).
+// keypairBackend is KeypairBackend with both of its implementations:
+// KeypairBackendOpensshBin (ssh-keygen) and, when crypto is set,
+// KeypairBackendCryptography, whose python-cryptography keys the sshkey
+// package generates, writes and loads natively.
 type keypairBackend struct {
 	env        *RunEnv
 	p          *args.Parsed
@@ -593,6 +597,11 @@ type keypairBackend struct {
 	typ        string
 	size       int64
 	changed    bool
+
+	crypto     bool
+	passphrase []byte // nil: none
+	noBcrypt   bool   // the target's cryptography cannot use the passphrase
+	format     string // private key format written: SSH, PKCS1 or PKCS8
 
 	origPriv, priv *sshPrivateKey
 	origPub, pubK  *sshPublicKey
@@ -606,27 +615,32 @@ func opensshKeypairModule(env *RunEnv, rawArgs map[string]any) *agentproto.Resul
 	if err != nil {
 		return agentproto.Fail("%v", err)
 	}
+	// select_backend: ssh-keygen unless a passphrase is set, else the
+	// cryptography backend. That one is native here; where the target has
+	// a Python, it is available when ansible's would be (python
+	// cryptography >= 3.3 installed), so both pick and fail alike.
 	keygen, kerr := getBinPath("ssh-keygen")
+	canCrypto := pyLibAvailable(env, "cryptography", "3.3")
 	backend := p.Str("backend")
 	if backend == "auto" {
-		if kerr == nil && p.Str("passphrase") == "" {
+		switch {
+		case kerr == nil && p.Str("passphrase") == "":
 			backend = "opensshbin"
-		} else {
+		case canCrypto:
 			backend = "cryptography"
+		default:
+			return keypairFail("Cannot find either the OpenSSH binary in the PATH or cryptography >= 3.3 installed on this system")
 		}
 	}
-	if backend == "cryptography" {
-		host, _ := os.Hostname()
-		return keypairFail(fmt.Sprintf("Failed to import the required Python library (cryptography >= 3.3) on %s's Python /usr/bin/python3."+
-			" Please read the module documentation and install it in the appropriate location."+
-			" If the required library is installed, but Ansible is using the wrong Python interpreter,"+
-			" please consult the documentation on ansible_python_interpreter", host))
-	}
-	if kerr != nil {
+	if backend == "opensshbin" && kerr != nil {
 		return keypairFail("Cannot find the OpenSSH binary in the PATH")
 	}
+	if backend == "cryptography" && !canCrypto {
+		return keypairFail(missingRequiredLibFor(env, "cryptography >= 3.3"))
+	}
 
-	k := &keypairBackend{env: env, p: p, keygen: keygen, typ: p.Str("type"), regenerate: p.Str("regenerate")}
+	k := &keypairBackend{env: env, p: p, keygen: keygen, typ: p.Str("type"), regenerate: p.Str("regenerate"),
+		crypto: backend == "cryptography"}
 	if p.Bool("force") {
 		k.regenerate = "always"
 	}
@@ -647,7 +661,18 @@ func opensshKeypairModule(env *RunEnv, rawArgs map[string]any) *agentproto.Resul
 	if info, err := os.Stat(k.path); err == nil && info.IsDir() {
 		return keypairFail(k.path + " is a directory. Please specify a path to a file.")
 	}
-	if p.Str("private_key_format") != "auto" {
+	if k.crypto {
+		if k.typ == "rsa1" {
+			return keypairFail("RSA1 keys are not supported by the cryptography backend")
+		}
+		if pw := p.Str("passphrase"); pw != "" {
+			k.passphrase = []byte(pw)
+			// cryptography encrypts (and re-encodes) OpenSSH keys with the
+			// bcrypt module; without it every passphrase operation fails.
+			k.noBcrypt = !pyLibAvailable(env, "bcrypt", "")
+		}
+		k.format = k.keyFormat()
+	} else if p.Str("private_key_format") != "auto" {
 		return keypairFail("'auto' is the only valid option for 'private_key_format' when 'backend' is not 'cryptography'")
 	}
 	if fail := k.execute(); fail != nil {
@@ -695,9 +720,69 @@ func (k *keypairBackend) run(argv []string, data string) (int, string, string) {
 	return runCommand(k.env, append([]string{k.keygen}, argv...), cmdOpts{Data: data})
 }
 
+// keyFormat is _get_key_format: auto writes OpenSSH's own format, or
+// PKCS1 for non-ed25519 keys when the target's OpenSSH predates 7.8.
+func (k *keypairBackend) keyFormat() string {
+	switch f := k.p.Str("private_key_format"); f {
+	case "auto":
+		v := sshVersion(k.env)
+		if v == "" {
+			v = "7.8"
+		}
+		if looseVersionLess(v, "7.8") && k.typ != "ed25519" {
+			return sshkey.FormatPKCS1
+		}
+		return sshkey.FormatSSH
+	default:
+		return strings.ToUpper(f)
+	}
+}
+
+// errNeedBcrypt is cryptography's UnsupportedAlgorithm without bcrypt.
+var errNeedBcrypt = errors.New("Need bcrypt module")
+
+// loadCrypto is OpensshKeypair.load(no_public_key=True).
+func (k *keypairBackend) loadCrypto(passphrase []byte) (any, error) {
+	if passphrase != nil && k.noBcrypt {
+		return nil, errNeedBcrypt
+	}
+	data, err := os.ReadFile(k.path)
+	if err != nil {
+		return nil, &sshkey.ErrInvalid{Msg: "No file was found at " + k.path}
+	}
+	return sshkey.ParsePrivate(data, passphrase)
+}
+
+// privateKeyFormat is parse_private_key_format: the PEM header's format.
+func privateKeyFormat(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	line, _, _ := strings.Cut(string(data), "\n")
+	switch strings.TrimSpace(line) {
+	case "-----BEGIN OPENSSH PRIVATE KEY-----":
+		return "SSH"
+	case "-----BEGIN PRIVATE KEY-----":
+		return "PKCS8"
+	case "-----BEGIN RSA PRIVATE KEY-----":
+		return "PKCS1"
+	}
+	return ""
+}
+
 func (k *keypairBackend) loadPrivate() *sshPrivateKey {
 	if !pathExists(k.path) {
 		return nil
+	}
+	if k.crypto {
+		key, err := k.loadCrypto(k.passphrase)
+		if err != nil {
+			return nil
+		}
+		typ, size := sshkey.TypeAndSize(key)
+		return &sshPrivateKey{size: int64(size), typ: typ, fp: sshkey.Fingerprint(sshkey.AuthorizedKey(key)),
+			format: privateKeyFormat(k.path), initialized: true}
 	}
 	rc, out, _ := k.run([]string{"-l", "-f", k.path}, "")
 	if rc != 0 {
@@ -724,13 +809,29 @@ func (k *keypairBackend) loadPublic() *sshPublicKey {
 }
 
 func (k *keypairBackend) privateReadable() bool {
+	if k.crypto {
+		if _, err := k.loadCrypto(k.passphrase); err != nil {
+			return false
+		}
+		// A passphrase given for a key that needs none: not readable.
+		if k.passphrase != nil {
+			_, err := k.loadCrypto(nil)
+			return err != nil
+		}
+		return true
+	}
 	rc, _, stderr := k.run([]string{"-P", "", "-y", "-f", k.path}, "")
 	return !(rc == 255 || strings.Contains(stderr, "is not a public key file") ||
 		strings.Contains(stderr, "incorrect passphrase") || strings.Contains(stderr, "load failed"))
 }
 
 func (k *keypairBackend) privateValid() bool {
-	return k.origPriv != nil && k.origPriv.size == k.size && k.origPriv.typ == k.typ
+	if k.origPriv == nil || k.origPriv.size != k.size || k.origPriv.typ != k.typ {
+		return false
+	}
+	// _private_key_valid_backend: an explicit format must match the
+	// file's (auto never converts an existing key).
+	return !k.crypto || k.p.Str("private_key_format") == "auto" || k.format == k.origPriv.format
 }
 
 func (k *keypairBackend) shouldGenerate() (bool, *agentproto.Result) {
@@ -820,11 +921,54 @@ func (k *keypairBackend) generate() *agentproto.Result {
 	if k.comment != nil {
 		comment = *k.comment
 	}
+	if k.crypto {
+		if fail := k.generateCrypto(tmp, comment); fail != nil {
+			return fail
+		}
+		return k.secureMove([][2]string{{tmp, k.path}, {tmp + ".pub", k.pub}})
+	}
 	rc, out, stderr := k.run([]string{"-q", "-N", "", "-b", strconv.FormatInt(k.size, 10), "-t", k.typ, "-f", tmp, "-C", comment}, "")
 	if rc != 0 {
 		return &agentproto.Result{Failed: true, Msg: strings.TrimSpace(stderr), RC: agentproto.IntPtr(rc), Stdout: out, Stderr: stderr}
 	}
 	return k.secureMove([][2]string{{tmp, k.path}, {tmp + ".pub", k.pub}})
+}
+
+// generateCrypto is KeypairBackendCryptography._generate_keypair: the
+// private key (0600) in the chosen format, and the public key (0644)
+// with the comment and no trailing newline.
+func (k *keypairBackend) generateCrypto(tmp, comment string) *agentproto.Result {
+	if k.passphrase != nil && k.noBcrypt {
+		return keypairFail("unexpected error occurred: " + errNeedBcrypt.Error())
+	}
+	if k.typ == "rsa" && k.size >= 16384 {
+		return keypairFail(fmt.Sprintf("unexpected error occurred: %d is not a valid key size for rsa keys", k.size))
+	}
+	key, err := sshkey.Generate(k.typ, int(k.size))
+	var pem []byte
+	if err == nil {
+		pem, err = sshkey.MarshalPrivate(key, k.format, k.passphrase)
+	}
+	if err != nil {
+		return keypairFail("unexpected error occurred: " + err.Error())
+	}
+	pub := sshkey.AuthorizedKey(key)
+	if comment != "" {
+		pub += " " + comment
+	}
+	for _, f := range []struct {
+		path string
+		data []byte
+		mode os.FileMode
+	}{{tmp, pem, 0o600}, {tmp + ".pub", []byte(pub), 0o644}} {
+		if err := os.WriteFile(f.path, f.data, f.mode); err != nil {
+			return keypairFail(pyOSError(err))
+		}
+		if err := os.Chmod(f.path, f.mode); err != nil {
+			return keypairFail(pyOSError(err))
+		}
+	}
+	return nil
 }
 
 // secureMove is _safe_secure_move: an existing destination is replaced
@@ -863,6 +1007,13 @@ func (k *keypairBackend) secureMove(pairs [][2]string) *agentproto.Result {
 }
 
 func (k *keypairBackend) matchingPublic() *sshPublicKey {
+	if k.crypto {
+		key, err := k.loadCrypto(k.passphrase)
+		if err != nil {
+			return nil // simulates ssh-keygen's empty output
+		}
+		return parsePublicKey(sshkey.AuthorizedKey(key), "\n")
+	}
 	_, out, _ := k.run([]string{"-P", "", "-y", "-f", k.path}, "")
 	return parsePublicKey(out, "\n")
 }
@@ -904,6 +1055,22 @@ func (k *keypairBackend) restorePublic() *agentproto.Result {
 	}
 	if fail := k.secureMove([][2]string{{tmp, k.pub}}); fail != nil {
 		return keypairFail("The public key is missing or does not match the private key. Unable to regenerate the public key.")
+	}
+	if k.comment != nil && *k.comment != "" && k.crypto {
+		// _update_comment: the public key rewritten with the comment.
+		key, err := k.loadCrypto(k.passphrase)
+		if err != nil {
+			return keypairFail("unexpected error occurred: " + err.Error())
+		}
+		tmp2 := filepath.Join(dir, filepath.Base(k.pub)+".comment")
+		mode := os.FileMode(0o644)
+		if info, err := os.Stat(k.pub); err == nil && info.Mode().Perm() != 0 {
+			mode = info.Mode().Perm()
+		}
+		if err := os.WriteFile(tmp2, []byte(sshkey.AuthorizedKey(key)+" "+*k.comment+"\n"), mode); err != nil {
+			return keypairFail(pyOSError(err))
+		}
+		return k.secureMove([][2]string{{tmp2, k.pub}})
 	}
 	if k.comment != nil && *k.comment != "" {
 		if info, err := os.Stat(k.path); err == nil && info.Mode().Perm()&0o200 == 0 {

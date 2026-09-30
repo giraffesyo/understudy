@@ -1,0 +1,161 @@
+---
+# openssh_keypair's cryptography backend (explicit, and what auto picks
+# with a passphrase). Keys are random, so the module results are no_log
+# and shown through their stable parts: changed, size, type, comment,
+# the fingerprint's and public key's shape, the private key's PEM
+# header, the public key file's layout and both files' modes.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/keys"
+    shape: >-
+      {{ {'changed': r.changed, 'failed': r.failed | default(false), 'msg': r.msg | default(''),
+          'size': r.size | default(''), 'type': r.type | default(''), 'comment': r.comment | default(''),
+          'filename': r.filename | default('') | replace(workdir, 'WORK'),
+          'fingerprint': r.fingerprint | default('') | regex_replace('^SHA256:[A-Za-z0-9+/]{43}$', 'SHA256:FP'),
+          'public_key': r.public_key | default('') | regex_replace(' [A-Za-z0-9+/=]+$', ' B64')} }}
+  tasks:
+    - file: {path: "{{ d }}", state: absent}
+    - file: {path: "{{ d }}", state: directory}
+
+    - name: ed25519, OpenSSH format
+      openssh_keypair: {path: "{{ d }}/ed", type: ed25519, backend: cryptography}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ shape }}"}
+    - name: the files
+      slurp: {src: "{{ item }}"}
+      loop: ["{{ d }}/ed", "{{ d }}/ed.pub"]
+      register: files
+      no_log: true
+    - debug:
+        msg:
+          - "{{ (files.results[0].content | b64decode).splitlines()[0] }}"
+          - "{{ files.results[1].content | b64decode | regex_replace(' [A-Za-z0-9+/=]+', ' B64') }}"
+    - stat: {path: "{{ item }}"}
+      loop: ["{{ d }}/ed", "{{ d }}/ed.pub"]
+      register: st
+      no_log: true
+    - debug: {msg: "{{ st.results | map(attribute='stat.mode') | list }}"}
+
+    - name: ed25519 again (idempotent)
+      openssh_keypair: {path: "{{ d }}/ed", type: ed25519, backend: cryptography}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ shape }}"}
+
+    - name: a comment rewrites the public key only
+      openssh_keypair: {path: "{{ d }}/ed", type: ed25519, backend: cryptography, comment: golden@test}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ shape }}"}
+    - slurp: {src: "{{ d }}/ed.pub"}
+      register: pub
+      no_log: true
+    - debug: {msg: "{{ pub.content | b64decode | regex_replace(' [A-Za-z0-9+/=]+ ', ' B64 ') }}"}
+
+    - name: a missing public key is restored
+      file: {path: "{{ d }}/ed.pub", state: absent}
+    - openssh_keypair: {path: "{{ d }}/ed", type: ed25519, backend: cryptography}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ shape }}"}
+
+    - name: rsa, PKCS1, with a passphrase (auto picks cryptography)
+      openssh_keypair: {path: "{{ d }}/rsa", size: 2048, private_key_format: pkcs1, passphrase: s3cret}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ shape }}"}
+    - slurp: {src: "{{ d }}/rsa"}
+      register: priv
+      no_log: true
+    - debug: {msg: "{{ (priv.content | b64decode).splitlines()[:2] }}"}
+    - name: rsa again (idempotent)
+      openssh_keypair: {path: "{{ d }}/rsa", size: 2048, private_key_format: pkcs1, passphrase: s3cret}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ shape }}"}
+    - name: rsa with the wrong passphrase
+      openssh_keypair: {path: "{{ d }}/rsa", size: 2048, private_key_format: pkcs1, passphrase: wrong}
+      register: r
+      no_log: true
+      ignore_errors: true
+    - debug: {msg: "{{ shape }}"}
+    - name: rsa without its passphrase
+      openssh_keypair: {path: "{{ d }}/rsa", size: 2048, private_key_format: pkcs1, backend: cryptography}
+      register: r
+      no_log: true
+      ignore_errors: true
+    - debug: {msg: "{{ shape }}"}
+
+    - name: ecdsa 384, PKCS8
+      openssh_keypair: {path: "{{ d }}/ec", type: ecdsa, size: 384, private_key_format: pkcs8, backend: cryptography}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ shape }}"}
+    - name: ecdsa again (idempotent)
+      openssh_keypair: {path: "{{ d }}/ec", type: ecdsa, size: 384, private_key_format: pkcs8, backend: cryptography}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ shape }}"}
+    - name: asking for the OpenSSH format regenerates
+      openssh_keypair: {path: "{{ d }}/ec", type: ecdsa, size: 384, private_key_format: ssh, backend: cryptography}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ shape }}"}
+    - name: another size fails with regenerate=fail
+      openssh_keypair: {path: "{{ d }}/ec", type: ecdsa, size: 256, regenerate: fail, backend: cryptography}
+      register: r
+      no_log: true
+      ignore_errors: true
+    - debug: {msg: "{{ shape }}"}
+
+    # An encrypted PKCS8 file's header does not name the format, so it
+    # never matches pkcs8 and is regenerated every run.
+    - name: encrypted PKCS8, twice
+      openssh_keypair: {path: "{{ d }}/p8", type: ecdsa, private_key_format: pkcs8, passphrase: s3cret}
+      loop: [1, 2]
+      register: r2
+      no_log: true
+    - debug: {msg: "{{ r2.results | map(attribute='changed') | list }}"}
+
+    - name: an encrypted OpenSSH key ssh-keygen reads back
+      openssh_keypair: {path: "{{ d }}/enc", type: ed25519, passphrase: s3cret}
+      no_log: true
+    - command: ssh-keygen -y -P s3cret -f {{ d }}/enc
+      register: y
+      no_log: true
+    - debug: {msg: "{{ y.rc }} {{ y.stdout | regex_replace(' [A-Za-z0-9+/=]+$', ' B64') }}"}
+
+    - name: check mode
+      openssh_keypair: {path: "{{ d }}/check", type: ed25519, backend: cryptography}
+      check_mode: true
+      register: r
+      no_log: true
+    - debug: {msg: "{{ shape }}"}
+    - stat: {path: "{{ d }}/check"}
+      register: st
+    - debug: {var: st.stat.exists}
+
+    - name: errors
+      openssh_keypair:
+        path: "{{ d }}/bad"
+        backend: cryptography
+        type: "{{ item.type }}"
+        size: "{{ item.size | default(omit) }}"
+        private_key_format: "{{ item.private_key_format | default(omit) }}"
+      loop:
+        - {type: ed25519, private_key_format: pkcs1}
+        - {type: rsa1}
+        - {type: dsa, size: 2048}
+        - {type: rsa, size: 512}
+      register: r2
+      no_log: true
+      ignore_errors: true
+    - debug: {msg: "{{ r2.results | map(attribute='msg') | map('regex_replace', '\\n.*', '') | list }}"}
+
+    - name: remove
+      openssh_keypair: {path: "{{ d }}/ed", state: absent, backend: cryptography}
+      register: r
+      no_log: true
+    - debug: {msg: "{{ r.changed }}"}
