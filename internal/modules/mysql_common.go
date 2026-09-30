@@ -57,10 +57,68 @@ type mysqlModule struct {
 	noLog    []string
 	// the resolved FQCN, for "remote module (...)" messages
 	name string
+	// the Python driver ansible's module would use (see mysqlConnector)
+	connName, connVersion string
+	hasDriver             bool
+}
+
+// mysqlDriverFailMsg is module_utils.mysql's mysql_driver_fail_msg.
+const mysqlDriverFailMsg = "A MySQL module is required: for Python 2.7 either PyMySQL, or " +
+	"MySQL-python, or for Python 3.X mysqlclient or PyMySQL. " +
+	"Consider setting ansible_python_interpreter to use " +
+	"the intended Python version."
+
+// mysqlConnector is the driver ansible's mysql modules import on this
+// host (PyMySQL, else mysqlclient's MySQLdb), named and versioned as
+// get_connector_name/get_connector_version report it, read from the
+// target Python's package metadata. ok is false when that Python has
+// neither: ansible's modules fail there (mysql_driver_fail_msg). A target
+// without Python gets the client's own identity, PyMySQL at the release
+// it reproduces.
+func mysqlConnector(env *RunEnv) (name, version string, ok bool) {
+	if !targetHasPython(env) {
+		return mysqlclient.ConnectorName, mysqlclient.ConnectorVersion, true
+	}
+	for _, d := range []struct{ dist, name string }{{"PyMySQL", "pymysql"}, {"mysqlclient", "MySQLdb"}} {
+		if v := pyDistVersion(env, d.dist); v != "" {
+			return d.name, pyVersionTriple(v), true
+		}
+	}
+	return "", "", false
+}
+
+// pyVersionTriple is '.'.join(map(str, VERSION[:3])) for a release
+// string: its first three numeric components ("1.0.2", "2.2.4").
+func pyVersionTriple(v string) string {
+	var out []string
+	for _, part := range strings.Split(v, ".") {
+		i := 0
+		for i < len(part) && part[i] >= '0' && part[i] <= '9' {
+			i++
+		}
+		if i == 0 {
+			break
+		}
+		n, _ := strconv.Atoi(part[:i])
+		out = append(out, strconv.Itoa(n))
+		if len(out) == 3 || i < len(part) {
+			break
+		}
+	}
+	return strings.Join(out, ".")
+}
+
+// driverMissing is the modules' "if mysql_driver is None" check.
+func (m *mysqlModule) driverMissing() *agentproto.Result {
+	if m.hasDriver {
+		return nil
+	}
+	return m.failf("%s", mysqlDriverFailMsg)
 }
 
 func newMySQLModule(env *RunEnv, p *args.Parsed, name string, noLogParams ...string) *mysqlModule {
 	m := &mysqlModule{env: env, p: p, name: name}
+	m.connName, m.connVersion, m.hasDriver = mysqlConnector(env)
 	for _, k := range append([]string{"login_password"}, noLogParams...) {
 		m.noLog = append(m.noLog, noLogStrings(p.Any(k))...)
 	}
@@ -321,6 +379,12 @@ func (m *mysqlModule) connect(o connectOpts) (*mysqlclient.Conn, error) {
 	cfg.SSL = ssl
 	ac := o.autocommit
 	cfg.Autocommit = &ac
+	cfg.ClientName, cfg.ClientVersion = m.connName, m.connVersion
+	if m.connName == "MySQLdb" {
+		m.warn("Support of mysqlcline/MySQLdb connector is deprecated. " +
+			"We'll stop testing against it in collection version 4.0.0 " +
+			"and remove the related code in 5.0.0. Use PyMySQL connector instead.")
+	}
 	return mysqlclient.Connect(cfg)
 }
 

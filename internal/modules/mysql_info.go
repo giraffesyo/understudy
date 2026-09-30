@@ -120,11 +120,14 @@ func mysqlInfoModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	for _, f := range p.List("exclude_fields") {
 		exclude[strings.TrimSpace(pyStrValue(f))] = true
 	}
+	if fail := m.driverMissing(); fail != nil {
+		return fail
+	}
 	conn, err := m.connect(connectOpts{user: m.optStr("login_user"), password: m.optStr("login_password"), db: p.Str("login_db")})
 	if err != nil {
 		return m.failf("unable to connect to database using %s %s, check login_user "+
 			"and login_password are correct or %s has the credentials. "+
-			"Exception message: %s", mysqlclient.ConnectorName, mysqlclient.ConnectorVersion, m.configFile(), err)
+			"Exception message: %s", m.connName, m.connVersion, m.configFile(), err)
 	}
 	defer conn.Close()
 	if _, err := m.serverImplementation(conn); err != nil {
@@ -178,8 +181,8 @@ func mysqlInfoModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		return fail
 	}
 	out := map[string]any{
-		"connector_name":    mysqlclient.ConnectorName,
-		"connector_version": mysqlclient.ConnectorVersion,
+		"connector_name":    m.connName,
+		"connector_version": m.connVersion,
 		"server_engine":     "MySQL",
 	}
 	if s.isMaria() {

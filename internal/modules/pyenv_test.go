@@ -84,3 +84,12 @@ func TestRPMHeaderRe(t *testing.T) {
 		t.Errorf("matches: %q", got)
 	}
 }
+
+func TestPyVersionTriple(t *testing.T) {
+	for in, want := range map[string]string{"1.0.2": "1.0.2", "1.1.2": "1.1.2", "2.2.4": "2.2.4",
+		"1.1": "1.1", "0.9.3.post1": "0.9.3", "1.0.0rc1": "1.0.0", "01.02.03.04": "1.2.3"} {
+		if got := pyVersionTriple(in); got != want {
+			t.Errorf("%s: %q, want %q", in, got, want)
+		}
+	}
+}

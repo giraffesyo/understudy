@@ -128,7 +128,6 @@ func resetMySQLEnv(t *testing.T) {
 var (
 	myVolatile = []*regexp.Regexp{
 		regexp.MustCompile(`"execution_time_ms": \[[^\]]*\]`),
-		regexp.MustCompile(`"connector_version": "[^"]*"`),
 		regexp.MustCompile(`"src": "[^"]*ansible-tmp-[^"]*"`),
 	}
 	// Python set iteration order is randomized per process.

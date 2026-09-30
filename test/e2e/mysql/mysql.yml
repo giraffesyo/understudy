@@ -178,6 +178,8 @@
       mysql_info: {filter: [version, engines], <<: *my8}
       register: r
     - debug: {msg: "{{ r.version.major }} {{ r.engines.InnoDB.Support }} {{ r.server_engine }}"}
+    - name: the target's Python driver
+      debug: {msg: "{{ r.connector_name }} {{ r.connector_version }}"}
     - name: verified TLS with the server's CA
       mysql_query:
         query: SELECT @@version_comment IS NOT NULL AS ok

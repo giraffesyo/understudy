@@ -91,6 +91,9 @@ func mysqlQueryModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		arguments = d
 	}
 
+	if fail := m.driverMissing(); fail != nil {
+		return fail
+	}
 	conn, err := m.connect(connectOpts{user: m.optStr("login_user"), password: m.optStr("login_password"),
 		db: p.Str("login_db"), autocommit: autocommit})
 	if err != nil {

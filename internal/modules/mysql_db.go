@@ -49,6 +49,9 @@ func mysqlDBModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		return agentproto.Fail("%v", err)
 	}
 	m := newMySQLModule(env, p, "ansible.mysql.mysql_db")
+	if fail := m.driverMissing(); fail != nil {
+		return fail
+	}
 	if md := p.Int("master_data"); md < 0 || md > 2 {
 		return m.failf("value of master_data must be one of: 0, 1, 2, got: %d", md)
 	}

@@ -122,6 +122,9 @@ func mysqlVariablesModule(env *RunEnv, rawArgs map[string]any) *agentproto.Resul
 	if !mysqlVarNameRe.MatchString(mysqlvar) {
 		return m.failf("invalid variable name \"%s\"", mysqlvar)
 	}
+	if fail := m.driverMissing(); fail != nil {
+		return fail
+	}
 	configFile := m.configFile()
 	conn, err := m.connect(connectOpts{user: m.optStr("login_user"), password: m.optStr("login_password"), db: "mysql"})
 	if err != nil {
