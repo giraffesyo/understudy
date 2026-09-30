@@ -11,7 +11,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -79,6 +81,12 @@ type Options struct {
 	StartAtTask   string         // --start-at-task: skip tasks until one matches
 	Step          bool           // --step: confirm each task interactively
 	Vault         *vault.Secrets // vault passwords for !vault values and encrypted files
+
+	// NoDeprecationWarnings is deprecation_warnings=False.
+	NoDeprecationWarnings bool
+	// InjectFactsSet is INJECT_FACTS_AS_VARS set explicitly (not left at
+	// its deprecated default): top-level facts then do not warn.
+	InjectFactsSet bool
 }
 
 // Runner executes playbooks.
@@ -151,9 +159,13 @@ func NewRunner(inv *inventory.Inventory, cb Callback, opts Options) *Runner {
 		}
 	}
 	r.installLookups()
-	playbook.ModuleKnown = actions.Known
+	r.Engine.Deprecation = r.deprecation
 	return r
 }
+
+// Playbooks load before a Runner exists: an action nothing implements is
+// a load error, as in ansible-core.
+func init() { playbook.ModuleKnown = actions.Known }
 
 // resolvePlayHosts matches a play's pattern (∩ --limit) against inventory,
 // initializing stats rows for newly seen hosts.
@@ -192,7 +204,8 @@ func (r *Runner) resolvePlayHosts(play *playbook.Play) ([]string, error) {
 	return names, nil
 }
 
-// Run executes all plays and returns the exit code (0 ok, 2 failures).
+// Run executes all plays and returns the exit code (0 ok, 2 failures, 4
+// unreachable hosts).
 func (r *Runner) Run(ctx context.Context, plays []*playbook.Play) (int, error) {
 	for _, play := range plays {
 		if err := r.runPlay(ctx, play); err != nil {
@@ -207,12 +220,18 @@ func (r *Runner) Run(ctx context.Context, plays []*playbook.Play) (int, error) {
 		}
 	}
 	r.Callback.Recap(r.stats, r.order)
+	// TaskQueueManager's RUN_UNREACHABLE_HOSTS (4) outranks
+	// RUN_FAILED_HOSTS (2): unreachable hosts are remembered for the run.
+	code := 0
 	for _, st := range r.stats {
-		if st.Failed > 0 || st.Unreachable > 0 {
-			return 2, nil
+		if st.Unreachable > 0 {
+			return 4, nil
+		}
+		if st.Failed > 0 {
+			code = 2
 		}
 	}
-	return 0, nil
+	return code, nil
 }
 
 func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
@@ -882,7 +901,7 @@ func (r *Runner) newHostContext(host string, pos template.Position, playHosts []
 			list[i] = h
 		}
 		c.SetMagic("ansible_play_hosts", list)
-		c.SetMagic("play_hosts", list)
+		c.SetMagic("play_hosts", deprecate(deprecatedPlayHosts, list))
 		c.SetMagic("ansible_play_hosts_all", list)
 	}
 	c.SetMagic("playbook_dir", r.Opts.BaseDir)
@@ -1081,7 +1100,7 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 	switch {
 	case len(items) == 0:
 		agg.Extra["skip_reason"] = "No items in the list"
-		agg.Extra["skipped_reason"] = "No items in the list"
+		agg.Extra["skipped_reason"] = deprecate(deprecatedSkippedReason, "No items in the list")
 	case anyFailed:
 		agg.Msg = "One or more items failed"
 	case allSkipped:
@@ -1098,10 +1117,18 @@ func (r *Runner) resolveLoop(task *playbook.Task, vctx *vars.Context) ([]any, bo
 	if task.Loop == nil {
 		return nil, false, nil
 	}
-	v, err := vctx.TemplateValue(task.Loop)
+	// Items keep deprecated values deprecated: reading them warns again.
+	pos, ok := task.KeywordPos["loop"]
+	if !ok {
+		if pos, ok = task.KeywordPos["with_"+task.LoopWith]; !ok {
+			pos = task.KeywordPos["with_list"]
+		}
+	}
+	v, err := vctx.At(pos).KeepingDeprecated().TemplateValue(task.Loop)
 	if err != nil {
 		return nil, false, err
 	}
+	v = template.Undeprecate(v) // the list itself (play_hosts)
 	if task.LoopWith != "" {
 		if r.Engine.Lookup == nil {
 			return nil, false, fmt.Errorf("with_%s: lookups are not available", task.LoopWith)
@@ -1132,23 +1159,30 @@ func (r *Runner) resolveLoop(task *playbook.Task, vctx *vars.Context) ([]any, bo
 // runOnce executes one occurrence (one loop item or the whole task).
 func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, vctx *vars.Context, item any) *agentproto.Result {
 	// when: gate.
-	if skip, err := whenSkip(vctx, task.When); err != nil {
+	if skip, err := whenSkip(vctx, task.When, task.WhenPos); err != nil {
 		return agentproto.Fail("The conditional check failed: %v", err)
 	} else if skip != nil {
 		return skip
 	}
 
-	// Template module args, dropping omitted ones.
+	// Template module args, dropping omitted ones. Each argument's
+	// templates report its own origin; set_fact's copies stay deprecated
+	// where their source was.
+	argsCtx := vctx
+	if task.Module == "set_fact" {
+		argsCtx = vctx.KeepingDeprecated()
+	}
 	args := make(map[string]any, len(task.Args))
-	for k, raw := range task.Args {
+	for _, k := range slices.Sorted(maps.Keys(task.Args)) { // ansible-core templates them in key order
+		raw := task.Args[k]
 		if k == "that" && isAssertModule(task.Module) {
 			// assert's finalize_task_arg: 'that' stays raw (each entry is
 			// a conditional), except that a string that is entirely a
 			// template may resolve to a list of conditionals.
-			args[k] = assertThat(vctx, raw)
+			args[k] = assertThat(vctx.At(argPos(task, k)), raw)
 			continue
 		}
-		v, err := vctx.TemplateValue(raw)
+		v, err := argsCtx.At(argPos(task, k)).TemplateValue(raw)
 		if err != nil {
 			return agentproto.Fail("error templating argument %q: %v", k, err)
 		}
@@ -1159,7 +1193,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 	}
 	freeForm := task.FreeForm
 	if freeForm != "" {
-		v, err := vctx.TemplateString(freeForm)
+		v, err := vctx.At(task.ArgsPos).TemplateString(freeForm)
 		if err != nil {
 			return agentproto.Fail("error templating command: %v", err)
 		}
@@ -1359,7 +1393,7 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		TaskDir:      taskDir(task),
 		Verbosity:    r.Opts.Verbosity,
 		RemoteTmp:    r.remoteTmp(vctx),
-		ArgPos:       task.ArgPos,
+		ArgPos:       argPositions(task),
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
 			return r.runModule(ctx, host, target, kw, inProcess, become, task, req, payload)
 		},
@@ -1573,6 +1607,15 @@ func (r *Runner) effectiveBecome(play *playbook.Play, task *playbook.Task, vctx 
 	if spec.User == "" {
 		spec.User = "root"
 	}
+	// The local connection's become_success_timeout (values below 1 use
+	// the default).
+	if s, ok, err := hostVar("ansible_local_become_success_timeout"); err != nil {
+		return nil, err
+	} else if ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n >= 1 {
+			spec.SuccessTimeout = time.Duration(n) * time.Second
+		}
+	}
 	return spec, nil
 }
 
@@ -1602,15 +1645,38 @@ func (r *Runner) runModule(ctx context.Context, host, target string, kw connecti
 		if m, ok := yaml.AsMap(req.Args).(map[string]any); ok {
 			req.Args = m
 		}
-		res := modules.Run(req, payload)
-		res.Origin = moduleOrigin(res)
-		return res, nil
+		if become == nil {
+			res := modules.Run(req, payload)
+			res.Origin = moduleOrigin(res)
+			return res, nil
+		}
+		// Under become the module runs in a child of this binary, started
+		// through the become method like the agent on a remote host.
+		if !modules.LocalAgent {
+			return nil, fmt.Errorf("become on a local connection needs a binary that serves the understudy agent")
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			return nil, err
+		}
+		client := &connection.AgentClient{Conn: connection.NewLocal(), AgentPath: connection.ShellQuote(exe) + " " + modules.LocalAgentArg}
+		res, err := client.Run(ctx, req, payload, become)
+		if bf := actions.BecomeFailure(err); bf != nil {
+			return bf, nil
+		}
+		if res != nil {
+			res.Origin = moduleOrigin(res)
+		}
+		return res, err
 	}
 	agentClient, err := r.Conns.AgentWith(ctx, target, kw)
 	if err != nil {
 		return nil, err
 	}
 	res, err := agentClient.Run(ctx, req, payload, become)
+	if bf := actions.BecomeFailure(err); bf != nil {
+		return bf, nil
+	}
 	if res != nil {
 		res.Origin = moduleOrigin(res)
 	}
@@ -1701,7 +1767,7 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 			stripped[strings.TrimPrefix(k, "ansible_")] = v
 		}
 		for _, h := range r.factHosts(host, target, task) {
-			r.Store.SetFacts(h, res.AnsibleFacts)
+			r.Store.SetFacts(h, r.deprecatedFacts(res.AnsibleFacts))
 			r.Store.SetFacts(h, map[string]any{"ansible_facts": stripped})
 		}
 	}
@@ -1924,15 +1990,38 @@ func (t *turnstile) release() {
 	t.cond.Broadcast()
 }
 
+// argPos is where a module argument was written: its own value in the
+// mapping form, else the module's k=v string.
+func argPos(task *playbook.Task, key string) template.Position {
+	if p, ok := task.ArgPos[key]; ok {
+		return p
+	}
+	return task.ArgsPos
+}
+
+// argPositions is argPos for every argument of the task.
+func argPositions(task *playbook.Task) map[string]template.Position {
+	if len(task.Args) == 0 {
+		return task.ArgPos
+	}
+	out := make(map[string]template.Position, len(task.Args))
+	for k := range task.Args {
+		if p := argPos(task, k); p.File != "" {
+			out[k] = p
+		}
+	}
+	return out
+}
+
 // whenSkip evaluates when: conditions in order. Like Ansible, a skip
 // reports the first condition that was false (a literal false as the
 // boolean itself). nil means the task runs.
-func whenSkip(vctx *vars.Context, when []string) (*agentproto.Result, error) {
+func whenSkip(vctx *vars.Context, when []string, pos map[string]template.Position) (*agentproto.Result, error) {
 	for _, cond := range when {
 		if cond == "" {
 			continue
 		}
-		ok, err := vctx.EvalWhen([]string{cond})
+		ok, err := vctx.At(pos[cond]).EvalWhen([]string{cond})
 		if err != nil {
 			return nil, err
 		}

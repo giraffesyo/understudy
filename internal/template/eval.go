@@ -159,17 +159,18 @@ func (ec *EvalCtx) rejectUndefined(v any, off int) error {
 
 // getAttr implements a.b: mapping key first, then builtin methods.
 func (ec *EvalCtx) getAttr(x any, name string, off int) (any, error) {
+	x = ec.access(x)
 	if u, ok := x.(Undefined); ok {
 		return Undefined{Name: u.Name + "." + name}, nil
 	}
 	switch t := x.(type) {
 	case map[string]any:
 		if v, ok := t[name]; ok {
-			return v, nil
+			return ec.access(v), nil
 		}
 	case Mapping:
 		if v, ok := t.GetItem(name); ok {
-			return v, nil
+			return ec.access(v), nil
 		}
 	}
 	if m, ok := lookupMethod(x, name); ok {
@@ -180,6 +181,7 @@ func (ec *EvalCtx) getAttr(x any, name string, off int) (any, error) {
 
 // getItem implements a[i] / a['key'].
 func (ec *EvalCtx) getItem(x, idx any, off int) (any, error) {
+	x, idx = ec.access(x), ec.access(idx)
 	if u, ok := x.(Undefined); ok {
 		if s, ok := asString(idx); ok {
 			return Undefined{Name: u.Name + "." + s}, nil
@@ -196,7 +198,7 @@ func (ec *EvalCtx) getItem(x, idx any, off int) (any, error) {
 			return nil, ec.errf(off, "dict indices must be strings, got %s", typeName(idx))
 		}
 		if v, found := t[s]; found {
-			return v, nil
+			return ec.access(v), nil
 		}
 		return Undefined{Name: describeOwner(x) + "." + s}, nil
 	case Mapping:
@@ -205,7 +207,7 @@ func (ec *EvalCtx) getItem(x, idx any, off int) (any, error) {
 			return nil, ec.errf(off, "dict indices must be strings, got %s", typeName(idx))
 		}
 		if v, found := t.GetItem(s); found {
-			return v, nil
+			return ec.access(v), nil
 		}
 		return Undefined{Name: describeOwner(x) + "." + s}, nil
 	case []any:
@@ -220,7 +222,7 @@ func (ec *EvalCtx) getItem(x, idx any, off int) (any, error) {
 		if i < 0 || i >= n {
 			return nil, ec.errf(off, "list index out of range: %d (length %d)", i, n)
 		}
-		return t[i], nil
+		return ec.access(t[i]), nil
 	case string:
 		return stringIndex(ec, t, idx, off)
 	case yaml.UnsafeString:
@@ -518,6 +520,11 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !passThroughFilters[t.name] {
+		// The filter reads the deprecated values it was given (to_json,
+		// dict2items, ...); those it passes on stay deprecated.
+		walkDeprecated(in, ec.deprecated, false)
+	}
 	out, err := fn(ec, in, args, kwargs)
 	if err != nil {
 		if _, ok := err.(*TemplateError); ok {
@@ -529,6 +536,12 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 		return nil, ec.errf(t.off, "filter %q: %s", t.name, err)
 	}
 	return out, nil
+}
+
+// passThroughFilters return their input or only measure it: deprecated
+// values inside pass through unread.
+var passThroughFilters = map[string]bool{
+	"default": true, "d": true, "mandatory": true, "length": true, "count": true,
 }
 
 // undefinedTolerantTests may receive an Undefined input.

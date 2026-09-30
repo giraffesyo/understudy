@@ -1,0 +1,4 @@
+---
+# Load error: tasks given as a mapping
+- hosts: all
+  tasks: {a: 1}

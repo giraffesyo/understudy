@@ -1,0 +1,5 @@
+---
+# Load error: a static import of a missing file
+- hosts: all
+  tasks:
+    - import_tasks: no-such-file.yml

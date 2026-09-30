@@ -1,0 +1,6 @@
+---
+# Load error: a task without a module
+- hosts: all
+  tasks:
+    - name: x
+      when: true

@@ -706,8 +706,12 @@ func lookupTemplate(r *Runner, ec *template.EvalCtx, terms []any, _ map[string]a
 
 func lookupVars(_ *Runner, ec *template.EvalCtx, terms []any, kw map[string]any) ([]any, error) {
 	var out []any
+	get := ec.Vars().Get
+	if tg, ok := ec.Vars().(template.TaggedGetter); ok {
+		get = tg.GetTagged // a deprecated variable warns where it is used
+	}
 	for _, name := range termStrings(terms) {
-		if v, ok := ec.Vars().Get(name); ok {
+		if v, ok := get(name); ok {
 			out = append(out, v)
 		} else if d, ok := kw["default"]; ok {
 			out = append(out, d)

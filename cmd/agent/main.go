@@ -28,17 +28,7 @@ func main() {
 	case "version":
 		fmt.Printf("understudy-agent proto=%d version=%s\n", agentproto.ProtoVersion, version)
 	case "run":
-		req, payload, err := agentproto.ReadFrame(os.Stdin)
-		if err != nil {
-			// A broken frame still produces a well-formed result so the
-			// control side gets a diagnosis instead of a parse failure.
-			agentproto.WriteResult(os.Stdout, agentproto.Fail("%v", err))
-			os.Exit(0)
-		}
-		res := modules.Run(req, payload)
-		if err := agentproto.WriteResult(os.Stdout, res); err != nil {
-			os.Exit(1)
-		}
+		os.Exit(modules.ServeFrame(os.Stdin, os.Stdout))
 	default:
 		fmt.Fprintf(os.Stderr, "agent: unknown command %q\n", os.Args[1])
 		os.Exit(2)

@@ -11,9 +11,20 @@ import (
 	"github.com/giraffesyo/understudy/internal/connection"
 	"github.com/giraffesyo/understudy/internal/executor"
 	"github.com/giraffesyo/understudy/internal/inventory"
+	"github.com/giraffesyo/understudy/internal/modules"
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/vault"
 )
+
+// A program embedding understudy doubles as the agent for become on local
+// connections: such a task's module runs in a child of the program,
+// started through the become method with modules.LocalAgentArg.
+func init() {
+	modules.LocalAgent = true
+	if len(os.Args) == 3 && os.Args[1] == modules.LocalAgentArg && os.Args[2] == "run" {
+		os.Exit(modules.ServeFrame(os.Stdin, os.Stdout))
+	}
+}
 
 // Options configure a programmatic run. The zero value targets the
 // implicit localhost inventory with default settings.

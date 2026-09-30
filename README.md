@@ -273,7 +273,10 @@ where meaningful, `--diff`.
 `ProxyCommand` from `ansible_ssh_common_args`) and `local`. `become` via
 `sudo`, `su` or `doas` (su and doas answer their password prompt on a
 pseudo-terminal), configured by keywords or the `ansible_become_*`
-connection variables.
+connection variables, over either connection: on `local`, an escalated
+task's module runs in a child of the understudy binary started through
+the become method (a program embedding the Go API serves as that child
+itself).
 
 ## Architecture
 
@@ -318,6 +321,12 @@ than silently diverging. Known boundaries:
 - **Output reference**: output is byte-compared against ansible-core 2.21.
   Older ansible-core releases word some messages differently (for example
   2.14's `non-zero return code`); task outcomes are the same.
+- **Deprecation warnings**: reading a value ansible-core 2.21 deprecates
+  (a registered empty loop's `skipped_reason`, `play_hosts`, `vars`,
+  facts injected as top-level variables) prints its `[DEPRECATION
+  WARNING]` on stderr with the same origin and de-duplication;
+  `deprecation_warnings = False` (or `ANSIBLE_DEPRECATION_WARNINGS`)
+  silences them.
 - **Task debugger**: the `debug` strategy and `debugger` keyword follow
   ansible-core's debugger session (`p`, `c`, `r`, `q`, `help`); `p`
   evaluates Jinja expressions rather than Python. Edits to `task_vars` or

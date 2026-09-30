@@ -1,0 +1,57 @@
+---
+# become on the local connection: tasks run through the become method
+# (here files/fakesudo, a stand-in for sudo that exports the user it was
+# asked to become instead of switching), with ansible-core's local
+# connection handshake and its failure wording.
+- name: become on local
+  hosts: all
+  gather_facts: false
+  vars:
+    ansible_become_exe: "{{ playbook_dir }}/files/fakesudo"
+  tasks:
+    - name: a module runs through become
+      command: printenv FAKE_BECOME_USER
+      become: true
+      register: r
+      changed_when: false
+    - debug: var=r.stdout
+    - name: without become the module runs directly
+      shell: echo "${FAKE_BECOME_USER:-none}"
+      register: plain
+      changed_when: false
+    - debug: var=plain.stdout
+    - name: become_user and raw
+      raw: echo hi; echo err >&2; printenv FAKE_BECOME_USER
+      become: true
+      become_user: nobody
+    - name: copy through become
+      copy:
+        content: "hello\n"
+        dest: "{{ workdir }}/become.txt"
+      become: true
+    - name: with a password
+      command: printenv FAKE_BECOME_USER
+      become: true
+      changed_when: false
+      vars:
+        ansible_become_password: secret
+    - name: sudo refuses
+      command: printenv FAKE_BECOME_USER
+      become: true
+      ignore_errors: true
+      vars:
+        ansible_become_exe: "env FAKE_SUDO_MODE=nopass {{ playbook_dir }}/files/fakesudo"
+    - name: output before the refusal
+      command: printenv FAKE_BECOME_USER
+      become: true
+      ignore_errors: true
+      vars:
+        ansible_become_exe: "env FAKE_SUDO_MODE=both {{ playbook_dir }}/files/fakesudo"
+    - name: become never succeeds
+      command: printenv FAKE_BECOME_USER
+      become: true
+      vars:
+        ansible_local_become_success_timeout: 1
+        ansible_become_exe: "env FAKE_SUDO_MODE=hang {{ playbook_dir }}/files/fakesudo"
+    - name: not reached
+      debug: msg=unreachable

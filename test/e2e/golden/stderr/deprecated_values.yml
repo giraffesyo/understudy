@@ -1,0 +1,55 @@
+---
+# Reading a value ansible-core tags as deprecated warns on stderr, at the
+# origin of the template that read it, once per distinct warning: a
+# registered empty loop's skipped_reason, play_hosts, the vars dict and
+# facts injected at top level. Copies (set_fact, loop items) stay
+# deprecated.
+- name: deprecated result keys and variables
+  hosts: all
+  gather_facts: true
+  gather_subset: ['!all']
+  tasks:
+    - debug: msg=x
+      loop: []
+      register: r
+    - debug: var=r
+    - debug: var=r
+    - debug: msg="{{ r.skipped_reason }} {{ r['skipped_reason'] }}"
+      loop: [1, 2]
+    - name: skip_reason is not deprecated
+      debug: msg="{{ r.skip_reason }}"
+    - command: echo hi
+      when: false
+      register: s
+    - name: a skipped task's result has no skipped_reason
+      debug: var=s
+    - set_fact:
+        copy_of_r: "{{ r }}"
+    - debug: var=copy_of_r
+    - debug: msg="{{ r | default({}) }}"
+    - name: passing the dict on reads no values
+      debug: msg="{{ (r | default({})).results }}"
+    - debug: msg="{{ r | dict2items | map(attribute='key') | sort }}"
+    - debug:
+        msg: "{{ item.key }}={{ item.value }}"
+      loop: "{{ r | dict2items | sort(attribute='key') }}"
+      loop_control:
+        label: "{{ item.key }}"
+    - debug: msg="{{ r.skipped_reason }}"
+      when:
+        - r.skipped_reason is defined
+        - ansible_system is defined
+    - assert:
+        that: r.skipped_reason == 'No items in the list'
+    - debug: msg="{{ play_hosts }} {{ play_hosts | length }}"
+    - debug: var=play_hosts
+    - debug: msg="{{ lookup('vars', 'play_hosts') }}"
+    - debug: msg="{{ vars['r'].skip_reason }}"
+    - debug: msg="{{ ansible_system }} {{ ansible_facts.system }}"
+    - debug: msg="{{ hostvars[inventory_hostname].ansible_system }}"
+    - set_fact:
+        sys: "{{ ansible_system }}"
+        lowered: "{{ ansible_system | lower }}"
+    - debug: msg="{{ sys }}"
+    - name: a value derived from a fact is not deprecated
+      debug: msg="{{ lowered }}"

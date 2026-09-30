@@ -1,0 +1,6 @@
+---
+# Load error: two actions in one task
+- hosts: all
+  tasks:
+    - debug: msg=hi
+      command: echo

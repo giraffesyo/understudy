@@ -1,0 +1,28 @@
+#!/bin/sh
+# A stand-in for sudo: parses sudo's options, then runs the command with
+# FAKE_BECOME_USER set instead of switching users.
+user=root prompt=
+while [ $# -gt 0 ]; do
+  case $1 in
+    -u) user=$2; shift 2 ;;
+    -p) prompt=$2; shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+case $FAKE_SUDO_MODE in
+  nopass) echo "sudo: a password is required" >&2; exit 1 ;;
+  hang) sleep 2; exit 1 ;;
+  both) echo out; echo; echo err >&2; exit 1 ;;
+esac
+if [ -n "$prompt" ]; then
+  printf '%s' "$prompt" >&2
+  read -r pw
+  if [ "$pw" != secret ]; then
+    echo "Sorry, try again." >&2
+    exit 1
+  fi
+fi
+FAKE_BECOME_USER=$user
+export FAKE_BECOME_USER
+exec "$@"

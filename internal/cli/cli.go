@@ -6,6 +6,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,6 +25,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/executor"
 	"github.com/giraffesyo/understudy/internal/inventory"
 	"github.com/giraffesyo/understudy/internal/playbook"
+	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/vault"
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -358,6 +360,9 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		Inventory:     p.inventory,
 		Tags:          splitCSV(p.tags),
 		SkipTags:      splitCSV(p.skipTags),
+
+		NoDeprecationWarnings: !cfg.DeprecationWarnings,
+		InjectFactsSet:        cfg.InjectFactsSet,
 	}
 	if cfg.Source != "" {
 		if abs, err := filepath.Abs(cfg.Source); err == nil {
@@ -556,12 +561,12 @@ func playbookCmd(args []string) int {
 		}
 		plays, err := playbook.LoadFile(absPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
-			return 4
+			printError(err)
+			return loadErrorCode(err)
 		}
 		if err := playbook.ResolveRoles(plays, filepath.Dir(absPath), rolesPath); err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
-			return 4
+			printError(err)
+			return loadErrorCode(err)
 		}
 		dir, _ := filepath.Abs(filepath.Dir(path))
 		for _, pl := range plays {
@@ -586,12 +591,12 @@ func playbookCmd(args []string) int {
 
 	secrets, err := setupVault(p)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		printError(err)
 		return 1
 	}
 	inv, err := loadInventory(p, filepath.Dir(p.positional[0]))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		printError(err)
 		return 1
 	}
 	if p.listHosts {
@@ -600,7 +605,7 @@ func playbookCmd(args []string) int {
 			for i, play := range b.plays {
 				matched, err := inv.Match(play.HostPattern)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+					printError(err)
 					return 1
 				}
 				if p.limit != "" {
@@ -630,7 +635,7 @@ func playbookCmd(args []string) int {
 
 	opts, err := buildOptions(p, filepath.Dir(p.positional[0]), secrets)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		printError(err)
 		return 1
 	}
 	var all []*playbook.Play
@@ -646,7 +651,7 @@ func playbookCmd(args []string) int {
 	runner.Limit = p.limit
 	code, err := runner.Run(context.Background(), all)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		printError(err)
 		return 1
 	}
 	return code
@@ -775,7 +780,7 @@ func adhocCmd(args []string) int {
 	if p.moduleArgs != "" {
 		tmp := &playbook.Task{Module: module, LoopVar: "item"}
 		if err := adhocArgs(tmp, module, p.moduleArgs); err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+			printError(err)
 			return 1
 		}
 		task.Args = tmp.Args
@@ -795,17 +800,17 @@ func adhocCmd(args []string) int {
 
 	secrets, err := setupVault(p)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		printError(err)
 		return 1
 	}
 	inv, err := loadInventory(p, "")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		printError(err)
 		return 1
 	}
 	opts, err := buildOptions(p, ".", secrets)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		printError(err)
 		return 1
 	}
 	cb, err := buildCallback(p.verbosity, true, "")
@@ -820,7 +825,7 @@ func adhocCmd(args []string) int {
 	runner.Limit = p.limit
 	code, err := runner.Run(context.Background(), []*playbook.Play{play})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR! %v\n", err)
+		printError(err)
 		return 1
 	}
 	return code
@@ -909,4 +914,32 @@ func buildCallback(verbosity int, adhoc bool, playbookDir string) (executor.Call
 		s.StdoutCallback, s.CallbacksEnabled = "", nil
 	}
 	return callback.Build(s, func(msg string) { fmt.Fprintf(os.Stderr, "[WARNING]: %s\n", msg) })
+}
+
+// loadErrorCode is ansible-playbook's exit status for a playbook that
+// fails to load: 4 for a parser error, 1 for other errors (a missing file
+// or role).
+func loadErrorCode(err error) int {
+	var ce interface{ ExitCode() int }
+	if errors.As(err, &ce) {
+		return ce.ExitCode()
+	}
+	return 4
+}
+
+// printError prints a fatal error as ansible-core's Display.error does:
+// "[ERROR]: <message>", then the Origin and the source excerpt when the
+// error points into a file.
+func printError(err error) {
+	var oe playbook.OriginError
+	if errors.As(err, &oe) {
+		if file, line, col := oe.Origin(); line > 0 {
+			fmt.Fprintf(os.Stderr, "[ERROR]: %s\nOrigin: %s:%d:%d\n\n%s\n", oe.Message(), file, line, col,
+				template.SourceExcerpt(file, line, col))
+			return
+		}
+		fmt.Fprintf(os.Stderr, "[ERROR]: %s\n", oe.Message())
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[ERROR]: %v\n", err)
 }

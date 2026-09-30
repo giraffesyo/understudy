@@ -1,0 +1,7 @@
+---
+# Load error: loop and with_items on one task
+- hosts: all
+  tasks:
+    - debug: msg=hi
+      loop: [1]
+      with_items: [2]

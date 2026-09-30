@@ -380,6 +380,7 @@ func (ec *EvalCtx) execNodes(nodes []tmplNode, out *renderOutput) error {
 				return &TemplateError{Pos: out.pos, Src: out.src,
 					Msg: "'omit' can only be used as the entire value of a module argument"}
 			}
+			v, _ = walkDeprecated(v, ec.deprecated, true)
 			out.writeValue(v)
 		case *ifNode:
 			if err := ec.execIf(t, out); err != nil {

@@ -1,9 +1,11 @@
 package playbook
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -150,8 +152,8 @@ func containsStr(list []string, s string) bool {
 func loadRole(ref *RoleRef, baseDir string, rolesPath []string) (*roleContent, error) {
 	dir := findRoleDir(ref.Name, baseDir, rolesPath)
 	if dir == "" {
-		return nil, fmt.Errorf("%s: the role %q was not found in %s/roles or the configured roles_path",
-			ref.Src.File, ref.Name, baseDir)
+		return nil, &parseError{file: ref.Src.File, line: ref.Src.Line, col: ref.Src.Col,
+			msg: roleNotFound(ref.Name, baseDir, rolesPath), notParser: true}
 	}
 	role := &roleContent{name: ref.Name, dir: dir}
 
@@ -319,17 +321,24 @@ func flattenRole(tasks []*Task, dir, roleName string) []*Task {
 // findRoleDir searches baseDir/roles, the configured roles_path entries,
 // and baseDir itself.
 func findRoleDir(name, baseDir string, rolesPath []string) string {
-	candidates := []string{filepath.Join(baseDir, "roles", name)}
-	for _, rp := range rolesPath {
-		candidates = append(candidates, filepath.Join(rp, name))
-	}
-	candidates = append(candidates, filepath.Join(baseDir, name))
-	for _, c := range candidates {
+	for _, dir := range roleSearchPaths(baseDir, rolesPath) {
+		c := filepath.Join(dir, name)
 		if info, err := os.Stat(c); err == nil && info.IsDir() {
 			return c
 		}
 	}
 	return ""
+}
+
+// roleSearchPaths is RoleDefinition's search order: the playbook's roles/
+// directory, the configured roles_path, then the playbook directory.
+func roleSearchPaths(baseDir string, rolesPath []string) []string {
+	return append(append([]string{filepath.Join(baseDir, "roles")}, rolesPath...), baseDir)
+}
+
+// roleNotFound is ansible-core's error for a role no search path holds.
+func roleNotFound(name, baseDir string, rolesPath []string) string {
+	return fmt.Sprintf("The role '%s' was not found in: %s", name, strings.Join(roleSearchPaths(baseDir, rolesPath), ":"))
 }
 
 // RoleInclude is a role loaded at runtime for include_role/import_role.
@@ -348,7 +357,7 @@ type RoleInclude struct {
 func LoadRoleForInclude(name, baseDir string, rolesPath []string, tasksFrom string) (*RoleInclude, error) {
 	dir := findRoleDir(name, baseDir, rolesPath)
 	if dir == "" {
-		return nil, fmt.Errorf("the role %q was not found in %s/roles or the configured roles_path", name, baseDir)
+		return nil, errors.New(roleNotFound(name, baseDir, rolesPath))
 	}
 	if tasksFrom == "" {
 		tasksFrom = "main"

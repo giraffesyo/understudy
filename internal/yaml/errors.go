@@ -30,6 +30,12 @@ func (e *Error) Error() string {
 	return b.String()
 }
 
+// Message is ansible-core's wording for a YAML load failure.
+func (e *Error) Message() string { return "YAML parsing failed: " + e.Msg }
+
+// Origin is where the error points.
+func (e *Error) Origin() (file string, line, col int) { return e.File, e.Line, e.Col }
+
 func (s *scanner) errf(line, col int, format string, args ...any) *Error {
 	return &Error{
 		File:    s.name,

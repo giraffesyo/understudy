@@ -47,6 +47,10 @@ type Engine struct {
 	Globals map[string]any
 	Lookup  LookupFunc // filled in by the executor; nil => lookups error
 	Opts    Options
+
+	// Deprecation receives each deprecated value a template reads, with
+	// the template's position (nil: no warnings).
+	Deprecation func(pos Position, d Deprecated)
 }
 
 // New returns an Engine with the built-in filters, tests, and globals.
@@ -110,6 +114,8 @@ type EvalCtx struct {
 	blocks     map[string][][]tmplNode // block overrides, child-most first
 	blockName  string                  // block being rendered (for super())
 	blockLevel int
+
+	lastDeprecated *Deprecated // the deprecated value access() read last
 }
 
 func (ec *EvalCtx) Engine() *Engine    { return ec.engine }
@@ -132,8 +138,12 @@ func (ec *EvalCtx) lookupName(name string) (any, bool) {
 		return ec.superFunc(), true
 	}
 	if ec.vars != nil {
-		if v, ok := ec.vars.Get(name); ok {
-			return v, true
+		if tg, ok := ec.vars.(TaggedGetter); ok {
+			if v, ok := tg.GetTagged(name); ok {
+				return ec.access(v), true
+			}
+		} else if v, ok := ec.vars.Get(name); ok {
+			return ec.access(v), true
 		}
 	}
 	if v, ok := ec.engine.Globals[name]; ok {
@@ -183,7 +193,7 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 		if u, ok := v.(Undefined); ok {
 			return nil, &UndefinedError{Pos: pos, Name: u.Name}
 		}
-		return v, nil
+		return ec.finalize(v), nil
 	}
 
 	var b strings.Builder
@@ -241,38 +251,47 @@ func (e *Engine) RenderString(src string, vars VarGetter, pos Position) (string,
 // EvalExpression evaluates src as a bare Jinja expression (when:,
 // failed_when:, until: semantics — no {{ }} needed).
 func (e *Engine) EvalExpression(src string, vars VarGetter, pos Position) (any, error) {
+	v, ec, err := e.evalExpression(src, vars, pos)
+	if err != nil {
+		return nil, err
+	}
+	return ec.finalize(v), nil
+}
+
+// evalExpression evaluates src without finalizing the result.
+func (e *Engine) evalExpression(src string, vars VarGetter, pos Position) (any, *EvalCtx, error) {
 	// The spaces matter: "{{-" would otherwise read as a whitespace-control
 	// marker and eat a leading minus sign.
 	toks, err := lex("{{ "+src+" }}", e.Opts, pos)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	p := &parser{tokens: toks, src: src, tplPos: pos}
 	if _, err := p.expect(tokVarStart); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	expr, err := p.parseExpression()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if _, err := p.expect(tokVarEnd); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ec := &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: pos, src: src}
 	v, err := ec.eval(expr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if u, ok := v.(Undefined); ok {
-		return nil, &UndefinedError{Pos: pos, Name: u.Name}
+		return nil, nil, &UndefinedError{Pos: pos, Name: u.Name}
 	}
-	return v, nil
+	return v, ec, nil
 }
 
 // EvalBool evaluates a bare expression and applies Python truthiness — the
 // `when:` contract.
 func (e *Engine) EvalBool(src string, vars VarGetter, pos Position) (bool, error) {
-	v, err := e.EvalExpression(src, vars, pos)
+	v, _, err := e.evalExpression(src, vars, pos) // truthiness reads no items
 	if err != nil {
 		return false, err
 	}

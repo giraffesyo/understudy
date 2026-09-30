@@ -130,7 +130,7 @@ func (s *Store) RawHostVar(host, name string) (any, bool) {
 	if f, isFinal := v.(Final); isFinal {
 		v = f.V
 	}
-	return v, ok
+	return template.Undeprecate(v), ok
 }
 
 // SetFacts records gathered facts for one host.
@@ -187,6 +187,8 @@ type Context struct {
 	resolving map[string]bool
 	cache     map[string]any
 	pos       template.Position
+
+	keepDeprecated bool
 }
 
 // NewContext builds a variable context for one host and task.
@@ -258,19 +260,78 @@ func (m *contextMapping) GetItem(key string) (any, bool) { return m.ctx.getSafe(
 func (m *contextMapping) Keys() []string                 { return m.ctx.Names() }
 func (m *contextMapping) Len() int                       { return len(m.ctx.Names()) }
 
-// getSafe is Get with resolution panics converted to a not-found so a bad
-// var on another host doesn't abort the referencing host.
+// varsMapping is the "vars" magic variable: the context's variables,
+// without itself.
+type varsMapping struct{ ctx *Context }
+
+func (m *varsMapping) GetItem(key string) (any, bool) {
+	if key == "vars" {
+		return nil, false
+	}
+	return m.ctx.getSafe(key)
+}
+
+func (m *varsMapping) Keys() []string {
+	names := m.ctx.Names()
+	out := names[:0:0]
+	for _, n := range names {
+		if n != "vars" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func (m *varsMapping) Len() int { return len(m.Keys()) }
+
+// getSafe is GetTagged with resolution panics converted to a not-found so
+// a bad var on another host doesn't abort the referencing host.
 func (c *Context) getSafe(name string) (v any, ok bool) {
 	defer func() {
 		if recover() != nil {
 			v, ok = nil, false
 		}
 	}()
-	return c.Get(name)
+	return c.GetTagged(name)
 }
 
-// Get implements template.VarGetter with lazy recursive resolution.
+// At returns a view of the context that templates at pos (the origin a
+// module argument's templates report).
+func (c *Context) At(pos template.Position) *Context {
+	if pos.File == "" {
+		return c
+	}
+	child := *c
+	child.pos = pos
+	return &child
+}
+
+// KeepingDeprecated returns a view whose templating results keep their
+// deprecated values tagged (set_fact copies stay deprecated).
+func (c *Context) KeepingDeprecated() *Context {
+	child := *c
+	child.keepDeprecated = true
+	return &child
+}
+
+// KeepDeprecated implements template.KeepsDeprecated.
+func (c *Context) KeepDeprecated() bool { return c.keepDeprecated }
+
+// Get implements template.VarGetter with lazy recursive resolution. A
+// deprecated variable comes back plain (the engine reads GetTagged).
 func (c *Context) Get(name string) (any, bool) {
+	v, ok := c.GetTagged(name)
+	return template.Undeprecate(v), ok
+}
+
+// GetTagged is Get keeping a deprecated variable's template.Deprecated
+// wrapper, so templates that read it warn.
+func (c *Context) GetTagged(name string) (any, bool) {
+	if name == "vars" {
+		// The deprecated "vars" magic variable: every variable in scope.
+		return template.Deprecated{Value: &varsMapping{ctx: c}, Msg: `The internal "vars" dictionary is deprecated.`,
+			Help: "Use the `vars` and `varnames` lookups instead.", Version: "2.24"}, true
+	}
 	if v, ok := c.magic[name]; ok {
 		return v, true
 	}
