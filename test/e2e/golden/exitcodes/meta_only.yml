@@ -1,0 +1,11 @@
+---
+# Hosts that only ran meta tasks have no stats: the recap leaves them out.
+- hosts: a
+  gather_facts: false
+  tasks: []
+- hosts: b
+  gather_facts: false
+  tasks:
+    - meta: noop
+    - meta: end_host
+      when: false

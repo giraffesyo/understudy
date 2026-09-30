@@ -17,8 +17,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/term"
 
 	"github.com/giraffesyo/understudy/internal/actions"
 	"github.com/giraffesyo/understudy/internal/agentproto"
@@ -41,6 +43,9 @@ type Callback interface {
 	HostResult(host string, task *playbook.Task, res *agentproto.Result, ignored bool, item any)
 	LoopResult(host string, task *playbook.Task, res *agentproto.Result, ignored bool)
 	HostUnreachable(host string, task *playbook.Task, msg string)
+	// NoHostsRemaining reports that no hosts are left to run the play on
+	// (v2_playbook_on_no_hosts_remaining).
+	NoHostsRemaining()
 	// Retrying reports a failed until: attempt with retries left.
 	Retrying(host string, task *playbook.Task, name string, left int, res *agentproto.Result)
 	// AsyncPoll / AsyncDone report a poll > 0 async job's progress.
@@ -55,6 +60,14 @@ type Callback interface {
 // HostStats is one host's play-recap line.
 type HostStats struct {
 	OK, Changed, Unreachable, Failed, Skipped, Rescued, Ignored int
+}
+
+// Processed reports whether the host has any result counted
+// (AggregateStats.processed): only those hosts appear in the recap, so a
+// host whose tasks were all skipped by --step, or that only ran meta
+// tasks, is left out.
+func (st *HostStats) Processed() bool {
+	return st != nil && *st != HostStats{}
 }
 
 // Options configure a run.
@@ -119,8 +132,12 @@ type Runner struct {
 	parallelActive map[int]bool // parallel blocks currently running
 	startedAt      bool
 	stepContinue   bool
-	aborted        bool // any_errors_fatal: stop the playbook
-	userQuit       bool // task debugger: quit (exit 99, no recap)
+	aborted        bool            // any_errors_fatal, a failed batch: stop the playbook
+	maxFailBroke   bool            // max_fail_percentage ended the playbook
+	unreachable    map[string]bool // hosts unreachable so far (until clear_host_errors)
+	batchFailed    map[string]bool // hosts already failed when the batch started
+	userQuit       bool            // task debugger quit, --step at EOF: exit quitCode, no recap
+	quitCode       int
 	dbgReader      *bufio.Reader
 	dbgMu          sync.Mutex
 	playEnded      bool // meta: end_play
@@ -204,34 +221,60 @@ func (r *Runner) resolvePlayHosts(play *playbook.Play) ([]string, error) {
 	return names, nil
 }
 
-// Run executes all plays and returns the exit code (0 ok, 2 failures, 4
-// unreachable hosts).
+// Run executes plays as one playbook and returns the exit code (0 ok, 2
+// failed hosts, 4 unreachable hosts).
 func (r *Runner) Run(ctx context.Context, plays []*playbook.Play) (int, error) {
-	for _, play := range plays {
-		if err := r.runPlay(ctx, play); err != nil {
-			return 1, err
+	return r.RunPlaybooks(ctx, [][]*playbook.Play{plays})
+}
+
+// RunPlaybooks runs each playbook's plays in turn, as PlaybookExecutor.run
+// does: every playbook ends with its own recap (the stats accumulate
+// across playbooks), and a playbook whose result is not 0 is the last one
+// run. The exit code is that result.
+func (r *Runner) RunPlaybooks(ctx context.Context, books [][]*playbook.Play) (int, error) {
+	code := 0
+	for _, plays := range books {
+		for _, play := range plays {
+			if err := r.runPlay(ctx, play); err != nil {
+				return 1, err
+			}
+			if r.quitRequested() {
+				return r.quitCode, nil
+			}
+			if r.aborted {
+				break
+			}
 		}
-		if r.quitRequested() {
-			// The debugger's quit: sys.exit(99), as on KeyboardInterrupt.
-			return 99, nil
-		}
-		if r.aborted {
+		r.Callback.Recap(r.stats, r.order)
+		if code = r.result(); code != 0 {
 			break
 		}
 	}
-	r.Callback.Recap(r.stats, r.order)
-	// TaskQueueManager's RUN_UNREACHABLE_HOSTS (4) outranks
-	// RUN_FAILED_HOSTS (2): unreachable hosts are remembered for the run.
-	code := 0
-	for _, st := range r.stats {
-		if st.Unreachable > 0 {
-			return 4, nil
-		}
-		if st.Failed > 0 {
-			code = 2
+	return code, nil
+}
+
+// result is the TaskQueueManager's result for the last play run: a play
+// ended by max_fail_percentage gives RUN_FAILED_HOSTS (2); otherwise
+// RUN_UNREACHABLE_HOSTS (4) while any host is unreachable, then
+// RUN_FAILED_HOSTS while any host is failed. Both carry over from play to
+// play (a host that failed stays failed in later plays) until meta:
+// clear_host_errors clears them, so the last play's result covers the
+// earlier plays' failures too, but not the recap's cleared ones.
+func (r *Runner) result() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch {
+	case r.maxFailBroke:
+		return 2
+	case len(r.unreachable) > 0:
+		return 4
+	}
+	for _, failed := range r.failed {
+		if failed {
+			return 2
 		}
 	}
-	return code, nil
+	return 0
 }
 
 func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
@@ -310,18 +353,31 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 		}
 		r.batchEnded = false
 		failedBefore := len(r.failedSet(batch))
+		r.mu.Lock()
+		r.batchFailed = map[string]bool{}
+		for _, h := range batch {
+			r.batchFailed[h] = r.failed[h]
+		}
+		r.mu.Unlock()
 		err := r.runPlayBatch(ctx, play, batch)
+		// A batch that breached max_fail_percentage ends the play with
+		// every host failed: the linear strategy reports that no hosts
+		// remain (once for the breach, once for the failed hosts), and
+		// the play's RUN_FAILED_BREAK_PLAY stops the whole run.
+		if err == errBatchAborted || (err == nil && r.batchBreached(batch, play.MaxFailPercentage)) {
+			r.Callback.NoHostsRemaining()
+			r.Callback.NoHostsRemaining()
+			r.mu.Lock()
+			r.aborted, r.maxFailBroke = true, true
+			r.mu.Unlock()
+			return nil
+		}
 		// When every host of a batch fails, ansible-playbook stops the
 		// whole run: no further batches, plays or playbooks.
 		if err == nil && len(batch) > 0 && len(r.failedSet(batch))-failedBefore == len(batch) {
 			r.mu.Lock()
 			r.aborted = true
 			r.mu.Unlock()
-			return nil
-		}
-		if err == errBatchAborted || r.batchBreached(batch, play.MaxFailPercentage) {
-			fmt.Printf("NO MORE HOSTS LEFT: batch failure exceeded max_fail_percentage (%.0f%%); aborting play\n",
-				play.MaxFailPercentage)
 			return nil
 		}
 		if err != nil {
@@ -344,6 +400,7 @@ func (r *Runner) runPlayBatch(ctx context.Context, play *playbook.Play, playHost
 		defer func() { r.Callback, r.freeSem = inner, nil }()
 	}
 	r.resetNotified()
+	r.stepContinue = false // --step's (c)ontinue lasts for one strategy run
 	r.mu.Lock()
 	r.blockFailed = map[string]map[int]bool{}
 	if r.nextBlockID < 1<<20 {
@@ -434,9 +491,11 @@ func parsePercent(s string, total int) (int, bool) {
 	return n, true
 }
 
-// batchBreached reports whether a batch's failure/unreachable count exceeds
-// max_fail_percentage (>=0). Ansible aborts when failures are STRICTLY
-// greater than the threshold.
+// batchBreached reports whether the hosts that failed during this batch
+// exceed max_fail_percentage (>=0) of it, as the linear strategy checks
+// after each task: strictly greater, computed as ansible-core does, and
+// counting failed hosts only (not unreachable ones, nor hosts that had
+// already failed in an earlier play).
 func (r *Runner) batchBreached(batch []string, maxFailPct float64) bool {
 	if maxFailPct < 0 || len(batch) == 0 {
 		return false
@@ -445,11 +504,11 @@ func (r *Runner) batchBreached(batch []string, maxFailPct float64) bool {
 	defer r.mu.Unlock()
 	failed := 0
 	for _, h := range batch {
-		if st := r.stats[h]; st != nil && (st.Failed > 0 || st.Unreachable > 0) {
+		if r.failed[h] && !r.unreachable[h] && !r.batchFailed[h] {
 			failed++
 		}
 	}
-	return float64(failed)/float64(len(batch))*100.0 > maxFailPct
+	return float64(failed)/float64(len(batch)) > maxFailPct/100.0
 }
 
 const maxIncludeDepth = 100
@@ -480,9 +539,9 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 		if !r.tagsMatch(task, play) {
 			continue
 		}
-		if (r.Opts.StartAtTask != "" && !r.startedAt) || r.Opts.Step {
+		if r.Opts.StartAtTask != "" && !r.startedAt {
 			if task.Module != "include_tasks" && task.Module != "include_role" && task.Module != "import_role" &&
-				!r.startGate(task, r.taskDisplayName(task, playHosts)) {
+				!r.startAt(r.taskDisplayName(task, playHosts)) {
 				continue
 			}
 		}
@@ -503,6 +562,11 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 			active = intersect(active, restrict)
 		}
 		if len(active) == 0 {
+			continue
+		}
+		// --step asks about each task some host is about to run (meta
+		// tasks are not asked about; an import_role is not a task).
+		if r.Opts.Step && task.Module != "import_role" && !r.stepTask(task) {
 			continue
 		}
 		if task.Module == "include_tasks" || task.Module == "include_role" {
@@ -1749,6 +1813,10 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 		defer r.mu.Unlock()
 		r.stats[host].Unreachable++
 		r.failed[host] = true
+		if r.unreachable == nil {
+			r.unreachable = map[string]bool{}
+		}
+		r.unreachable[host] = true
 		return
 	}
 	ignored := task.IgnoreErrors && res.Failed
@@ -2064,32 +2132,68 @@ func (r *Runner) isUnreachable(host string) bool {
 	return st != nil && st.Unreachable > 0
 }
 
-// startGate implements --start-at-task (tasks are skipped until one whose
-// name matches, exactly or as a glob) and --step (confirm each task).
-// It reports whether the task should run.
-func (r *Runner) startGate(task *playbook.Task, name string) bool {
-	if r.Opts.StartAtTask != "" && !r.startedAt {
-		if name != r.Opts.StartAtTask {
-			if ok, _ := path.Match(r.Opts.StartAtTask, name); !ok {
-				return false
-			}
+// startAt implements --start-at-task: tasks are skipped until one whose
+// name matches, exactly or as a glob. It reports whether the task should
+// run.
+func (r *Runner) startAt(name string) bool {
+	if name != r.Opts.StartAtTask {
+		if ok, _ := path.Match(r.Opts.StartAtTask, name); !ok {
+			return false
 		}
-		r.startedAt = true
 	}
-	if r.Opts.Step && !r.stepContinue {
-		fmt.Fprintf(os.Stdout, "Perform task: TASK: %s (N)o/(y)es/(c)ontinue: ", name)
-		var answer string
-		fmt.Fscanln(os.Stdin, &answer)
+	r.startedAt = true
+	return true
+}
+
+// stepTask implements --step: it asks whether to run the task, reporting
+// whether it should run.
+func (r *Runner) stepTask(task *playbook.Task) bool {
+	if !r.stepContinue {
+		// StrategyBase._take_step: the prompt names the task as its repr
+		// does (the untemplated name, else the action), then the prompt
+		// repeats as a banner whatever the answer.
+		stepName := task.Name
+		if stepName == "" {
+			stepName = task.DisplayAction()
+		}
+		if task.RoleName != "" {
+			stepName = task.RoleName + " : " + stepName
+		}
+		msg := "Perform task: TASK: " + stepName + " (N)o/(y)es/(c)ontinue: "
+		fmt.Fprint(os.Stdout, msg)
+		answer, err := r.debugIn().ReadString('\n')
+		if err != nil && answer == "" {
+			// input() at end of input raises EOFError, which
+			// ansible-playbook reports as an unexpected exception.
+			fmt.Fprint(os.Stderr, "[ERROR]: Unexpected Exception, this is probably a bug: EOF when reading a line\n")
+			r.quit(250)
+			return false
+		}
+		run := true
 		switch strings.ToLower(strings.TrimSpace(answer)) {
 		case "y", "yes":
 		case "c", "continue":
 			r.stepContinue = true
 		default:
-			return false
+			run = false
 		}
-		fmt.Fprintln(os.Stdout)
+		msg = strings.TrimSpace(msg)
+		fmt.Fprintf(os.Stdout, "\n%s %s\n", msg, strings.Repeat("*", max(3, displayColumns()-utf8.RuneCountInString(msg))))
+		return run
 	}
 	return true
+}
+
+// displayColumns is Display.columns: the terminal width less one, at
+// least 79.
+func displayColumns() int {
+	fd := int(os.Stdout.Fd())
+	if term.IsTerminal(fd) {
+		if w, _, err := term.GetSize(fd); err == nil && w-1 > 79 {
+			return w - 1
+		}
+	}
+	return 79
 }
 
 // pollAsync waits for an async job started with poll > 0, checking it
@@ -2224,11 +2328,16 @@ func (r *Runner) quitRequested() bool {
 	return r.userQuit
 }
 
-// requestQuit stops the run after the debugger's quit.
-func (r *Runner) requestQuit() {
+// requestQuit stops the run after the debugger's quit: sys.exit(99), as
+// on KeyboardInterrupt.
+func (r *Runner) requestQuit() { r.quit(99) }
+
+// quit stops the run at once, with no recap, exiting with code.
+func (r *Runner) quit(code int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.userQuit, r.aborted, r.playEnded = true, true, true
+	r.quitCode = code
 }
 
 // hostSnapshot is the per-host state a debugger redo rolls back.

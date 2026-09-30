@@ -101,9 +101,17 @@ func (r *Runner) runMeta(ctx context.Context, play *playbook.Play, task *playboo
 	case "end_batch":
 		r.batchEnded = true
 	case "clear_host_errors":
+		// Every play host's failed and unreachable state clears (so
+		// they no longer count toward the exit code either). A failed
+		// host has no tasks left in this play, though (its iterator
+		// state is complete): it runs again from the next play.
 		r.mu.Lock()
-		for _, h := range active {
+		for _, h := range playHosts {
+			if r.failed[h] {
+				r.ended[h] = true
+			}
 			delete(r.failed, h)
+			delete(r.unreachable, h)
 		}
 		r.mu.Unlock()
 	case "clear_facts":

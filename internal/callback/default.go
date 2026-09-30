@@ -217,6 +217,12 @@ func (d *Default) Included(task *playbook.Task, target string, hosts []string, i
 	d.display(cCyan, line)
 }
 
+func (d *Default) NoHostsRemaining() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.banner("NO MORE HOSTS LEFT")
+}
+
 func (d *Default) HostUnreachable(host string, task *playbook.Task, msg string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -237,7 +243,7 @@ func (d *Default) Recap(stats map[string]*executor.HostStats, order []string) {
 	sort.Strings(hosts)
 	for _, host := range hosts {
 		st := stats[host]
-		if st == nil {
+		if !st.Processed() {
 			continue
 		}
 		fmt.Fprintf(d.Out, "%s : %s %s %s %s %s %s %s\n",
