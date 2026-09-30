@@ -1,0 +1,3 @@
+---
+# Load error: a playbook that is a mapping
+hosts: all

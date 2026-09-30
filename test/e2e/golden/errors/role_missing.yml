@@ -1,0 +1,5 @@
+---
+# Load error: a role no search path holds
+- hosts: all
+  roles:
+    - no-such-role

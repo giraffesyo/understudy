@@ -69,6 +69,21 @@ func (n *Node) MapGet(key string) *Node {
 	return nil
 }
 
+// MapKeyNode returns the key node for a plain string key, or nil.
+func (n *Node) MapKeyNode(key string) *Node {
+	n = n.resolveAlias()
+	if n == nil || n.Kind != MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k := n.Content[i].resolveAlias()
+		if k.Kind == ScalarNode && k.Value == key {
+			return n.Content[i]
+		}
+	}
+	return nil
+}
+
 // MapKeys returns the scalar keys of a mapping in source order.
 func (n *Node) MapKeys() []string {
 	n = n.resolveAlias()

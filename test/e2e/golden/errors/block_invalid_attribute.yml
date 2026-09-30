@@ -1,0 +1,7 @@
+---
+# Load error: a block key that is not a Block attribute
+- hosts: all
+  tasks:
+    - block:
+        - debug: msg=hi
+      bogus: 1

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
@@ -48,21 +49,106 @@ var playKeywords = map[string]bool{
 var unsupportedPlayKeys = map[string]string{}
 
 type parseError struct {
-	file string
-	line int
-	msg  string
+	file      string
+	line, col int
+	msg       string
+	// notParser marks an AnsibleError that is not an AnsibleParserError
+	// (ansible-playbook exits 1 for it instead of 4).
+	notParser bool
+}
+
+// ExitCode is ansible-playbook's exit status for the error.
+func (e *parseError) ExitCode() int {
+	if e.notParser {
+		return 1
+	}
+	return 4
 }
 
 func (e *parseError) Error() string {
 	return fmt.Sprintf("%s:%d: %s", e.file, e.line, e.msg)
 }
 
+// Message is the error without its position.
+func (e *parseError) Message() string { return e.msg }
+
+// Origin is where the error points (line 0: nowhere in particular).
+func (e *parseError) Origin() (file string, line, col int) { return e.file, e.line, e.col }
+
+// OriginError is a load error that points into a playbook file; the CLI
+// shows it as ansible-core does, with an "Origin:" line and the source.
+type OriginError interface {
+	error
+	Message() string
+	Origin() (file string, line, col int)
+}
+
 func errAt(file string, node *yaml.Node, format string, args ...any) error {
-	line := 0
+	e := &parseError{file: file, msg: fmt.Sprintf(format, args...)}
 	if node != nil {
-		line = node.Line
+		e.line, e.col = node.Line, node.Column
 	}
-	return &parseError{file: file, line: line, msg: fmt.Sprintf(format, args...)}
+	return e
+}
+
+// pyTaggedType is the Python type ansible-core reports for a loaded YAML
+// value (its origin-tagged containers and scalars).
+func pyTaggedType(v any) string {
+	tagged := func(name string) string {
+		return "<class 'ansible.module_utils._internal._datatag._AnsibleTagged" + name + "'>"
+	}
+	switch v.(type) {
+	case nil:
+		return "<class 'NoneType'>"
+	case bool:
+		return "<class 'bool'>"
+	case string:
+		return tagged("Str")
+	case int, int64:
+		return tagged("Int")
+	case float64:
+		return tagged("Float")
+	case []any:
+		return tagged("List")
+	}
+	return tagged("Dict")
+}
+
+// errAtKey points at a mapping key (ansible-core's origin for an invalid
+// attribute).
+func errAtKey(file string, node *yaml.Node, key string, format string, args ...any) error {
+	if k := node.MapKeyNode(key); k != nil {
+		node = k
+	}
+	return errAt(file, node, format, args...)
+}
+
+// playAttributes are ansible-core's Play attributes. A key outside them is
+// "not a valid attribute"; one inside them that understudy doesn't
+// implement fails with its own message.
+var playAttributes = map[string]bool{
+	"any_errors_fatal": true, "become": true, "become_exe": true, "become_flags": true,
+	"become_method": true, "become_user": true, "check_mode": true, "collections": true,
+	"connection": true, "debugger": true, "diff": true, "environment": true,
+	"fact_path": true, "force_handlers": true, "gather_facts": true, "gather_subset": true,
+	"gather_timeout": true, "handlers": true, "hosts": true, "ignore_errors": true,
+	"ignore_unreachable": true, "max_fail_percentage": true, "module_defaults": true,
+	"name": true, "no_log": true, "order": true, "port": true, "post_tasks": true,
+	"pre_tasks": true, "remote_user": true, "roles": true, "run_once": true, "serial": true,
+	"strategy": true, "tags": true, "tasks": true, "throttle": true, "timeout": true,
+	"validate_argspec": true, "vars": true, "vars_files": true, "vars_prompt": true,
+}
+
+// blockAttributes are ansible-core's Block attributes.
+var blockAttributes = map[string]bool{
+	"always": true, "any_errors_fatal": true, "become": true, "become_exe": true,
+	"become_flags": true, "become_method": true, "become_user": true, "block": true,
+	"check_mode": true, "collections": true, "connection": true, "debugger": true,
+	"delegate_facts": true, "delegate_to": true, "diff": true, "environment": true,
+	"ignore_errors": true, "ignore_unreachable": true, "module_defaults": true,
+	"name": true, "no_log": true, "notify": true, "port": true, "remote_user": true,
+	"rescue": true, "run_once": true, "tags": true, "throttle": true, "timeout": true,
+	"vars": true, "when": true,
 }
 
 // LoadFile parses a playbook file into plays.
@@ -87,7 +173,8 @@ func Load(data []byte, filename string) ([]*Play, error) {
 			if s, isScalar := doc.Str(); isScalar && s == "" {
 				continue // empty document
 			}
-			return nil, errAt(filename, doc, "a playbook must be a list of plays")
+			v, _ := doc.Decode()
+			return nil, errAt(filename, doc, "A playbook must be a list of plays, got a %s instead: %s", pyTaggedType(v), filename)
 		}
 		for _, item := range items {
 			play, err := parsePlay(item, filename)
@@ -122,7 +209,10 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 			continue
 		}
 		if !playKeywords[key] {
-			return nil, errAt(file, val, "unknown play keyword %q", key)
+			if !playAttributes[key] {
+				return nil, errAtKey(file, node, key, "'%s' is not a valid attribute for a Play", key)
+			}
+			return nil, errAtKey(file, node, key, "play keyword %q is not supported by understudy", key)
 		}
 		switch key {
 		case "name":
@@ -186,6 +276,12 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 			}
 			play.Debugger = d
 		case "tasks", "pre_tasks", "post_tasks", "handlers":
+			if v, err := val.Decode(); err == nil && v != nil {
+				if _, isList := v.([]any); !isList {
+					return nil, errAt(file, node, "A malformed block was encountered while loading %s: %s should be a list or None but is %s",
+						key, template.PyRepr(v), pyTaggedType(v))
+				}
+			}
 			tasks, err := parseTaskList(val, file, key == "handlers")
 			if err != nil {
 				return nil, err
@@ -359,6 +455,12 @@ func parseImportTasks(item, pathNode *yaml.Node, file string, handlers bool, bc 
 		path = filepath.Join(filepath.Dir(file), rel)
 	}
 	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		// The loader's error, which carries no origin.
+		return nil, &parseError{file: file, notParser: true, msg: fmt.Sprintf("Unable to retrieve file contents. Could not find or access '%s' "+
+			"on the Ansible Controller: [Errno 2] No such file or directory: '%s' If you are using a module and expect "+
+			"the file to exist on the remote, see the remote_src option.", path, path)}
+	}
 	if err != nil {
 		return nil, errAt(file, pathNode, "import_tasks: %v", err)
 	}
@@ -534,7 +636,10 @@ var blockKeywords = map[string]bool{
 func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, enclosing []BlockRef) ([]*Task, error) {
 	for _, key := range node.MapKeys() {
 		if !blockKeywords[key] {
-			return nil, errAt(file, node.MapGet(key), "unknown block keyword %q", key)
+			if !blockAttributes[key] {
+				return nil, errAtKey(file, node, key, "'%s' is not a valid attribute for a Block", key)
+			}
+			return nil, errAtKey(file, node, key, "block keyword %q is not supported by understudy", key)
 		}
 	}
 
@@ -723,6 +828,24 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 		Src:     Pos{File: file, Line: node.Line, Col: node.Column},
 	}
 
+	// Task.preprocess_data: a with_<lookup> after loop: or another
+	// with_<lookup> is a duplicate loop.
+	looped := false
+	for _, key := range keys {
+		if key == "loop" {
+			if v, err := node.MapGet(key).Decode(); err == nil && v != nil {
+				looped = true
+			}
+		} else if strings.HasPrefix(key, "with_") {
+			if looped {
+				e := errAt(file, node, "duplicate loop in task: %s", strings.TrimPrefix(key, "with_")).(*parseError)
+				e.notParser = true
+				return nil, e
+			}
+			looped = true
+		}
+	}
+
 	// Find the module key: exactly one non-keyword key. with_<lookup> keys
 	// are loop forms, not modules.
 	var moduleKeys []string
@@ -746,21 +869,21 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			moduleKeys = []string{""}
 		}
 	}
+	// ModuleArgsParser's wording: every key that is not a task keyword
+	// competes for the action.
 	if len(moduleKeys) == 1 && moduleKeys[0] == "" {
 		// Module and args already set from action:/local_action:.
 	} else if len(moduleKeys) == 0 {
-		return nil, errAt(file, node, "no module found in task (keys: %s)", strings.Join(keys, ", "))
+		return nil, errAt(file, node, "no module/action detected in task.")
 	}
 	if len(moduleKeys) > 1 {
-		return nil, errAt(file, node,
-			"multiple module-like keys in one task: %s (only one module per task)",
-			strings.Join(moduleKeys, ", "))
+		return nil, errAt(file, node, "conflicting action statements: %s, %s", moduleKeys[0], moduleKeys[1])
 	}
 	if moduleKeys[0] != "" {
 		moduleName := normalizeModuleName(moduleKeys[0])
 		if !ModuleKnown(moduleName) && !executorStatement(moduleName) && moduleName != "meta" {
-			return nil, errAt(file, node.MapGet(moduleKeys[0]),
-				"couldn't resolve module/action %q", moduleKeys[0])
+			return nil, errAt(file, node, "couldn't resolve module/action '%s'. This often indicates a "+
+				"misspelling, missing collection, or incorrect module path.", moduleKeys[0])
 		}
 		task.Module = moduleName
 		task.Action = moduleKeys[0]
@@ -1021,7 +1144,8 @@ func parseActionValue(task *Task, node *yaml.Node, file string) error {
 		}
 	}
 	if !ModuleKnown(task.Module) && !executorStatement(task.Module) && task.Module != "meta" {
-		return errAt(file, node, "couldn't resolve module/action %q", task.Module)
+		return errAt(file, node, "couldn't resolve module/action '%s'. This often indicates a "+
+			"misspelling, missing collection, or incorrect module path.", task.Module)
 	}
 	return nil
 }

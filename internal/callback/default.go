@@ -454,7 +454,21 @@ func (d *Default) excerpt(file string, line, col int) string {
 		}
 		d.srcCache[file] = lines
 	}
-	if line > len(lines) {
+	return excerptLines(lines, line, col)
+}
+
+// SourceExcerpt is the source context ansible-core shows under an error's
+// "Origin:" line: up to three lines ending at line, then a caret at col.
+func SourceExcerpt(file string, line, col int) string {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return ""
+	}
+	return excerptLines(strings.Split(string(data), "\n"), line, col)
+}
+
+func excerptLines(lines []string, line, col int) string {
+	if line > len(lines) || line < 1 {
 		return ""
 	}
 	width := len(strconv.Itoa(line))

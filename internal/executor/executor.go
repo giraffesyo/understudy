@@ -152,9 +152,12 @@ func NewRunner(inv *inventory.Inventory, cb Callback, opts Options) *Runner {
 		}
 	}
 	r.installLookups()
-	playbook.ModuleKnown = actions.Known
 	return r
 }
+
+// Playbooks load before a Runner exists: an action nothing implements is
+// a load error, as in ansible-core.
+func init() { playbook.ModuleKnown = actions.Known }
 
 // resolvePlayHosts matches a play's pattern (∩ --limit) against inventory,
 // initializing stats rows for newly seen hosts.
