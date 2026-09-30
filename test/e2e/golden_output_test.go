@@ -78,10 +78,15 @@ func testGoldenOutput(t *testing.T, flags ...string) {
 	}
 }
 
-var timingRe = regexp.MustCompile(`"(delta|start|end)": "[^"]*"`)
+var (
+	timingRe = regexp.MustCompile(`"(delta|start|end)": "[^"]*"`)
+	// The HTTP fixture's (golden/files/http_fixture.py) ephemeral ports.
+	loopbackPortRe = regexp.MustCompile(`//(127\.0\.0\.1|localhost):[0-9]{4,5}\b`)
+)
 
 func normalizeOutput(s, work string) string {
 	s = strings.ReplaceAll(s, work, "WORK")
+	s = loopbackPortRe.ReplaceAllString(s, "//$1:PORT")
 	return timingRe.ReplaceAllString(s, `"$1": "T"`)
 }
 
@@ -101,6 +106,8 @@ var verboseMasks = []struct {
 	{regexp.MustCompile(`\.[0-9]+\.[0-9]{4}-[0-9]{2}-[0-9]{2}@[0-9]{2}:[0-9]{2}:[0-9]{2}~"`), `.PID.TIME~"`},
 	// tempfile's random names (the corpus uses the default and "work_" prefixes).
 	{regexp.MustCompile(`/(ansible\.|work_)[a-z0-9_]{8}`), "/${1}X"},
+	// cron's backup_file: tempfile.mkstemp(prefix='crontab').
+	{regexp.MustCompile(`/crontab[a-z0-9_]{8}"`), `/crontabX"`},
 	// stat/find timestamps (positional Python floats) and inode numbers.
 	{regexp.MustCompile(`"(atime|mtime|ctime|birthtime)": [0-9]+\.[0-9]+([,}])`), `"$1": T$2`},
 	{regexp.MustCompile(`"inode": [0-9]+`), `"inode": N`},

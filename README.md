@@ -248,7 +248,7 @@ filters (`default`, `combine`, `selectattr`, `regex_replace`, `to_json`,
 tests, …), chainable strict `Undefined`, and the native-types rule for
 `when:`/`loop:`.
 
-**Modules** — ~45 target-side plus control-side actions, covering the common
+**Modules** — ~48 target-side plus control-side actions, covering the common
 system-administration surface:
 
 | Area        | Modules |
@@ -261,8 +261,9 @@ system-administration surface:
 | Users       | `user`, `group`, `authorized_key` |
 | Storage     | `mount`, `parted`, `filesystem` |
 | Network/sec | `firewalld`, `iptables`, `selinux`, `sysctl`, `modprobe` |
-| Config      | `sudoers`, `openssh_keypair`, `timezone`, `hostname`, `alternatives`, `getent` |
-| Databases   | `mysql_db`, `mysql_user` |
+| Config      | `sudoers`, `openssh_keypair`, `timezone`, `hostname`, `alternatives`, `getent`, `cron` |
+| Web & VCS   | `uri`, `git` |
+| Databases   | `mysql_db`, `mysql_user`, `mysql_query`, `mysql_variables`, `mysql_info` (native MySQL/MariaDB protocol client, no Python driver) |
 | Facts/util  | `setup`, `ping`, `debug`, `set_fact`, `assert`, `fail`, `meta`, `include_vars`, `validate_argument_spec` |
 
 All modules are idempotent (query-before-mutate) and honor `--check` and,

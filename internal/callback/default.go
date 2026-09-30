@@ -50,8 +50,7 @@ type Default struct {
 	Columns   int // banner width (Display.columns); 0 = 79
 	mu        sync.Mutex
 	errors    map[string]bool // Display de-duplicates repeated errors
-	warned    map[string]bool // ... and warnings
-	srcCache  map[string][]string
+	warns     map[string]bool // ... and repeated warnings
 }
 
 // New builds the default callback, auto-detecting color and terminal width.
@@ -352,23 +351,24 @@ func isDebug(module string) bool {
 }
 
 // warnings prints a result's module warnings (to stderr, as Display.warning
-// does: one line each, and a warning already shown in this run is not
-// shown again).
+// does).
 func (d *Default) warnings(res *agentproto.Result) {
 	if d.Err == nil || res.Extra == nil {
 		return
 	}
 	list, _ := res.Extra["warnings"].([]any)
 	for _, w := range list {
-		msg := "[WARNING]: " + template.PyStr(w)
-		if d.warned == nil {
-			d.warned = map[string]bool{}
+		msg := template.PyStr(w)
+		seen := d.warns[msg]
+		if d.warns == nil {
+			d.warns = map[string]bool{}
 		}
-		if d.warned[msg] {
+		d.warns[msg] = true
+		if seen {
 			continue
 		}
-		d.warned[msg] = true
-		fmt.Fprintf(d.Err, "%s\n", d.paint(cBrightPurp, msg))
+		// Display.display: a message ending in a newline gets no second one.
+		fmt.Fprintf(d.Err, "%s\n", d.paint(cBrightPurp, "[WARNING]: "+strings.TrimSuffix(msg, "\n")))
 	}
 }
 
@@ -450,21 +450,9 @@ func (d *Default) taskErrorChain(task *playbook.Task, ec *agentproto.ErrorChain)
 	fmt.Fprint(d.Out, "\n\n")
 }
 
-// excerpt renders up to two lines of context plus the target line, with
-// right-aligned line numbers and a caret under the column.
+// excerpt renders the annotated source context of an origin.
 func (d *Default) excerpt(file string, line, col int) string {
-	if d.srcCache == nil {
-		d.srcCache = map[string][]string{}
-	}
-	lines, ok := d.srcCache[file]
-	if !ok {
-		data, err := os.ReadFile(file)
-		if err == nil {
-			lines = strings.Split(string(data), "\n")
-		}
-		d.srcCache[file] = lines
-	}
-	return template.ExcerptLines(lines, line, col)
+	return playbook.SourceContext(file, line, col)
 }
 
 const cDebug color = "0;90" // COLOR_DEBUG (dark gray)
