@@ -177,8 +177,9 @@ understudy vault view group_vars/all/vault.yml --vault-password-file .vault-pass
 **Language & structure** — plays, roles (with `meta` dependencies, defaults,
 and vars), `import_tasks`/`import_role` (static) and
 `include_tasks`/`include_role` (dynamic: per-host targets, loops, `when`),
-handlers with `notify`/`listen`, `block`/`rescue`/`always`, tags, `vars_prompt`, the `linear`, `free` and
-`host_pinned` strategies, `serial`
+handlers with `notify`/`listen`, `block`/`rescue`/`always`, tags, `vars_prompt`, the `linear`, `free`,
+`host_pinned` and `debug` strategies (with the task debugger and the
+`debugger` keyword), `serial`
 rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 `end_play`, `end_host`, `end_batch`, `clear_host_errors`, `clear_facts`,
 `reset_connection`, `refresh_inventory`, `noop`).
@@ -186,7 +187,9 @@ rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 **Task keywords** — `when`, `loop` / `with_*` (`items`, `nested`, `together`, `subelements`,
 `sequence`, `dict`, `indexed_items`, `flattened`, `lines`, `fileglob`, ...), `register`,
 `until`/`retries`/`delay`, `changed_when`, `failed_when`, `ignore_errors`,
-`become`/`become_user`, `vars`, `environment`, `no_log`, `check_mode`,
+`become`/`become_user`/`become_method`/`become_flags`/`become_exe`, `vars`,
+`environment`, `no_log`, `check_mode` and `diff` (also inherited from
+blocks, role entries and plays),
 `delegate_to` (any host) and `delegate_facts`, `run_once`, `any_errors_fatal`,
 `connection`/`remote_user`, `action`/`local_action`, `async`/`poll` (including
 fire-and-forget).
@@ -221,7 +224,9 @@ where meaningful, `--diff`.
 **Connections** — SSH (ssh-agent → key files → password auth chain,
 `known_hosts` verification, connection reuse, bastions via `ProxyJump` /
 `ProxyCommand` from `ansible_ssh_common_args`) and `local`. `become` via
-`sudo`.
+`sudo`, `su` or `doas` (su and doas answer their password prompt on a
+pseudo-terminal), configured by keywords or the `ansible_become_*`
+connection variables.
 
 ## Architecture
 
@@ -266,13 +271,17 @@ than silently diverging. Known boundaries:
 - **Output reference**: output is byte-compared against ansible-core 2.21.
   Older ansible-core releases word some messages differently (for example
   2.14's `non-zero return code`); task outcomes are the same.
-- **Not yet implemented** (these error clearly, they are not silently
-  ignored): the `debug` strategy. The `dig` lookup covers A, AAAA, CNAME,
-  MX, NS, TXT, PTR and SRV (not yet byte-compared: Ansible's needs
-  dnspython).
+- **Task debugger**: the `debug` strategy and `debugger` keyword follow
+  ansible-core's debugger session (`p`, `c`, `r`, `q`, `help`); `p`
+  evaluates Jinja expressions rather than Python. Edits to `task_vars` or
+  `task.args` apply to a redo (ansible-core 2.21 ignores them, and its
+  `update_task` crashes); `u` is accepted as a no-op.
+- **`dig` lookup**: covers A, AAAA, CNAME, MX, NS, TXT, PTR and SRV (not
+  yet byte-compared: Ansible's needs dnspython).
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
   strings; regular expressions use Go's RE2 (lookaround and backreferences
-  in *patterns* are rejected with a clear error rather than mis-matched).
+  in *patterns* are rejected with a clear error rather than mis-matched),
+  iterated with Python's `re.sub`/`findall` match rules.
 
 ## Building & testing
 
