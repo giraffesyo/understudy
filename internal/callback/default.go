@@ -179,7 +179,7 @@ func (d *Default) HostResult(host string, task *playbook.Task, res *agentproto.R
 		if isItem {
 			line += fmt.Sprintf(" => (item=%s)", itemLabel)
 		}
-		if d.Verbosity > 0 || res.VerboseAlways {
+		if (d.Verbosity > 0 || res.VerboseAlways) && !verboseOverride(task.Module) {
 			line += " => " + d.dump(task, res)
 		}
 		d.display(c, line)
@@ -352,6 +352,17 @@ func (d *Default) dumpRaw(task *playbook.Task, res *agentproto.Result, clean boo
 
 const censoredMsg = "the output has been hidden due to the fact that 'no_log: true' was specified for this result"
 
+// verboseOverride reports whether a module's results carry
+// _ansible_verbose_override: setup and gather_facts keep -v from dumping
+// the facts they gathered.
+func verboseOverride(module string) bool {
+	switch strings.TrimPrefix(strings.TrimPrefix(module, "ansible.builtin."), "ansible.legacy.") {
+	case "setup", "gather_facts":
+		return true
+	}
+	return false
+}
+
 func isDebug(module string) bool {
 	return module == "debug" || module == "ansible.builtin.debug" || module == "ansible.legacy.debug"
 }
@@ -479,7 +490,7 @@ func (d *Default) Retrying(host string, task *playbook.Task, name string, left i
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	line := fmt.Sprintf("FAILED - RETRYING: [%s]: %s (%d retries left).", host, name, left)
-	if d.Verbosity >= 2 || res.VerboseAlways {
+	if (d.Verbosity >= 2 || res.VerboseAlways) && !verboseOverride(task.Module) {
 		// v2_runner_retry dumps without _clean_results (no debug trim).
 		line += "Result was: " + d.dumpRaw(task, res, false)
 	}
