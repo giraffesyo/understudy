@@ -931,6 +931,17 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 	if len(task.Vars) > 0 {
 		base = base.WithOverlay(task.Vars)
 	}
+	// ansible_search_path: the role (if any) then the task's directory;
+	// file lookups search it (DataLoader.path_dwim_relative_stack).
+	var search []any
+	if task.SrcDir != "" {
+		search = append(search, task.SrcDir)
+	}
+	if d := taskDir(task); d != "" && d != task.SrcDir {
+		search = append(search, d)
+	}
+	base.SetMagic("ansible_search_path", search)
+	base.SetMagic(taskActionVar, task.DisplayAction())
 	resolved, err := resolveKeywords(task, base)
 	if err != nil {
 		r.recordFailure(host, task, agentproto.Fail("%v", err))
@@ -1030,7 +1041,7 @@ func (r *Runner) resolveLoop(task *playbook.Task, vctx *vars.Context) ([]any, bo
 		if !ok {
 			terms = []any{v}
 		}
-		out, err := r.Engine.Lookup(nil, task.LoopWith, terms, nil)
+		out, err := r.Engine.Lookup(r.Engine.NewEvalCtx(vctx, template.Position{File: task.Src.File, Line: task.Src.Line}), task.LoopWith, terms, nil)
 		if err != nil {
 			return nil, false, err
 		}

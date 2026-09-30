@@ -10,3 +10,9 @@
 - name: show the role dir result files
   debug:
     msg: "{{ role_dir_res.ansible_included_var_files | map('basename') | list }}"
+
+- name: first_found searches the role vars dir for include_vars
+  include_vars: "{{ item }}"
+  with_first_found:
+    - "missing-{{ 'x' }}.yml"
+    - extra.yml

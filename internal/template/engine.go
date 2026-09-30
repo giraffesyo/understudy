@@ -67,6 +67,12 @@ func New() *Engine {
 	return e
 }
 
+// NewEvalCtx builds an evaluation context over vars, for callers that
+// invoke plugins directly (with_<lookup> loops).
+func (e *Engine) NewEvalCtx(vars VarGetter, pos Position) *EvalCtx {
+	return &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: pos}
+}
+
 // TemplateError is a template syntax or evaluation error, pointing at both
 // the document position and the offending spot in the template string.
 type TemplateError struct {
