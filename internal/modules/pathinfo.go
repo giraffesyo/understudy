@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
+	"github.com/giraffesyo/understudy/internal/modules/fsutil"
 )
 
 // pathInfoModules are the modules whose Ansible counterparts return a
@@ -62,6 +63,11 @@ func addPathInfo(res *agentproto.Result) {
 		res.Extra["state"] = "hard"
 	default:
 		res.Extra["state"] = "file"
+	}
+	if fsutil.SELinuxEnabled() {
+		if ctx, err := fsutil.SELinuxContext(path); err == nil {
+			res.Extra["secontext"] = strings.Join(ctx, ":")
+		}
 	}
 	res.Extra["size"] = lst.Size()
 }
