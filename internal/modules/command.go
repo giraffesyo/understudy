@@ -117,7 +117,16 @@ func mkCommand(shell bool) ModuleFunc {
 		} else {
 			path, err := lookPath(argv[0])
 			if err != nil {
-				return agentproto.Fail("Cannot find command %q: %v", argv[0], err)
+				// run_command's OSError branch: Popen could not exec it.
+				quoted := make([]string, len(argv))
+				for i, a := range argv {
+					quoted[i] = shQuote(a)
+				}
+				res := agentproto.Fail("Error executing command.")
+				res.Cause = "[Errno 2] No such file or directory: " + pyBytesRepr(argv[0])
+				res.RC = agentproto.IntPtr(2)
+				res.Extra = map[string]any{"cmd": strings.Join(quoted, " ")}
+				return res
 			}
 			cmd = exec.Command(path, argv[1:]...)
 		}
