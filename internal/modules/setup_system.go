@@ -389,8 +389,9 @@ func collectCaps(e *factEnv, _ map[string]any) map[string]any {
 
 var pkgMgrs = []struct{ path, name string }{
 	{"/usr/bin/rpm-ostree", "atomic_container"},
-	{"/usr/bin/yum", "yum"},
-	{"/usr/bin/dnf", "dnf"},
+	{"/usr/bin/yum", "dnf"},
+	{"/usr/bin/dnf-3", "dnf"},
+	{"/usr/bin/dnf5", "dnf5"},
 	{"/usr/bin/apt-get", "apt"},
 	{"/usr/bin/zypper", "zypper"},
 	{"/usr/sbin/urpmi", "urpmi"},
@@ -418,50 +419,43 @@ var pkgMgrs = []struct{ path, name string }{
 
 func collectPkgMgr(e *factEnv, prior map[string]any) map[string]any {
 	name := "unknown"
+	family, _ := prior["os_family"].(string)
 	for _, pm := range pkgMgrs {
+		// Altlinux's /usr/bin/pkg is perl-Package, not Solaris pkg5.
+		if family == "Altlinux" && pm.path == "/usr/bin/pkg" {
+			continue
+		}
 		if e.exists(pm.path) {
 			name = pm.name
 		}
 	}
-	family, _ := prior["os_family"].(string)
-	dist, _ := prior["distribution"].(string)
-	major, _ := prior["distribution_major_version"].(string)
 	switch family {
 	case "RedHat":
+		// _check_rh_versions: dnf or microdnf, dnf5 when either is it.
+		name = "unknown"
 		if e.exists("/run/ostree-booted") {
 			name = "atomic_container"
 			break
 		}
-		name = "unknown"
-		n, err := strconv.Atoi(major)
-		switch {
-		case dist == "Fedora":
-			if err == nil && n < 23 {
-				if e.exists("/usr/bin/yum") {
-					name = "yum"
+		for _, bin := range []string{"/usr/bin/dnf", "/usr/bin/microdnf"} {
+			if e.exists(bin) {
+				name = "dnf"
+				if e.realpath(bin) == "/usr/bin/dnf5" {
+					name = "dnf5"
 				}
-			} else {
-				name = "dnf"
-			}
-		case dist == "Amazon":
-			if err == nil && n < 2022 {
-				name = "yum"
-			} else {
-				name = "dnf"
-			}
-		default:
-			if err == nil && n < 8 {
-				name = "yum"
-			} else if err == nil {
-				name = "dnf"
+				break
 			}
 		}
 	case "Debian":
-		if name == "apt" || e.exists("/usr/bin/apt-get") {
-			name = "apt"
-		}
+		name = "apt"
 	case "Altlinux":
 		if name == "apt" {
+			name = "apt_rpm"
+		}
+	}
+	// _check_apt_flavor: an apt-get that rpm owns is APT-RPM.
+	if name == "apt" && e.exists("/usr/bin/rpm") {
+		if rc, _, _ := e.run("/usr/bin/rpm", "-q", "--whatprovides", "/usr/bin/apt-get"); rc == 0 {
 			name = "apt_rpm"
 		}
 	}

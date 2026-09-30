@@ -1765,6 +1765,7 @@ func (r *Runner) dispatch(ctx context.Context, task *playbook.Task, actx *action
 	res := n.Run(ctx, actx, args, freeForm)
 	addRoutingDeprecation(task, res)
 	nameCheckModeSkip(task, res)
+	nameUnsupportedParams(task, res)
 	return res
 }
 

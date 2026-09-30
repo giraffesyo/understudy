@@ -709,19 +709,30 @@ func TestDistributions(t *testing.T) {
 	}
 }
 
+// ansible-core 2.21: on RedHat the fact follows /usr/bin/dnf (or
+// microdnf): dnf5 when it resolves to /usr/bin/dnf5; yum alone is unknown.
 func TestPkgMgr(t *testing.T) {
-	f := newFixture(t)
-	f.file("/usr/bin/yum", "").file("/usr/bin/apt-get", "")
-	e := f.env(nil)
+	rh := map[string]any{"os_family": "RedHat", "distribution": "Rocky", "distribution_major_version": "9"}
+	yumOnly := newFixture(t)
+	yumOnly.file("/usr/bin/yum", "")
+	dnf4 := newFixture(t)
+	dnf4.file("/usr/bin/dnf-3", "").link("/usr/bin/dnf", "dnf-3").file("/usr/bin/yum", "")
+	dnf5 := newFixture(t)
+	dnf5.file("/usr/bin/dnf5", "").link("/usr/bin/dnf", "dnf5")
+	deb := newFixture(t)
+	deb.file("/usr/bin/apt-get", "").file("/usr/bin/yum", "")
 	for _, c := range []struct {
+		f     *fixture
 		prior map[string]any
 		want  string
 	}{
-		{map[string]any{"os_family": "RedHat", "distribution": "CentOS", "distribution_major_version": "7"}, "yum"},
-		{map[string]any{"os_family": "RedHat", "distribution": "Rocky", "distribution_major_version": "9"}, "dnf"},
-		{map[string]any{"os_family": "Debian", "distribution": "Ubuntu"}, "apt"},
+		{yumOnly, rh, "unknown"},
+		{dnf4, rh, "dnf"},
+		{dnf5, map[string]any{"os_family": "RedHat", "distribution": "Fedora", "distribution_major_version": "42"}, "dnf5"},
+		{deb, map[string]any{"os_family": "Debian", "distribution": "Ubuntu"}, "apt"},
+		{yumOnly, map[string]any{"os_family": "Suse"}, "dnf"},
 	} {
-		if got := collectPkgMgr(e, c.prior)["pkg_mgr"]; got != c.want {
+		if got := collectPkgMgr(c.f.env(nil), c.prior)["pkg_mgr"]; got != c.want {
 			t.Errorf("%v: got %v want %s", c.prior, got, c.want)
 		}
 	}

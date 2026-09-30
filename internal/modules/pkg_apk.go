@@ -55,10 +55,18 @@ func apkResult(failed, changed bool, msg, stdout, stderr string, packages []any)
 }
 
 func apkModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
-	p, err := apkSpec.Parse(rawArgs)
-	if err != nil {
-		return agentproto.Fail("%v", err)
+	return apkModuleAs(env, rawArgs, "apk")
+}
+
+// apkModuleAs is community.general.apk, named as invoked.
+func apkModuleAs(env *RunEnv, rawArgs map[string]any, name string) *agentproto.Result {
+	raw := copyRaw(rawArgs)
+	takeHidden(raw, pkgMgrFactKey)
+	p, fail := parseModuleArgs(apkSpec, raw, name)
+	if fail != nil {
+		return fail
 	}
+	rawArgs = raw
 	if err := apkSpec.MutuallyExclusive(rawArgs, []string{"name", "upgrade"}); err != nil {
 		return agentproto.Fail("%v", err)
 	}

@@ -8,7 +8,11 @@ import (
 
 func pkgOptsFor(t *testing.T, mgr string, raw map[string]any) pkgOpts {
 	t.Helper()
-	p, err := pkgSpec.Parse(raw)
+	spec := dnfSpec
+	if mgr == "apt" {
+		spec = aptSpec
+	}
+	p, err := spec.Parse(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,18 +61,24 @@ func TestPkgOptionsAptParams(t *testing.T) {
 			t.Errorf("remove opts %v lack %s", o.remove, want)
 		}
 	}
-	p, _ := pkgSpec.Parse(map[string]any{"cacheonly": true})
-	if _, err := pkgOptions("apt", p, map[string]any{"cacheonly": true}, nil); err == nil {
-		t.Error("dnf-only option accepted by apt")
+	// Each module accepts only its own parameters, as AnsibleModule does.
+	if _, fail := parseModuleArgs(aptSpec, map[string]any{"name": "x", "cacheonly": true}, "apt"); fail == nil ||
+		!strings.HasPrefix(fail.Msg, "Unsupported parameters for (apt) module: cacheonly. Supported parameters include: allow_change_held_packages,") ||
+		!strings.HasSuffix(fail.Msg, " (allow-downgrade, allow-downgrades, allow-unauthenticated, allow_downgrades, default-release, install-recommends, name, pkg, update-cache).") {
+		t.Errorf("apt accepted a dnf option: %+v", fail)
 	}
-	p, _ = pkgSpec.Parse(map[string]any{"policy_rc_d": 101})
-	if _, err := pkgOptions("dnf", p, map[string]any{"policy_rc_d": 101}, nil); err == nil {
-		t.Error("apt-only option accepted by dnf")
+	if _, fail := parseModuleArgs(dnfSpec, map[string]any{"name": "x", "policy_rc_d": 101}, "ansible.legacy.dnf"); fail == nil ||
+		fail.Msg != "Unsupported parameters for (ansible.legacy.dnf) module: policy_rc_d. Supported parameters include: "+
+			"allow_downgrade, allowerasing, autoremove, best, bugfix, cacheonly, conf_file, disable_excludes, "+
+			"disable_gpg_check, disable_plugin, disablerepo, download_dir, download_only, enable_plugin, enablerepo, "+
+			"exclude, install_weak_deps, installroot, list, lock_timeout, name, nobest, releasever, security, "+
+			"skip_broken, sslverify, state, update_cache, update_only, use_backend, validate_certs (expire-cache, pkg)." {
+		t.Errorf("dnf accepted an apt option: %+v", fail)
 	}
 }
 
 func TestAptDpkgOptions(t *testing.T) {
-	p, _ := pkgSpec.Parse(map[string]any{})
+	p, _ := aptSpec.Parse(map[string]any{})
 	want := `-o "Dpkg::Options::=--force-confdef" -o "Dpkg::Options::=--force-confold" -o DPkg::Lock::Timeout=60`
 	if got := aptDpkgOptions(p); got != want {
 		t.Errorf("got %s", got)
