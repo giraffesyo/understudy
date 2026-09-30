@@ -53,6 +53,9 @@ type Play struct {
 type BecomeFields struct {
 	Become     *bool
 	BecomeUser string
+	Method     string // become_method: sudo, su or doas ("" = inherit)
+	Flags      *string
+	Exe        string
 }
 
 // Block sections, recorded on tasks via BlockRef.

@@ -195,6 +195,12 @@ func (s *SSH) keepalive() {
 
 // Exec runs cmd in a fresh session, applying become wrapping.
 func (s *SSH) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error) {
+	if opts.Become.needsPTY() {
+		plain := func(ctx context.Context, c string, in io.Reader) (ExecResult, error) {
+			return s.Exec(ctx, c, ExecOptions{Stdin: in, Timeout: opts.Timeout})
+		}
+		return execPTYBecome(ctx, plain, s.startPTY, cmd, opts)
+	}
 	shellCmd, stdin := applyBecome(cmd, opts)
 
 	session, err := s.client.NewSession()
@@ -228,6 +234,51 @@ func (s *SSH) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResul
 		}
 		return res, nil
 	}
+}
+
+// sshPTY is a command running in a session with a pseudo-terminal.
+type sshPTY struct {
+	session *ssh.Session
+	in      io.WriteCloser
+	out     io.Reader
+}
+
+func (p *sshPTY) Read(b []byte) (int, error)  { return p.out.Read(b) }
+func (p *sshPTY) Write(b []byte) (int, error) { return p.in.Write(b) }
+func (p *sshPTY) Wait() error {
+	err := p.session.Wait()
+	p.session.Close()
+	return err
+}
+func (p *sshPTY) Kill() { p.session.Signal(ssh.SIGKILL); p.session.Close() }
+
+// startPTY runs cmd in a session with a terminal (echo off), for become
+// methods that prompt on a tty (su, doas).
+func (s *SSH) startPTY(ctx context.Context, cmd string) (ptyProcess, error) {
+	session, err := s.client.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("opening SSH session: %w", err)
+	}
+	modes := ssh.TerminalModes{ssh.ECHO: 0, ssh.TTY_OP_ISPEED: 38400, ssh.TTY_OP_OSPEED: 38400}
+	if err := session.RequestPty("xterm", 24, 200, modes); err != nil {
+		session.Close()
+		return nil, fmt.Errorf("requesting a terminal for become: %w", err)
+	}
+	in, err := session.StdinPipe()
+	if err != nil {
+		session.Close()
+		return nil, err
+	}
+	out, err := session.StdoutPipe()
+	if err != nil {
+		session.Close()
+		return nil, err
+	}
+	if err := session.Start(cmd); err != nil {
+		session.Close()
+		return nil, err
+	}
+	return &sshPTY{session: session, in: in, out: out}, nil
 }
 
 // WriteFile streams content to path via cat with an atomic temp+rename.

@@ -39,7 +39,7 @@ var playKeywords = map[string]bool{
 	"max_fail_percentage": true, "any_errors_fatal": true, "roles": true,
 	"force_handlers": true, "vars_prompt": true,
 	"gather_subset": true, "gather_timeout": true, "fact_path": true,
-	"check_mode": true, "diff": true,
+	"check_mode": true, "diff": true, "become_flags": true, "become_exe": true,
 }
 
 // Deferred play keys that must fail loudly rather than be ignored.
@@ -173,17 +173,9 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 				return nil, err
 			}
 			play.GatherFacts = &b
-		case "become":
-			b, err := decodeBool(val, file, "become")
-			if err != nil {
+		case "become", "become_user", "become_method", "become_flags", "become_exe":
+			if err := parseBecomeKey(&play.Become, key, val, file); err != nil {
 				return nil, err
-			}
-			play.Become.Become = &b
-		case "become_user":
-			play.Become.BecomeUser, _ = val.Str()
-		case "become_method":
-			if s, _ := val.Str(); s != "" && s != "sudo" {
-				return nil, errAt(file, val, "become_method %q is not supported (only sudo)", s)
 			}
 		case "tasks", "pre_tasks", "post_tasks", "handlers":
 			tasks, err := parseTaskList(val, file, key == "handlers")
@@ -384,13 +376,8 @@ func parseImportTasks(item, pathNode *yaml.Node, file string, handlers bool, bc 
 			inh.Vars, err = decodeMap(val, file, "vars")
 		case "tags":
 			inh.Tags = decodeStringList(val)
-		case "become":
-			var b bool
-			if b, err = decodeBool(val, file, "become"); err == nil {
-				inh.Become.Become = &b
-			}
-		case "become_user":
-			inh.Become.BecomeUser, _ = val.Str()
+		case "become", "become_user", "become_method", "become_flags", "become_exe":
+			err = parseBecomeKey(&inh.Become, key, val, file)
 		case "environment":
 			inh.Environment, err = decodeMap(val, file, "environment")
 		case "no_log":
@@ -516,7 +503,7 @@ func parseRoleRefs(node *yaml.Node, file string) ([]*RoleRef, error) {
 var blockKeywords = map[string]bool{
 	"block": true, "rescue": true, "always": true, "name": true,
 	"when": true, "become": true, "become_user": true, "become_method": true,
-	"vars": true, "tags": true, "environment": true, "no_log": true,
+	"become_flags": true, "become_exe": true, "vars": true, "tags": true, "environment": true, "no_log": true,
 	"ignore_errors": true, "check_mode": true, "diff": true, "delegate_to": true, "any_errors_fatal": true,
 }
 
@@ -539,13 +526,8 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 		switch key {
 		case "when":
 			inh.When = decodeExprList(val)
-		case "become":
-			var b bool
-			if b, err = decodeBool(val, file, "become"); err == nil {
-				inh.Become.Become = &b
-			}
-		case "become_user":
-			inh.Become.BecomeUser, _ = val.Str()
+		case "become", "become_user", "become_method", "become_flags", "become_exe":
+			err = parseBecomeKey(&inh.Become, key, val, file)
 		case "vars":
 			inh.Vars, err = decodeMap(val, file, "vars")
 		case "tags":
@@ -620,6 +602,15 @@ func applyBlockInheritance(t *Task, inh *Task) {
 	}
 	if t.Become.BecomeUser == "" {
 		t.Become.BecomeUser = inh.Become.BecomeUser
+	}
+	if t.Become.Method == "" {
+		t.Become.Method = inh.Become.Method
+	}
+	if t.Become.Flags == nil {
+		t.Become.Flags = inh.Become.Flags
+	}
+	if t.Become.Exe == "" {
+		t.Become.Exe = inh.Become.Exe
 	}
 	if len(inh.Vars) > 0 {
 		merged := make(map[string]any, len(inh.Vars)+len(t.Vars))
@@ -808,17 +799,9 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 				return nil, err
 			}
 			task.Delay = int(n)
-		case "become":
-			b, err := decodeBool(val, file, "become")
-			if err != nil {
+		case "become", "become_user", "become_method", "become_flags", "become_exe":
+			if err := parseBecomeKey(&task.Become, key, val, file); err != nil {
 				return nil, err
-			}
-			task.Become.Become = &b
-		case "become_user":
-			task.Become.BecomeUser, _ = val.Str()
-		case "become_method":
-			if s, _ := val.Str(); s != "" && s != "sudo" {
-				return nil, errAt(file, val, "become_method %q is not supported (only sudo)", s)
 			}
 		case "vars":
 			m, err := decodeMap(val, file, "vars")
@@ -884,7 +867,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			}
 			task.Diff = &b
 		case "throttle", "timeout", "ignore_unreachable", "collections",
-			"module_defaults", "debugger", "become_flags", "become_exe", "port":
+			"module_defaults", "debugger", "port":
 			// Accepted: no effect on execution outcome here.
 		case "async":
 			// Async with poll > 0 runs synchronously (same outcome; the
@@ -1225,4 +1208,55 @@ func truthyVar(v any) bool {
 		}
 	}
 	return false
+}
+
+// BecomeMethods are the supported become plugins (by normalized name).
+var BecomeMethods = []string{"sudo", "su", "doas"}
+
+// NormalizeBecomeMethod maps a become_method value to a supported plugin
+// name ("community.general.doas" is doas), or "" when unsupported.
+func NormalizeBecomeMethod(s string) string {
+	switch s {
+	case "sudo", "ansible.builtin.sudo", "ansible.legacy.sudo":
+		return "sudo"
+	case "su", "ansible.builtin.su", "ansible.legacy.su":
+		return "su"
+	case "doas", "community.general.doas":
+		return "doas"
+	}
+	return ""
+}
+
+// parseBecomeKey decodes one become keyword into bf.
+func parseBecomeKey(bf *BecomeFields, key string, val *yaml.Node, file string) error {
+	switch key {
+	case "become":
+		b, err := decodeBool(val, file, "become")
+		if err != nil {
+			return err
+		}
+		bf.Become = &b
+	case "become_user":
+		bf.BecomeUser, _ = val.Str()
+	case "become_method":
+		s, _ := val.Str()
+		if s == "" {
+			return nil
+		}
+		if strings.Contains(s, "{{") {
+			bf.Method = s // resolved per host at run time
+			return nil
+		}
+		m := NormalizeBecomeMethod(s)
+		if m == "" {
+			return errAt(file, val, "become_method %q is not supported (supported: sudo, su, doas)", s)
+		}
+		bf.Method = m
+	case "become_flags":
+		s, _ := val.Str()
+		bf.Flags = &s
+	case "become_exe":
+		bf.Exe, _ = val.Str()
+	}
+	return nil
 }

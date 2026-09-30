@@ -56,19 +56,20 @@ type HostStats struct {
 
 // Options configure a run.
 type Options struct {
-	Forks      int
-	CheckMode  bool
-	Diff       bool
-	Verbosity  int
-	ExtraVars  map[string]any
-	Become     bool
-	BecomeUser string
-	BecomePass string
-	Connection string // "" = per-host behavioral vars; "local" forces local
-	BaseDir    string // playbook directory
-	Tags       []string
-	SkipTags   []string
-	ConnOpts   connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
+	Forks        int
+	CheckMode    bool
+	Diff         bool
+	Verbosity    int
+	ExtraVars    map[string]any
+	Become       bool
+	BecomeUser   string
+	BecomeMethod string // --become-method ("" = sudo)
+	BecomePass   string
+	Connection   string // "" = per-host behavioral vars; "local" forces local
+	BaseDir      string // playbook directory
+	Tags         []string
+	SkipTags     []string
+	ConnOpts     connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
 
 	ForceHandlers bool           // --force-handlers: notified handlers run on failed hosts too
 	StartAtTask   string         // --start-at-task: skip tasks until one matches
@@ -1214,7 +1215,10 @@ func registerOverlay(task *playbook.Task, res *agentproto.Result) map[string]any
 // the delegate's connection (its own connection vars); the returned target
 // names where it ran.
 func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.Task, play *playbook.Play, vctx *vars.Context) (*actions.Context, string, error) {
-	become := r.effectiveBecome(play, task)
+	become, err := r.effectiveBecome(play, task, vctx)
+	if err != nil {
+		return nil, host, err
+	}
 	kw := connection.Keywords{
 		Connection: firstNonEmpty(task.Connection, play.Connection),
 		RemoteUser: firstNonEmpty(task.RemoteUser, play.RemoteUser),
@@ -1229,7 +1233,6 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 	}
 	var conn connection.Connection
 	var inProcess bool
-	var err error
 	if target != host && (target == "localhost" || target == "127.0.0.1") && r.Inv.Hosts[target] == nil {
 		// Implicit localhost: the control node, over the local connection.
 		conn, inProcess = connection.NewLocal(), true
@@ -1333,28 +1336,135 @@ func (r *Runner) effectiveDiff(play *playbook.Play, task *playbook.Task) bool {
 	return r.Opts.Diff
 }
 
-func (r *Runner) effectiveBecome(play *playbook.Play, task *playbook.Task) *connection.BecomeSpec {
+// effectiveBecome resolves privilege escalation for a task on a host the
+// way PlayContext does: command-line options, then play, block and task
+// keywords, then the host's connection variables (ansible_become,
+// ansible_become_method/_user/_password/_exe/_flags and the per-method
+// ansible_<method>_* forms), which outrank keywords.
+func (r *Runner) effectiveBecome(play *playbook.Play, task *playbook.Task, vctx *vars.Context) (_ *connection.BecomeSpec, err error) {
+	defer func() {
+		// Resolving a host variable panics on a template error.
+		if p := recover(); p != nil {
+			e, ok := p.(error)
+			if !ok {
+				panic(p)
+			}
+			err = e
+		}
+	}()
 	on := r.Opts.Become
-	user := r.Opts.BecomeUser
-	if play.Become.Become != nil {
-		on = *play.Become.Become
+	spec := &connection.BecomeSpec{User: r.Opts.BecomeUser, Method: r.Opts.BecomeMethod, Password: r.Opts.BecomePass}
+	for _, bf := range []playbook.BecomeFields{play.Become, task.Become} {
+		if bf.Become != nil {
+			on = *bf.Become
+		}
+		if bf.BecomeUser != "" {
+			spec.User = bf.BecomeUser
+		}
+		if bf.Method != "" {
+			spec.Method = bf.Method
+		}
+		if bf.Exe != "" {
+			spec.Exe = bf.Exe
+		}
+		if bf.Flags != nil {
+			spec.Flags = bf.Flags
+		}
 	}
-	if play.Become.BecomeUser != "" {
-		user = play.Become.BecomeUser
+	str := func(v any) (string, error) {
+		if s, ok := v.(string); ok {
+			out, err := vctx.TemplateString(s)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%v", out), nil
+		}
+		return fmt.Sprintf("%v", v), nil
 	}
-	if task.Become.Become != nil {
-		on = *task.Become.Become
+	hostVar := func(names ...string) (string, bool, error) {
+		for _, n := range names {
+			if v, ok := vctx.Get(n); ok && v != nil {
+				s, err := str(v)
+				return s, true, err
+			}
+		}
+		return "", false, nil
 	}
-	if task.Become.BecomeUser != "" {
-		user = task.Become.BecomeUser
+	if v, ok := vctx.Get("ansible_become"); ok {
+		switch t := v.(type) {
+		case bool:
+			on = t
+		case string:
+			s, err := str(t)
+			if err != nil {
+				return nil, err
+			}
+			on = template.Truthy(s) && !strings.EqualFold(s, "false") && !strings.EqualFold(s, "no") && s != "0"
+		}
 	}
 	if !on {
-		return nil
+		return nil, nil
 	}
-	if user == "" {
-		user = "root"
+	m, _, err := hostVar("ansible_become_method")
+	if err != nil {
+		return nil, err
 	}
-	return &connection.BecomeSpec{User: user, Method: "sudo", Password: r.Opts.BecomePass}
+	if m != "" {
+		spec.Method = m
+	}
+	if strings.Contains(spec.Method, "{{") {
+		if spec.Method, err = str(spec.Method); err != nil {
+			return nil, err
+		}
+	}
+	if spec.Method != "" {
+		norm := playbook.NormalizeBecomeMethod(spec.Method)
+		if norm == "" {
+			return nil, fmt.Errorf("become_method %q is not supported (supported: sudo, su, doas)", spec.Method)
+		}
+		spec.Method = norm
+	} else {
+		spec.Method = "sudo"
+	}
+	meth := spec.Method
+	if s, ok, err := hostVar("ansible_become_user", "ansible_"+meth+"_user"); err != nil {
+		return nil, err
+	} else if ok {
+		spec.User = s
+	}
+	if s, ok, err := hostVar("ansible_become_password", "ansible_become_pass", "ansible_"+meth+"_password", "ansible_"+meth+"_pass"); err != nil {
+		return nil, err
+	} else if ok {
+		spec.Password = s
+	}
+	if s, ok, err := hostVar("ansible_become_exe", "ansible_"+meth+"_exe"); err != nil {
+		return nil, err
+	} else if ok {
+		spec.Exe = s
+	}
+	if s, ok, err := hostVar("ansible_become_flags", "ansible_"+meth+"_flags"); err != nil {
+		return nil, err
+	} else if ok {
+		spec.Flags = &s
+	}
+	for _, p := range []*string{&spec.User, &spec.Exe} {
+		if strings.Contains(*p, "{{") {
+			if *p, err = str(*p); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if spec.Flags != nil && strings.Contains(*spec.Flags, "{{") {
+		f, err := str(*spec.Flags)
+		if err != nil {
+			return nil, err
+		}
+		spec.Flags = &f
+	}
+	if spec.User == "" {
+		spec.User = "root"
+	}
+	return spec, nil
 }
 
 // runModule executes a module request: in-process for local connections,

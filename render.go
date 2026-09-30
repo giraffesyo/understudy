@@ -54,6 +54,9 @@ func renderPlay(p *Play) (yaml.OrderedMap, error) {
 	if p.BecomeUser != "" {
 		add("become_user", p.BecomeUser)
 	}
+	if p.BecomeMethod != "" {
+		add("become_method", p.BecomeMethod)
+	}
 	if len(p.Vars) > 0 {
 		add("vars", p.Vars)
 	}
@@ -184,6 +187,9 @@ func renderTask(t *Task) (yaml.OrderedMap, error) {
 	}
 	if t.BecomeUser != "" {
 		add("become_user", t.BecomeUser)
+	}
+	if t.BecomeMethod != "" {
+		add("become_method", t.BecomeMethod)
 	}
 	if len(t.Vars) > 0 {
 		add("vars", t.Vars)

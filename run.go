@@ -31,6 +31,7 @@ type Options struct {
 
 	Become         bool
 	BecomeUser     string
+	BecomeMethod   string // sudo (default), su or doas
 	BecomePassword string
 
 	// Connection forces a transport ("local", "ssh"); empty uses each
@@ -135,19 +136,20 @@ func Run(ctx context.Context, pb Playbook, opts Options) (*Result, error) {
 	cb := &callback.Default{Out: out, Verbosity: opts.Verbosity, NoColor: opts.NoColor}
 
 	runner := executor.NewRunner(inv, cb, executor.Options{
-		Forks:      forks,
-		CheckMode:  opts.CheckMode,
-		Diff:       opts.Diff,
-		Verbosity:  opts.Verbosity,
-		ExtraVars:  opts.ExtraVars,
-		Become:     opts.Become,
-		BecomeUser: opts.BecomeUser,
-		BecomePass: opts.BecomePassword,
-		Connection: opts.Connection,
-		BaseDir:    baseDir,
-		Tags:       opts.Tags,
-		SkipTags:   opts.SkipTags,
-		Vault:      secrets,
+		Forks:        forks,
+		CheckMode:    opts.CheckMode,
+		Diff:         opts.Diff,
+		Verbosity:    opts.Verbosity,
+		ExtraVars:    opts.ExtraVars,
+		Become:       opts.Become,
+		BecomeUser:   opts.BecomeUser,
+		BecomeMethod: opts.BecomeMethod,
+		BecomePass:   opts.BecomePassword,
+		Connection:   opts.Connection,
+		BaseDir:      baseDir,
+		Tags:         opts.Tags,
+		SkipTags:     opts.SkipTags,
+		Vault:        secrets,
 		ConnOpts: connection.ManagerOptions{
 			RemoteUser:      remoteUser,
 			PrivateKey:      privateKey,
