@@ -56,6 +56,9 @@ func testGoldenOutput(t *testing.T, flags ...string) {
 
 	for _, pb := range corpus {
 		t.Run(filepath.Base(pb), func(t *testing.T) {
+			if reason, ok := vvvSkip[filepath.Base(pb)]; ok && slices.Contains(flags, "-vvv") {
+				t.Skip(reason)
+			}
 			abs, _ := filepath.Abs(pb)
 			base := filepath.Base(pb)
 			var extra []string
@@ -143,6 +146,16 @@ var verboseMasks = []struct {
 var vvvUnmodeled = regexp.MustCompile("(?m)^(?:<[^>\n]*> (?:EXEC|PUT) .*|Using module file .*|Read `vars_file` .*|" +
 	".* declined parsing .* as it did not pass its verify_file\\(\\) method|Parsed .* inventory source with .* plugin|" +
 	"Skipping due to inventory source not existing or not being readable by the current user)\n")
+
+// vvvSkip are corpus cases whose ansible-playbook run itself changes at
+// -vvv (the default and -v/-vv harnesses still cover them).
+var vvvSkip = map[string]string{
+	// A one-second task timeout races the extra connection work -vvv adds.
+	"task_timeout.yml": "timing-sensitive under -vvv",
+	// At -vvv the module's unknown-state failure surfaces as a result
+	// deserialization error instead of its message.
+	"results_wait_for.yml": "ansible-core's result changes at -vvv",
+}
 
 func normalizeVerbose(s string) string {
 	for _, m := range verboseMasks {
