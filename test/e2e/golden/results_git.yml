@@ -1,0 +1,325 @@
+---
+# Result dicts of git against local repositories (files/make_repos.sh
+# builds them with fixed dates, so hashes are stable): clone, check mode,
+# diffs, versions (branch, tag, annotated tag, sha), local modifications,
+# update/clone off, bare, depth, single_branch, refspec, remotes and URL
+# changes, archives, separate_git_dir, submodules and failures.
+- hosts: localhost
+  gather_facts: false
+  environment:
+    GIT_CONFIG_GLOBAL: /dev/null
+    GIT_CONFIG_NOSYSTEM: "1"
+    # file:// submodules need the file transport explicitly allowed.
+    GIT_CONFIG_COUNT: "1"
+    GIT_CONFIG_KEY_0: protocol.file.allow
+    GIT_CONFIG_VALUE_0: always
+  vars:
+    up: "{{ workdir }}/upstream"
+    w: "{{ workdir }}/work"
+  tasks:
+    - name: build the upstream repositories
+      command: sh {{ playbook_dir }}/files/make_repos.sh {{ workdir }}
+    - name: clear a previous run's checkouts
+      file: {path: "{{ item }}", state: absent}
+      loop: ["{{ w }}", "{{ workdir }}/archives", "{{ workdir }}/sepgit"]
+
+    - name: clone in check mode
+      git: {repo: "{{ up }}", dest: "{{ w }}/main"}
+      check_mode: true
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: clone
+      git: {repo: "{{ up }}", dest: "{{ w }}/main"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: clone again (up to date)
+      git: {repo: "{{ up }}", dest: "{{ w }}/main"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: switch to a lightweight tag
+      git: {repo: "{{ up }}", dest: "{{ w }}/main", version: v1}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: switch to an annotated tag in check mode
+      git: {repo: "{{ up }}", dest: "{{ w }}/main", version: v2}
+      check_mode: true
+      register: r
+    - debug: {var: r}
+
+    - name: switch to an annotated tag
+      git: {repo: "{{ up }}", dest: "{{ w }}/main", version: v2}
+      register: r
+    - debug: {var: r}
+
+    - name: switch to a branch
+      git: {repo: "{{ up }}", dest: "{{ w }}/main", version: feature}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: switch to a commit hash
+      git: {repo: "{{ up }}", dest: "{{ w }}/main", version: "{{ r.before }}"}
+      register: r
+    - debug: {var: r}
+
+    - name: back to HEAD
+      git: {repo: "{{ up }}", dest: "{{ w }}/main"}
+      register: r
+    - debug: {var: r}
+
+    - copy: {content: "local change\n", dest: "{{ w }}/main/a.txt"}
+    - name: local modifications without force
+      git: {repo: "{{ up }}", dest: "{{ w }}/main"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: local modifications in check mode with force
+      git: {repo: "{{ up }}", dest: "{{ w }}/main", force: true}
+      check_mode: true
+      register: r
+    - debug: {var: r}
+
+    - name: local modifications with force
+      git: {repo: "{{ up }}", dest: "{{ w }}/main", force: true}
+      register: r
+    - debug: {var: r}
+
+    - name: untracked files are not modifications
+      copy: {content: "untracked\n", dest: "{{ w }}/main/new.txt"}
+    - git: {repo: "{{ up }}", dest: "{{ w }}/main"}
+      register: r
+    - debug: {var: r}
+
+    - name: upstream moves on
+      command: sh {{ playbook_dir }}/files/make_repos.sh {{ workdir }} advance
+
+    - name: update=no reports the checkout
+      git: {repo: "{{ up }}", dest: "{{ w }}/main", update: false}
+      register: r
+    - debug: {var: r}
+
+    - name: pull the new commit in check mode
+      git: {repo: "{{ up }}", dest: "{{ w }}/main"}
+      check_mode: true
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: pull the new commit
+      git: {repo: "{{ up }}", dest: "{{ w }}/main"}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: clone=no without dest only asks the remote
+      git: {repo: "{{ up }}", clone: false, version: feature}
+      register: r
+    - debug: {var: r}
+
+    - name: clone=no with a missing dest
+      git: {repo: "{{ up }}", dest: "{{ w }}/never", clone: false}
+      register: r
+    - debug: {var: r}
+
+    - name: an equivalent remote url
+      git: {repo: "file://{{ up }}/", dest: "{{ w }}/main"}
+      register: r
+    - debug: {var: r}
+
+    - name: a changed remote url in check mode
+      git: {repo: "{{ workdir }}/mirror", dest: "{{ w }}/main"}
+      check_mode: true
+      register: r
+    - debug: {var: r}
+
+    - name: a changed remote url
+      git: {repo: "{{ workdir }}/mirror", dest: "{{ w }}/main"}
+      register: r
+    - debug: {var: r}
+
+    - name: a different remote name
+      git: {repo: "{{ up }}", dest: "{{ w }}/renamed", remote: upstream, version: feature}
+      register: r
+    - debug: {var: r}
+    - command: git -C {{ w }}/renamed remote
+      register: remotes
+    - debug: {var: remotes.stdout_lines}
+
+    - name: bare clone
+      git: {repo: "{{ up }}", dest: "{{ w }}/bare.git", bare: true}
+      register: r
+    - debug: {var: r}
+
+    - name: bare clone again
+      git: {repo: "{{ up }}", dest: "{{ w }}/bare.git", bare: true}
+      register: r
+    - debug: {var: r}
+
+    - name: shallow clone of a branch
+      git: {repo: "{{ up }}", dest: "{{ w }}/shallow", depth: 1, version: feature}
+      register: r
+    - debug: {var: r}
+    - command: git -C {{ w }}/shallow rev-list --count HEAD
+      register: count
+    - debug: {var: count.stdout}
+
+    - name: shallow clone of a sha ignores depth
+      git: {repo: "{{ up }}", dest: "{{ w }}/shallow-sha", depth: 1, version: "{{ r.after }}"}
+      register: r
+    - debug: {var: r}
+
+    - name: single branch clone
+      git: {repo: "{{ up }}", dest: "{{ w }}/single", single_branch: true, version: feature}
+      register: r
+    - debug: {var: r}
+    - command: git -C {{ w }}/single branch -r
+      register: branches
+    - debug: {var: branches.stdout_lines}
+
+    - name: refspec
+      git: {repo: "{{ up }}", dest: "{{ w }}/refspec", refspec: "+refs/heads/feature:refs/remotes/origin/feature"}
+      register: r
+    - debug: {var: r}
+
+    - file: {path: "{{ workdir }}/archives", state: directory}
+    - name: archive
+      git: {repo: "{{ up }}", dest: "{{ w }}/main", archive: "{{ workdir }}/archives/main.tar"}
+      register: r
+    - debug: {var: r}
+    - name: the same archive again
+      git: {repo: "{{ up }}", dest: "{{ w }}/main", archive: "{{ workdir }}/archives/main.tar"}
+      register: r
+    - debug: {var: r}
+    - name: a zip archive with a prefix
+      git: {repo: "{{ up }}", dest: "{{ w }}/main", archive: "{{ workdir }}/archives/main.zip", archive_prefix: "main/", update: false}
+      register: r
+    - debug: {var: r}
+    - command: unzip -l {{ workdir }}/archives/main.zip
+      register: listing
+    - debug: {msg: "{{ listing.stdout_lines[3:-2] | map('regex_replace', '^.* ', '') | list }}"}
+    - name: an archive with an unknown extension
+      git: {repo: "{{ up }}", dest: "{{ w }}/main", archive: "{{ workdir }}/archives/main.rar"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - file: {path: "{{ workdir }}/sepgit", state: directory}
+    - name: separate_git_dir on clone
+      git: {repo: "{{ up }}", dest: "{{ w }}/sep", separate_git_dir: "{{ workdir }}/sepgit/one"}
+      register: r
+    - debug: {var: r}
+    - command: cat {{ w }}/sep/.git
+      register: dotgit
+    - debug: {var: dotgit.stdout}
+    - name: move the git dir of an existing checkout
+      git: {repo: "{{ up }}", dest: "{{ w }}/sep", separate_git_dir: "{{ workdir }}/sepgit/two"}
+      register: r
+    - debug: {var: r}
+
+    - name: submodules
+      git: {repo: "{{ workdir }}/withsub", dest: "{{ w }}/withsub"}
+      register: r
+    - debug: {var: r}
+    - command: cat {{ w }}/withsub/libs/sub/s.txt
+      register: subfile
+    - debug: {var: subfile.stdout}
+    - name: submodules unchanged
+      git: {repo: "{{ workdir }}/withsub", dest: "{{ w }}/withsub"}
+      register: r
+    - debug: {var: r}
+    - name: track_submodules follows the submodule's branch
+      git: {repo: "{{ workdir }}/withsub", dest: "{{ w }}/withsub", track_submodules: true}
+      register: r
+    - debug: {var: r}
+    - command: cat {{ w }}/withsub/libs/sub/s.txt
+      register: subfile
+    - debug: {var: subfile.stdout}
+    - name: recursive off
+      git: {repo: "{{ workdir }}/withsub", dest: "{{ w }}/nosub", recursive: false}
+      register: r
+    - debug: {var: r}
+    - stat: {path: "{{ w }}/nosub/libs/sub/s.txt"}
+      register: st
+    - debug: {var: st.stat.exists}
+
+    - name: umask as a string
+      git: {repo: "{{ up }}", dest: "{{ w }}/umask", umask: "0027"}
+      register: r
+    - debug: {var: r.changed}
+    - stat: {path: "{{ w }}/umask/a.txt"}
+      register: st
+    - debug: {var: st.stat.mode}
+
+    - name: umask as a number
+      git: {repo: "{{ up }}", dest: "{{ w }}/umask2", umask: 18}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: umask that is not octal
+      git: {repo: "{{ up }}", dest: "{{ w }}/umask2", umask: "0999"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: ssh options (unused by file://)
+      git:
+        repo: "{{ up }}"
+        dest: "{{ w }}/main"
+        accept_hostkey: true
+        key_file: /nonexistent/key
+        ssh_opts: "-o ConnectTimeout=5"
+      register: r
+    - debug: {var: r}
+
+    - name: verify_commit on an unsigned commit
+      git: {repo: "{{ up }}", dest: "{{ w }}/verify", verify_commit: true}
+      register: r
+      ignore_errors: true
+    - debug: {var: r.msg}
+
+    - name: a repository that does not exist
+      git: {repo: "{{ workdir }}/nope", dest: "{{ w }}/nope"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: a version that does not exist
+      git: {repo: "{{ up }}", dest: "{{ w }}/main", version: no-such-branch}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: dest is required to clone
+      git: {repo: "{{ up }}"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: archive_prefix requires archive
+      git: {repo: "{{ up }}", dest: "{{ w }}/main", archive_prefix: x/}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: bare and separate_git_dir are exclusive
+      git: {repo: "{{ up }}", dest: "{{ w }}/x", bare: true, separate_git_dir: "{{ workdir }}/y"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: a broken .git file
+      copy: {content: "nonsense\n", dest: "{{ w }}/broken/.git"}
+    - git: {repo: "{{ up }}", dest: "{{ w }}/broken"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}

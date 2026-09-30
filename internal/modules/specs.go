@@ -17,6 +17,7 @@ func init() {
 		&getURLSpec:      {"get_url", "ansible.builtin.get_url"},
 		&cronSpec:        {"cron", "ansible.builtin.cron"},
 		&uriSpec:         {"uri", "ansible.builtin.uri"},
+		&gitSpec:         {"git", "ansible.builtin.git"},
 		&fileSpec:        {"file", "ansible.builtin.file"},
 		&mountSpec:       {"mount", "ansible.posix.mount"},
 		&mysqlDBSpec:     {"mysql_db", "community.mysql.mysql_db"},
