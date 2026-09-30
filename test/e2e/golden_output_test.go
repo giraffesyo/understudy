@@ -78,10 +78,15 @@ func testGoldenOutput(t *testing.T, flags ...string) {
 	}
 }
 
-var timingRe = regexp.MustCompile(`"(delta|start|end)": "[^"]*"`)
+var (
+	timingRe = regexp.MustCompile(`"(delta|start|end)": "[^"]*"`)
+	// The HTTP fixture's (golden/files/http_fixture.py) ephemeral ports.
+	loopbackPortRe = regexp.MustCompile(`//(127\.0\.0\.1|localhost):[0-9]{4,5}\b`)
+)
 
 func normalizeOutput(s, work string) string {
 	s = strings.ReplaceAll(s, work, "WORK")
+	s = loopbackPortRe.ReplaceAllString(s, "//$1:PORT")
 	return timingRe.ReplaceAllString(s, `"$1": "T"`)
 }
 
