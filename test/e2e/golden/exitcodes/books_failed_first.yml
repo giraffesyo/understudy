@@ -1,0 +1,8 @@
+---
+# Each playbook ends with its own recap; a playbook with a non-zero result
+# is the last one run (books/second.yml never starts).
+- hosts: a:b
+  gather_facts: false
+  tasks:
+    - fail:
+      when: inventory_hostname == 'h1'

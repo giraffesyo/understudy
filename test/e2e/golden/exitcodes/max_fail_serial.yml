@@ -1,0 +1,18 @@
+---
+# The breach is per batch: the first batch runs the play through, the
+# second breaches and ends the run.
+- hosts: a:b
+  gather_facts: false
+  serial: 1
+  max_fail_percentage: 0
+  tasks:
+    - debug: msg=before
+    - fail:
+      when: inventory_hostname == 'h2'
+    - debug: msg=after
+  post_tasks:
+    - debug: msg=post
+- hosts: a
+  gather_facts: false
+  tasks:
+    - debug: msg="not reached"

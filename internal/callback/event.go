@@ -105,6 +105,10 @@ func (e *events) PlayStart(p *playbook.Play) {
 	e.emit(Event{Event: "v2_playbook_on_play_start", Play: &EventPlay{Name: p.Name, Hosts: p.HostPattern}})
 }
 
+func (e *events) NoHostsRemaining() {
+	e.emit(Event{Event: "v2_playbook_on_no_hosts_remaining"})
+}
+
 func (e *events) TaskStart(t *playbook.Task, name string, handler bool) {
 	e.mu.Lock()
 	e.names[t] = name
@@ -174,6 +178,9 @@ func (e *events) AsyncDone(host, jid string, failed bool) {
 func (e *events) Recap(stats map[string]*executor.HostStats, order []string) {
 	out := make(map[string]map[string]int, len(stats))
 	for h, st := range stats {
+		if !st.Processed() {
+			continue
+		}
 		out[h] = map[string]int{"ok": st.OK, "changed": st.Changed, "unreachable": st.Unreachable,
 			"failures": st.Failed, "skipped": st.Skipped, "rescued": st.Rescued, "ignored": st.Ignored}
 	}

@@ -191,6 +191,7 @@ func (c *composer) composeNode(ev event) (*Node, error) {
 	case evScalar:
 		n = nodeAt(ScalarNode, ev)
 		n.Value, n.Style = ev.value, ev.style
+		recordOrigin(n.Value, c.p.s.name, n.Line, n.Column)
 		if ev.anchor != "" {
 			c.anchors[ev.anchor] = n
 		}

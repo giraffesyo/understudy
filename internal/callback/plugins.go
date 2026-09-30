@@ -151,6 +151,13 @@ func (f *filtered) HostUnreachable(host string, task *playbook.Task, msg string)
 	f.Callback.HostUnreachable(host, task, msg)
 }
 
+func (f *filtered) NoHostsRemaining() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.flush()
+	f.Callback.NoHostsRemaining()
+}
+
 func (f *filtered) PlayStart(play *playbook.Play) {
 	f.mu.Lock()
 	f.pending = nil
@@ -169,6 +176,12 @@ func (m *fanout) PlayStart(p *playbook.Play) {
 	m.primary.PlayStart(p)
 	for _, c := range m.extras {
 		c.PlayStart(p)
+	}
+}
+func (m *fanout) NoHostsRemaining() {
+	m.primary.NoHostsRemaining()
+	for _, c := range m.extras {
+		c.NoHostsRemaining()
 	}
 }
 func (m *fanout) TaskStart(t *playbook.Task, name string, handler bool) {
@@ -212,6 +225,7 @@ func (m *fanout) Recap(stats map[string]*executor.HostStats, order []string) {
 type quiet struct{}
 
 func (quiet) PlayStart(*playbook.Play)                                         {}
+func (quiet) NoHostsRemaining()                                                {}
 func (quiet) TaskStart(*playbook.Task, string, bool)                           {}
 func (quiet) HostResult(string, *playbook.Task, *agentproto.Result, bool, any) {}
 func (quiet) LoopResult(string, *playbook.Task, *agentproto.Result, bool)      {}

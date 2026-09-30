@@ -1,0 +1,78 @@
+---
+# The timeout keyword: the action is abandoned after N seconds with
+# ansible-core's timed-out result. It inherits from blocks, roles and the
+# play, templates per loop item, bypasses until retries, and does not
+# bound async polling. Invalid values fail the task.
+- name: task timeout
+  hosts: all
+  gather_facts: false
+  vars:
+    t: 1
+  roles:
+    - role: slowrole
+      timeout: 1
+  tasks:
+    - command: sleep 3
+      timeout: 1
+      register: r
+      ignore_errors: true
+    - debug: var=r.timedout.period
+    - debug: msg="{{ r.msg }} {{ r.failed }} {{ r.changed }} {{ r.exception }}"
+    - name: templated, per loop item
+      command: sleep 3
+      timeout: "{{ t * item }}"
+      loop: [1]
+      register: loop_r
+      ignore_errors: true
+    - debug: msg="{{ loop_r.results | map(attribute='timedout.period') | list }} {{ loop_r.msg }}"
+    - block:
+        - name: inherited from the block
+          command: sleep 3
+          ignore_errors: true
+      timeout: 1
+    - name: until retries are not attempted after a timeout
+      command: sleep 3
+      timeout: 1
+      until: false
+      retries: 3
+      delay: 0
+      register: u
+      ignore_errors: true
+    - debug: msg="{{ u.attempts is defined }}"
+    - name: async polling is not bounded
+      command: sleep 1.5
+      async: 10
+      poll: 3
+      timeout: 1
+    - name: finishing in time
+      command: "true"
+      timeout: 5
+    - name: zero is no timeout
+      command: "true"
+      timeout: 0
+    - name: negative
+      command: "true"
+      timeout: -1
+      ignore_errors: true
+    - name: not a number
+      command: "true"
+      timeout: abc
+      ignore_errors: true
+    - name: not a whole number
+      command: "true"
+      timeout: "1.5"
+      ignore_errors: true
+    - name: a whole-number string
+      command: "true"
+      timeout: " 3 "
+
+- name: play timeout
+  hosts: all
+  gather_facts: false
+  timeout: 1
+  tasks:
+    - command: sleep 3
+      ignore_errors: true
+    - name: the task's own wins
+      command: sleep 1.2
+      timeout: 5

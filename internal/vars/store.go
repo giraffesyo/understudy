@@ -189,6 +189,11 @@ type Context struct {
 	pos       template.Position
 
 	keepDeprecated bool
+	// sourced: templates in the value being resolved report their own
+	// origin (where the variable was defined) rather than pos.
+	sourced bool
+	// inContainer: the value being templated is an item of a container.
+	inContainer bool
 }
 
 // NewContext builds a variable context for one host and task.
@@ -356,7 +361,12 @@ func (c *Context) GetTagged(name string) (any, bool) {
 	}
 	c.resolving[name] = true
 	defer delete(c.resolving, name)
-	v, err := c.deepTemplate(raw)
+	// A variable's templates report where the variable was defined, as
+	// ansible-core's origin-tagged values do (a deprecated value read,
+	// an undefined variable).
+	sourced := *c
+	sourced.sourced = true
+	v, err := sourced.deepTemplate(raw)
 	if err != nil {
 		panic(err) // recovered by Context.Template*/executor boundary
 	}
@@ -371,11 +381,43 @@ func (e *CycleError) Error() string {
 	return fmt.Sprintf("recursive loop detected in template: variable %q references itself", e.Name)
 }
 
+// origin is where a template in the value being templated reports from:
+// its own origin while resolving a variable, else the context's position.
+func (c *Context) origin(s string) template.Position {
+	pos := c.pos
+	if c.sourced {
+		if file, line, col, ok := yaml.Origin(s); ok {
+			pos = template.Position{File: file, Line: line, Col: col}
+		}
+	}
+	pos.InContainer = c.inContainer
+	return pos
+}
+
+// Sourced returns a view whose templates report their own origins (a
+// container's items where each was written) where known, else its
+// position.
+func (c *Context) Sourced() *Context {
+	child := *c
+	child.sourced = true
+	return &child
+}
+
+// items is the view a container's items are templated in.
+func (c *Context) items() *Context {
+	if c.inContainer {
+		return c
+	}
+	child := *c
+	child.inContainer = true
+	return &child
+}
+
 // deepTemplate walks a raw value, rendering every string through the engine.
 func (c *Context) deepTemplate(v any) (any, error) {
 	switch t := v.(type) {
 	case string:
-		return c.store.engine.RenderTemplate(t, c, c.pos)
+		return c.store.engine.RenderTemplate(t, c, c.origin(t))
 	case yaml.UnsafeString:
 		return t, nil // never re-templated
 	case Final:
@@ -393,7 +435,7 @@ func (c *Context) deepTemplate(v any) (any, error) {
 	case []any:
 		out := make([]any, len(t))
 		for i, item := range t {
-			r, err := c.deepTemplate(item)
+			r, err := c.items().deepTemplate(item)
 			if err != nil {
 				return nil, err
 			}
@@ -403,7 +445,7 @@ func (c *Context) deepTemplate(v any) (any, error) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, val := range t {
-			r, err := c.deepTemplate(val)
+			r, err := c.items().deepTemplate(val)
 			if err != nil {
 				return nil, err
 			}
@@ -415,7 +457,7 @@ func (c *Context) deepTemplate(v any) (any, error) {
 		// strings are rendered, and keep the key order the result should carry.
 		out := yaml.NewOMap()
 		for _, k := range t.Keys() {
-			r, err := c.deepTemplate(t.Get(k))
+			r, err := c.items().deepTemplate(t.Get(k))
 			if err != nil {
 				return nil, err
 			}

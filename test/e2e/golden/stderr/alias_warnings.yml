@@ -1,0 +1,35 @@
+---
+# An option set along with its alias: the alias's value wins (the last
+# alias set, in the spec's alias order), with a warning per alias set
+# after the option or an earlier alias. Warnings print once.
+- name: option and alias both set
+  hosts: all
+  gather_facts: false
+  tasks:
+    - file:
+        path: "{{ workdir }}/by_option"
+        dest: "{{ workdir }}/by_alias"
+        state: touch
+      register: r
+    - debug: var=r.dest
+    - lineinfile:
+        path: "{{ workdir }}/by_option"
+        dest: "{{ workdir }}/by_alias"
+        destfile: "{{ workdir }}/by_second_alias"
+        line: hello
+        create: true
+      register: l
+    - debug: var=l.warnings
+    - lineinfile:
+        dest: "{{ workdir }}/by_alias"
+        name: "{{ workdir }}/by_third_alias"
+        line: hello
+        create: true
+      register: l
+    - debug: var=l.warnings
+    - stat:
+        path: "{{ workdir }}/{{ item }}"
+      loop: [by_option, by_alias, by_second_alias, by_third_alias]
+      register: st
+    - debug:
+        msg: "{{ st.results | map(attribute='stat.exists') | list }}"

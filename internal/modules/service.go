@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 
@@ -427,13 +426,5 @@ func applyEnv(cmd *exec.Cmd, env *RunEnv) {
 	if len(env.Env) == 0 {
 		return
 	}
-	cmd.Env = os.Environ()
-	keys := make([]string, 0, len(env.Env))
-	for k := range env.Env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, env.Env[k]))
-	}
+	cmd.Env = env.Environ()
 }
