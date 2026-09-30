@@ -1,0 +1,65 @@
+# distros: rocky-systemd
+---
+# ansible.posix.firewalld against a running firewalld: ports, services,
+# sources, masquerade, rich rules, icmp blocks and their inversion,
+# protocols, port forwards, zone forwarding and targets, zones, timeouts,
+# offline changes and parameter errors.
+- hosts: target
+  gather_facts: false
+  become: true
+  tasks:
+    - name: a permanent port
+      firewalld: {port: 8081/tcp, permanent: true, state: enabled}
+    - name: the same port, permanent and immediate
+      firewalld: {port: 8081/tcp, permanent: true, immediate: true, state: enabled}
+    - name: again
+      firewalld: {port: 8081/tcp, permanent: true, immediate: true, state: enabled}
+    - name: a service in check mode
+      firewalld: {service: http, zone: public, permanent: true, state: enabled}
+      check_mode: true
+    - name: a service
+      firewalld: {service: http, zone: public, permanent: true, immediate: true, state: enabled}
+    - name: a source
+      firewalld: {source: 192.0.2.0/24, zone: internal, permanent: true, state: enabled}
+    - name: masquerade
+      firewalld: {masquerade: true, zone: public, permanent: true, state: enabled}
+    - name: a rich rule
+      firewalld:
+        rich_rule: rule family="ipv4" source address="198.51.100.0/24" service name="ssh" accept
+        permanent: true
+        immediate: true
+        state: enabled
+    - name: an icmp block
+      firewalld: {icmp_block: echo-request, permanent: true, state: enabled}
+    - name: icmp block inversion
+      firewalld: {icmp_block_inversion: true, permanent: true, state: enabled}
+    - name: a protocol
+      firewalld: {protocol: gre, permanent: true, state: enabled}
+    - name: a port forward
+      firewalld:
+        port_forward: [{port: "8080", proto: tcp, toport: "80"}]
+        permanent: true
+        state: enabled
+    - name: forwarding in the zone
+      firewalld: {forward: true, zone: public, permanent: true, state: enabled}
+    - name: a new zone
+      firewalld: {zone: golden, state: present, permanent: true}
+    - name: its target
+      firewalld: {zone: golden, target: DROP, state: enabled, permanent: true}
+    - name: a port with a timeout
+      firewalld: {port: 9090/udp, timeout: 300, state: enabled}
+    - name: offline
+      firewalld: {port: 7070/tcp, permanent: true, offline: true, state: enabled}
+    - name: remove the port
+      firewalld: {port: 8081/tcp, permanent: true, immediate: true, state: disabled}
+    - name: remove the zone
+      firewalld: {zone: golden, state: absent, permanent: true}
+    - name: two items at once
+      firewalld: {port: 1/tcp, service: http, state: enabled}
+      ignore_errors: true
+    - name: a malformed port
+      firewalld: {port: "80", permanent: true, state: enabled}
+      ignore_errors: true
+    - name: zone state with an item
+      firewalld: {port: 81/tcp, zone: public, state: present, permanent: true}
+      ignore_errors: true
