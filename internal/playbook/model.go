@@ -79,7 +79,7 @@ type BlockRef struct {
 type Task struct {
 	Name           string
 	Module         string
-	Action         string // module as written (FQCN kept): unnamed task banners
+	Action         string         // module as written (FQCN kept): unnamed task banners
 	Args           map[string]any // raw (untemplated) module args
 	FreeForm       string         // raw params for command/shell/raw
 	When           []string       // list of expressions, ANDed
