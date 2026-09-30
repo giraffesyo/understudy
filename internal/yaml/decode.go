@@ -65,18 +65,33 @@ func ctorKind(tag string) (Kind, bool) {
 // string, []any, *OMap, VaultedString, or UnsafeString, as ansible-core's
 // constructor builds them: YAML 1.1 implicit typing for plain scalars,
 // merge keys (<<) applied in PyYAML's order, aliases followed.
+//
+// A node is constructed once: every alias to it is the same value, and an
+// alias inside the collection it names makes a recursive structure, as
+// PyYAML builds them.
 func (n *Node) Decode() (any, error) { return n.decode(false) }
 
 func (n *Node) decode(unsafe bool) (any, error) {
+	return n.decodeIn(&decodeState{memo: map[memoKey]any{}}, unsafe)
+}
+
+// decodeState is one Decode's constructed collections, by node.
+type decodeState struct {
+	memo map[memoKey]any
+}
+
+type memoKey struct {
+	n      *Node
+	unsafe bool
+}
+
+func (n *Node) decodeIn(st *decodeState, unsafe bool) (any, error) {
 	n = n.resolveAlias()
-	if n.recursive {
-		return nil, n.markedErr("", "found unconstructable recursive node")
-	}
 	switch n.Tag {
 	case tagUnsafe:
-		return n.decodeImplicit(true)
+		return n.decodeImplicit(st, true)
 	case tagVault, tagVaultEn:
-		v, err := n.decodeImplicit(unsafe)
+		v, err := n.decodeImplicit(st, unsafe)
 		if err != nil {
 			return nil, err
 		}
@@ -88,7 +103,7 @@ func (n *Node) decode(unsafe bool) (any, error) {
 		}
 		return nil, n.ansibleErr(fmt.Sprintf("the %s tag requires a string value", pyRepr(n.Tag)))
 	case "", "!":
-		return n.decodeImplicit(unsafe)
+		return n.decodeImplicit(st, unsafe)
 	}
 	if k, ok := ctorKind(n.Tag); !ok {
 		return nil, n.markedErr("", fmt.Sprintf("could not determine a constructor for the tag %s", pyRepr(n.Tag)))
@@ -99,19 +114,19 @@ func (n *Node) decode(unsafe bool) (any, error) {
 	case ScalarNode:
 		return n.decodeScalar(n.Tag, unsafe)
 	case SequenceNode:
-		return n.decodeSequence(unsafe)
+		return n.decodeSequence(st, unsafe)
 	}
-	return n.decodeMapping(unsafe)
+	return n.decodeMapping(st, unsafe)
 }
 
 // decodeImplicit constructs a node by its implicitly resolved tag. A "!"
 // tag and ansible's !unsafe resolve even quoted scalars as if plain.
-func (n *Node) decodeImplicit(unsafe bool) (any, error) {
+func (n *Node) decodeImplicit(st *decodeState, unsafe bool) (any, error) {
 	switch n.Kind {
 	case SequenceNode:
-		return n.decodeSequence(unsafe)
+		return n.decodeSequence(st, unsafe)
 	case MappingNode:
-		return n.decodeMapping(unsafe)
+		return n.decodeMapping(st, unsafe)
 	}
 	if n.Style == Plain || n.Tag != "" {
 		v := resolveScalar(n.Value)
@@ -245,34 +260,46 @@ func constructFloat(s string) (any, error) {
 	return sign * f, nil
 }
 
-func (n *Node) decodeSequence(unsafe bool) (any, error) {
+func (n *Node) decodeSequence(st *decodeState, unsafe bool) (any, error) {
+	key := memoKey{n, unsafe}
+	if v, ok := st.memo[key]; ok {
+		return v, nil
+	}
 	// Every list gets its own backing array, even an empty one, so it has
 	// an identity (to_yaml aliases a list referenced twice, as PyYAML
 	// does by id(); zero-capacity slices would all share one address).
-	out := make([]any, 0, max(len(n.Content), 1))
-	for _, item := range n.Content {
-		v, err := item.decode(unsafe)
+	// It is registered at its full length before its items are built, so
+	// an item that aliases it shares it.
+	out := make([]any, len(n.Content), max(len(n.Content), 1))
+	st.memo[key] = out
+	for i, item := range n.Content {
+		v, err := item.decodeIn(st, unsafe)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, v)
+		out[i] = v
 	}
 	return out, nil
 }
 
-func (n *Node) decodeMapping(unsafe bool) (any, error) {
+func (n *Node) decodeMapping(st *decodeState, unsafe bool) (any, error) {
+	key := memoKey{n, unsafe}
+	if v, ok := st.memo[key]; ok {
+		return v, nil
+	}
 	pairs, err := n.flatten()
 	if err != nil {
 		return nil, err
 	}
 	out := NewOMap()
+	st.memo[key] = out
 	names := map[any]string{} // Python-equal keys share the first's name
 	for i := 0; i+1 < len(pairs); i += 2 {
-		k, err := pairs[i].decode(false)
+		k, err := pairs[i].decodeIn(st, false)
 		if err != nil {
 			return nil, err
 		}
-		v, err := pairs[i+1].decode(unsafe)
+		v, err := pairs[i+1].decodeIn(st, unsafe)
 		if err != nil {
 			return nil, err
 		}
@@ -307,7 +334,16 @@ func isMergeKey(k *Node) bool {
 // PyYAML's flatten_mapping does: the merged pairs come first (for a list of
 // sources, later sources first, so earlier ones win), then the mapping's own
 // pairs, so its own keys override merged ones.
-func (n *Node) flatten() ([]*Node, error) {
+func (n *Node) flatten() ([]*Node, error) { return n.flattenIn(map[*Node]bool{}) }
+
+// flattenIn is flatten with the mappings being flattened: one that merges
+// itself cannot be built.
+func (n *Node) flattenIn(active map[*Node]bool) ([]*Node, error) {
+	if active[n] {
+		return nil, n.markedErr("", "found unconstructable recursive node")
+	}
+	active[n] = true
+	defer delete(active, n)
 	var merge, own []*Node
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		key, value := n.Content[i].resolveAlias(), n.Content[i+1]
@@ -317,7 +353,7 @@ func (n *Node) flatten() ([]*Node, error) {
 		}
 		switch v := value.resolveAlias(); v.Kind {
 		case MappingNode:
-			sub, err := v.flatten()
+			sub, err := v.flattenIn(active)
 			if err != nil {
 				return nil, err
 			}
@@ -329,7 +365,7 @@ func (n *Node) flatten() ([]*Node, error) {
 				if it.Kind != MappingNode {
 					return nil, n.mappingErr(fmt.Sprintf("expected a mapping for merging, but found %s", kindName(it.Kind)), item)
 				}
-				sub, err := it.flatten()
+				sub, err := it.flattenIn(active)
 				if err != nil {
 					return nil, err
 				}
@@ -408,9 +444,6 @@ func (c *constructor) object(n *Node) error {
 		return nil
 	}
 	c.seen[n] = true
-	if n.recursive {
-		return n.markedErr("", "found unconstructable recursive node")
-	}
 	switch n.Tag {
 	case tagUnsafe, tagVault, tagVaultEn:
 		// Built deep, right away.

@@ -58,10 +58,27 @@ func truthy(v any) bool {
 
 // toStr renders a value the way Jinja/Python str() would, for template
 // output and the ~ operator.
-func toStr(v any) string {
+func toStr(v any) string { return toStrIn(v, nil) }
+
+// toStrIn is toStr inside the containers of active: one met again shows
+// as Python's repr shows a recursive list or dict ("[...]", "{...}").
+func toStrIn(v any, active map[containerID]bool) string {
+	if id, ok := containerOf(v); ok {
+		if active[id] {
+			if _, isList := v.([]any); isList {
+				return "[...]"
+			}
+			return "{...}"
+		}
+		if active == nil {
+			active = map[containerID]bool{}
+		}
+		active[id] = true
+		defer delete(active, id)
+	}
 	switch t := v.(type) {
 	case Deprecated:
-		return toStr(t.Value)
+		return toStrIn(t.Value, active)
 	case nil:
 		return "None"
 	case bool:
@@ -86,7 +103,7 @@ func toStr(v any) string {
 			if i > 0 {
 				b.WriteString(", ")
 			}
-			b.WriteString(pyRepr(item))
+			b.WriteString(pyReprIn(item, active))
 		}
 		b.WriteByte(']')
 		return b.String()
@@ -97,9 +114,9 @@ func toStr(v any) string {
 			if i > 0 {
 				b.WriteString(", ")
 			}
-			b.WriteString(pyRepr(k))
+			b.WriteString(pyReprIn(k, active))
 			b.WriteString(": ")
-			b.WriteString(pyRepr(t[k]))
+			b.WriteString(pyReprIn(t[k], active))
 		}
 		b.WriteByte('}')
 		return b.String()
@@ -113,9 +130,9 @@ func toStr(v any) string {
 				b.WriteString(", ")
 			}
 			mv, _ := t.GetItem(k)
-			b.WriteString(pyRepr(k))
+			b.WriteString(pyReprIn(k, active))
 			b.WriteString(": ")
-			b.WriteString(pyRepr(mv))
+			b.WriteString(pyReprIn(mv, active))
 		}
 		b.WriteByte('}')
 		return b.String()
@@ -124,16 +141,18 @@ func toStr(v any) string {
 }
 
 // pyRepr renders a value like Python repr(): strings get quotes.
-func pyRepr(v any) string {
+func pyRepr(v any) string { return pyReprIn(v, nil) }
+
+func pyReprIn(v any, active map[containerID]bool) string {
 	switch t := v.(type) {
 	case Deprecated:
-		return pyRepr(t.Value)
+		return pyReprIn(t.Value, active)
 	case string:
 		return pyStrRepr(t)
 	case yaml.UnsafeString:
-		return pyRepr(string(t))
+		return pyStrRepr(string(t))
 	default:
-		return toStr(v)
+		return toStrIn(v, active)
 	}
 }
 

@@ -407,7 +407,7 @@ than silently diverging. Known boundaries:
   transactions understudy lists the requested packages first and their
   dependencies after, by name.
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
-  strings; a recursive YAML alias is a load error; regular expressions use
+  strings; regular expressions use
   Go's RE2 (lookaround and backreferences in *patterns* are rejected with a
   clear error rather than mis-matched),
   iterated with Python's `re.sub`/`findall` match rules.

@@ -98,6 +98,7 @@ func New() *Engine {
 	registerTests(e)
 	registerAnsibleTests(e)
 	registerGlobals(e)
+	guardRecursion(e)
 	return e
 }
 
@@ -223,6 +224,9 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 		if u, ok := v.(Undefined); ok {
 			return nil, &UndefinedError{Pos: pos, Name: u.Name}
 		}
+		if HasCycle(v) {
+			return nil, &RecursionError{In: "template"}
+		}
 		return ec.finalize(v), nil
 	}
 
@@ -296,6 +300,9 @@ func (e *Engine) EvalExpression(src string, vars VarGetter, pos Position) (any, 
 	v, ec, err := e.evalExpression(src, vars, pos)
 	if err != nil {
 		return nil, err
+	}
+	if HasCycle(v) {
+		return nil, &RecursionError{In: "expression"}
 	}
 	return ec.finalize(v), nil
 }

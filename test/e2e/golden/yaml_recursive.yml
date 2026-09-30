@@ -1,0 +1,38 @@
+---
+# A YAML alias inside the collection it anchors builds a recursive list
+# or dict, as PyYAML does: reading into it works; printing all of it is
+# ansible-core's recursion error.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    rl: &rl
+      - 1
+      - *rl
+    rd: &rd
+      name: top
+      self: *rd
+      items: [*rd]
+    shared: &shared {k: v}
+    uses: [*shared, *shared]
+  tasks:
+    - name: read into them
+      debug:
+        msg: "{{ rl | length }} {{ rl[0] }} {{ rl[1][1][1][0] }} {{ rd.self.self.name }} {{ rd['items'][0].self.name }}"
+
+    - name: keys and types
+      debug:
+        msg: "{{ rd.keys() | list }} {{ rd.self is mapping }} {{ rl[1] is sequence }} {{ rl | first }}"
+
+    - name: an alias is its anchor's value
+      debug:
+        msg: "{{ uses }} {{ uses | to_yaml }}"
+
+    - name: print the recursive list
+      debug:
+        var: rl
+      ignore_errors: true
+
+    - name: print the recursive dict
+      debug:
+        var: rd.self
+      ignore_errors: true

@@ -286,7 +286,6 @@ func TestErrors(t *testing.T) {
 		{"a: b\n c: d\n", "err.yml:2:3: YAML parsing failed: Mapping values are not allowed in this context."},
 		{"? [a]\n: key\n", "err.yml:1:3: YAML parsing failed: While constructing a mapping found unhashable key."},
 		{"a: *nope\n", "err.yml:1:4: YAML parsing failed: Found undefined alias."},
-		{"a: &a\n  b: *a\n", "Found unconstructable recursive node."},
 		{"\ta: 1\n", "err.yml:1:1: YAML parsing failed: Tabs are usually invalid in YAML."},
 		{"a: [1, 2\n", "err.yml:2:1: YAML parsing failed: While parsing a flow sequence did not find expected ',' or ']'."},
 		{"a: 1\n---\nb: 2\n", "err.yml:2:1: YAML parsing failed: Expected a single document in the stream but found another document."},
