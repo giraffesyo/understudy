@@ -49,7 +49,7 @@ type Spec map[string]Def
 
 // Def describes one argument.
 type Def struct {
-	Type     string // "str" (default), "bool", "int", "list", "dict", "any"
+	Type     string // "str" (default), "bool", "int", "float", "list", "dict", "any"
 	Required bool
 	Default  any
 	Choices  []string
@@ -185,6 +185,22 @@ func coerce(v any, typ string) (any, error) {
 			return n, nil
 		}
 		return nil, fmt.Errorf("cannot interpret %T as an integer", v)
+	case "float":
+		switch t := v.(type) {
+		case float64:
+			return t, nil
+		case int64:
+			return float64(t), nil
+		case int:
+			return float64(t), nil
+		case string:
+			f, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
+			if err != nil {
+				return nil, fmt.Errorf("%q is not a valid float", t)
+			}
+			return f, nil
+		}
+		return nil, fmt.Errorf("cannot interpret %T as a float", v)
 	case "list":
 		switch t := v.(type) {
 		case []any:
@@ -238,6 +254,19 @@ func (p *Parsed) Int(name string) int64 {
 		return int64(n)
 	case float64:
 		return int64(n)
+	}
+	return 0
+}
+
+// Float returns a float argument (0 if absent).
+func (p *Parsed) Float(name string) float64 {
+	switch n := p.values[name].(type) {
+	case float64:
+		return n
+	case int64:
+		return float64(n)
+	case int:
+		return float64(n)
 	}
 	return 0
 }
