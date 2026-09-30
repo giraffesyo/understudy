@@ -2,11 +2,13 @@ package modules
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // httpReason is the server's reason phrase (http.client's resp.reason).
@@ -29,8 +31,9 @@ func urlErrorMsg(err error) string {
 		return "Request failed: <urlopen error [Errno -2] Name or service not known>"
 	}
 	var opErr *net.OpError
-	if errors.As(err, &opErr) && strings.Contains(err.Error(), "connection refused") {
-		return "Request failed: <urlopen error [Errno 111] Connection refused>"
+	var errno syscall.Errno
+	if errors.As(err, &opErr) && errors.As(err, &errno) && errno == syscall.ECONNREFUSED {
+		return fmt.Sprintf("Request failed: <urlopen error [Errno %d] %s>", int(errno), pyStrerror(errno))
 	}
 	if ne, ok := err.(net.Error); ok && ne.Timeout() {
 		return "Connection failure: timed out"
