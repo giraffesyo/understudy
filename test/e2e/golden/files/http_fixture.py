@@ -11,6 +11,10 @@ behind for long.
 With <dir>/cert.pem and <dir>/key.pem present it also serves HTTPS on a
 second ephemeral port (<dir>/https.port).
 
+A minimal passive-mode FTP server (<dir>/ftp.port) serves /pub/file.txt
+and a /pub directory listing to user anonymous; any other user fails to
+log in.
+
 Responses carry fixed Server and Date headers so result dicts compare
 byte-for-byte across runs. The request echo (/echo) reports only the
 headers a test sets on purpose, never the port-bearing Host.
@@ -21,6 +25,7 @@ import gzip
 import hashlib
 import json
 import os
+import socket
 import socketserver
 import ssl
 import sys
@@ -193,6 +198,81 @@ class TCPServer(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 
+class FTPHandler(socketserver.StreamRequestHandler):
+    """Just enough of RFC 959 for urllib's FTPHandler."""
+
+    FILES = {'/pub/file.txt': b'ftp content\n'}
+    DIRS = {'/', '/pub'}
+
+    def reply(self, line):
+        self.wfile.write(line.encode() + b'\r\n')
+
+    def handle(self):
+        LAST_REQUEST[0] = time.time()
+        cwd, user, pasv = '/', None, None
+        self.reply('220 fixture FTP ready')
+        for raw in self.rfile:
+            LAST_REQUEST[0] = time.time()
+            cmd, _, arg = raw.decode().rstrip('\r\n').partition(' ')
+            cmd = cmd.upper()
+            if cmd == 'USER':
+                user = arg
+                self.reply('331 Password required')
+            elif cmd == 'PASS':
+                if user == 'anonymous':
+                    self.reply('230 Logged in')
+                else:
+                    self.reply('530 Login incorrect.')
+            elif cmd == 'CWD':
+                new = arg if arg.startswith('/') else os.path.normpath(os.path.join(cwd, arg))
+                if new in self.DIRS:
+                    cwd = new
+                    self.reply('250 Directory successfully changed.')
+                else:
+                    self.reply('550 Failed to change directory.')
+            elif cmd == 'PWD':
+                self.reply('257 "%s" is the current directory' % cwd)
+            elif cmd == 'TYPE':
+                self.reply('200 Switching to %s mode.' % ('Binary' if arg == 'I' else 'ASCII'))
+            elif cmd == 'PASV':
+                pasv = socket.socket()
+                pasv.bind(('127.0.0.1', 0))
+                pasv.listen(1)
+                port = pasv.getsockname()[1]
+                self.reply('227 Entering Passive Mode (127,0,0,1,%d,%d).' % (port >> 8, port & 255))
+            elif cmd in ('RETR', 'LIST'):
+                path = os.path.normpath(os.path.join(cwd, arg)) if arg else cwd
+                if cmd == 'RETR':
+                    data = self.FILES.get(path)
+                elif path in self.DIRS:
+                    data = ''.join('-rw-r--r-- 1 ftp ftp %d Jan 01 2026 %s\r\n' % (len(v), os.path.basename(k))
+                                   for k, v in sorted(self.FILES.items()) if os.path.dirname(k) == path).encode()
+                else:
+                    data = None
+                if data is None:
+                    self.reply('550 Failed to open file.')
+                    continue
+                conn, _ = pasv.accept()
+                if cmd == 'RETR':
+                    self.reply('150 Opening BINARY mode data connection for %s (%d bytes).' % (arg, len(data)))
+                else:
+                    self.reply('150 Here comes the directory listing.')
+                conn.sendall(data)
+                conn.close()
+                pasv.close()
+                self.reply('226 Transfer complete.')
+            elif cmd == 'QUIT':
+                self.reply('221 Goodbye.')
+                return
+            else:
+                self.reply('502 Command not implemented.')
+
+
+class FTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
 SERVERS = []
 
 
@@ -228,6 +308,10 @@ def main():
         with open(os.path.join(base, 'https.port'), 'w') as f:
             f.write(str(tls.server_address[1]))
         servers.append(tls)
+    ftp = FTPServer(('127.0.0.1', 0), FTPHandler)
+    with open(os.path.join(base, 'ftp.port'), 'w') as f:
+        f.write(str(ftp.server_address[1]))
+    servers.append(ftp)
     for srv in servers:
         SERVERS.append(srv)
         threading.Thread(target=srv.serve_forever, daemon=True).start()

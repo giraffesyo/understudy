@@ -12,7 +12,7 @@
     # openssl's progress dots) out of the compared output.
     - name: clear a previous run's fixture state
       file: {path: "{{ workdir }}/{{ item }}", state: absent}
-      loop: [http.port, https.port, http.sockpath, dl]
+      loop: [http.port, https.port, ftp.port, http.sockpath, dl]
     - name: a self-signed certificate for the HTTPS listener
       no_log: true
       command: >-
@@ -27,6 +27,7 @@
         sock: "{{ lookup('file', workdir + '/http.sockpath') }}"
         t: "http://127.0.0.1:{{ lookup('file', workdir + '/http.port') }}"
         tls_port: "{{ lookup('file', workdir + '/https.port') }}"
+        ftp: "ftp://127.0.0.1:{{ lookup('file', workdir + '/ftp.port') }}"
       no_log: true
 
     - name: GET json
@@ -515,6 +516,52 @@
       register: r
       ignore_errors: true
     - debug: {msg: "{{ r.status }} {{ r.msg }}"}
+
+    # urllib opens file:// and ftp:// URLs, but their responses have no
+    # status code: in ansible-core 2.21 a successful one crashes uri
+    # (int(None)); failures are URLErrors like any other.
+    - name: file:// and ftp:// that succeed
+      uri: {url: "{{ item }}", return_content: true}
+      loop:
+        - "file://{{ playbook_dir }}/files/tree/a.txt"
+        - "file://localhost{{ playbook_dir }}/files/tree/a.txt"
+        - "{{ ftp }}/pub/file.txt"
+        - "{{ ftp }}/pub/"
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: file:// and ftp:// that fail
+      uri: {url: "{{ item }}"}
+      loop:
+        - "file://{{ playbook_dir }}/files/tree/missing.txt"
+        - "file://{{ playbook_dir }}/files/tree"
+        - "file://{{ ftp | regex_replace('^ftp://', '') }}/etc/hosts"
+        - "{{ ftp }}/pub/missing.txt"
+        - "{{ ftp }}/nope/file.txt"
+        - "{{ ftp | regex_replace('^ftp://', 'ftp://bob:pw@') }}/pub/file.txt"
+        - "ftp:///pub/file.txt"
+      register: r
+      ignore_errors: true
+    - debug: {msg: "{{ r.results | map(attribute='msg') | map('regex_replace', '127.0.0.1:[0-9]+', 'HOST') | list }}"}
+
+    # prepare_multipart guesses types with the target's mimetypes, which
+    # reads its mime.types (/etc/apache2/mime.types on macOS).
+    - name: multipart types from the target's mime.types
+      uri:
+        url: "{{ u }}/echo"
+        method: POST
+        unix_socket: "{{ sock }}"
+        body_format: form-multipart
+        body:
+          epub: {content: x, filename: book.epub}
+          rtf: {content: x, filename: doc.rtf}
+          xul: {content: x, filename: ui.xul}
+          js: {content: x, filename: app.js}
+          gz: {content: x, filename: data.csv.gz}
+          none: {content: x, filename: blob.unknownext}
+      register: r
+    - debug: {var: r.json.body}
 
     - name: check mode
       uri: {url: "{{ u }}/json", unix_socket: "{{ sock }}"}

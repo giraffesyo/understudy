@@ -36,9 +36,6 @@ import (
 // policies, the basic/digest auth handlers, a cookie jar, proxies and a
 // unix-socket connection) and fetch_url's info dict, errors included.
 
-// sslErrLine is the _ssl.c location CPython appends to SSL errors.
-const sslErrLine = "(_ssl.c:1082)"
-
 func sortStrings(s []string) { sort.Strings(s) }
 
 // uriHeaders is an ordered header dict keyed case-insensitively (urllib
@@ -120,6 +117,7 @@ type uriInfo struct {
 	body    []byte
 	hasBody bool
 	fatal   string // fail_json(msg=...) raised inside fetch_url
+	crash   string // the exception uri raises on the response
 }
 
 func (i *uriInfo) status() int {
@@ -259,6 +257,12 @@ func (c *uriClient) fetch(rawURL, method string, data []byte, hasData bool, user
 	}
 
 	resp, err := c.open(req)
+	if err == errNoStatus {
+		// file:// and ftp:// responses have no status: uri's
+		// int(resp['status']) raises.
+		info.crash = pyIntNoneMsg(c.env)
+		return nil, info
+	}
 	switch e := err.(type) {
 	case nil:
 		for _, k := range resp.order {
@@ -313,7 +317,8 @@ func (c *uriClient) fetch(rawURL, method string, data []byte, hasData bool, user
 // handlers' password, a forced basic header or ~/.netrc.
 func (c *uriClient) configureAuth(rawURL string) (string, string, error) {
 	u, err := url.Parse(rawURL)
-	if err != nil {
+	if err != nil || u.Scheme == "ftp" {
+		// ftp:// keeps its credentials for FTPHandler's login.
 		return rawURL, "", nil
 	}
 	username, password := c.p.Str("url_username"), c.p.Str("url_password")
@@ -426,7 +431,7 @@ func (c *uriClient) makeTLSConfig() (*tls.Config, string) {
 		}
 		roots = x509.NewCertPool()
 		if !roots.AppendCertsFromPEM(data) {
-			return nil, "[X509: NO_CERTIFICATE_OR_CRL_FOUND] no certificate or crl found " + sslErrLineAt(4150)
+			return nil, "[X509: NO_CERTIFICATE_OR_CRL_FOUND] no certificate or crl found" + sslSuffix(c.env, sslCAFile)
 		}
 	}
 	if list := strList(c.p.List("ciphers")); len(list) > 0 {
@@ -449,15 +454,13 @@ func (c *uriClient) makeTLSConfig() (*tls.Config, string) {
 		}
 		pair, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {
-			return nil, "[SSL] PEM lib " + sslErrLineAt(4150)
+			return nil, "[SSL] PEM lib" + sslSuffix(c.env, sslCertChain)
 		}
 		conf.Certificates = []tls.Certificate{pair}
 	}
 	c.validate, c.roots = validate, roots
 	return conf, ""
 }
-
-func sslErrLineAt(n int) string { return fmt.Sprintf("(_ssl.c:%d)", n) }
 
 // pyErrnoOnly is str(OSError(errno, strerror)) without a filename.
 func pyErrnoOnly(err error) string {
@@ -512,7 +515,7 @@ func selfSigned(c *x509.Certificate) bool {
 type uriSSLError struct{ reason string }
 
 func (e *uriSSLError) Error() string {
-	return "[SSL: CERTIFICATE_VERIFY_FAILED] " + e.reason + " " + sslErrLine
+	return "[SSL: CERTIFICATE_VERIFY_FAILED] " + e.reason
 }
 
 // opensslCiphers maps OpenSSL cipher names to the TLS 1.2 suites Go
@@ -970,15 +973,21 @@ func (c *uriClient) roundTrip(req *uriRequest) (*uriResponse, error) {
 		return nil, &uriValueError{fmt.Sprintf("unknown url type: %s", pyStrRepr(req.url))}
 	}
 	switch strings.ToLower(u.Scheme) {
-	case "http", "https":
+	case "http", "https", "file", "ftp":
 	default:
 		return nil, &uriURLError{"unknown url type: " + strings.ToLower(u.Scheme)}
 	}
-	if u.Host == "" {
-		return nil, &uriURLError{"no host given"}
-	}
 	if c.tlsErr != "" {
 		return nil, &uriConnError{c.tlsErr}
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "file":
+		return nil, c.openFileURL(u)
+	case "ftp":
+		return nil, c.openFTPURL(u)
+	}
+	if u.Host == "" {
+		return nil, &uriURLError{"no host given"}
 	}
 
 	var body io.Reader
@@ -1044,12 +1053,12 @@ func (c *uriClient) roundTrip(req *uriRequest) (*uriResponse, error) {
 	}}
 	hresp, err := client.Do(hr)
 	if err != nil {
-		return nil, classifyTransportErr(err, wrote)
+		return nil, c.classifyTransportErr(err, wrote)
 	}
 	defer hresp.Body.Close()
 	data, err := io.ReadAll(hresp.Body)
 	if err != nil {
-		return nil, classifyTransportErr(err, true)
+		return nil, c.classifyTransportErr(err, true)
 	}
 	resp := &uriResponse{code: hresp.StatusCode, reason: httpReason(hresp), header: hresp.Header.Clone(),
 		body: data, url: req.url}
@@ -1077,7 +1086,7 @@ func headerOrder(h http.Header) []string {
 	return names
 }
 
-func classifyTransportErr(err error, wrote bool) error {
+func (c *uriClient) classifyTransportErr(err error, wrote bool) error {
 	var ue *url.Error
 	if errors.As(err, &ue) {
 		err = ue.Err
@@ -1088,11 +1097,11 @@ func classifyTransportErr(err error, wrote bool) error {
 	}
 	var se *uriSSLError
 	if errors.As(err, &se) {
-		return &uriURLError{se.Error()}
+		return &uriURLError{se.Error() + sslSuffix(c.env, sslHandshake)}
 	}
 	var rhe tls.RecordHeaderError
 	if errors.As(err, &rhe) {
-		return &uriURLError{"[SSL: WRONG_VERSION_NUMBER] wrong version number " + sslErrLine}
+		return &uriURLError{"[SSL: WRONG_VERSION_NUMBER] wrong version number" + sslSuffix(c.env, sslHandshake)}
 	}
 	var ne net.Error
 	timeout := errors.As(err, &ne) && ne.Timeout()
@@ -1101,7 +1110,7 @@ func classifyTransportErr(err error, wrote bool) error {
 			return &uriURLError{"timed out"}
 		}
 		if strings.Contains(err.Error(), "tls:") {
-			return &uriURLError{"[SSL] " + strings.TrimPrefix(err.Error(), "remote error: ") + " " + sslErrLine}
+			return &uriURLError{"[SSL] " + strings.TrimPrefix(err.Error(), "remote error: ") + sslSuffix(c.env, sslHandshake)}
 		}
 		return &uriURLError{pyNetErr(err)}
 	}

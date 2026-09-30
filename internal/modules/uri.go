@@ -218,6 +218,10 @@ func uriModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 			Extra: map[string]any{"url": info.fields["url"], "status": info.fields["status"]}}
 	}
 
+	if info.crash != "" {
+		return &agentproto.Result{Failed: true, Msg: "Task failed: Module failed: " + info.crash}
+	}
+
 	if r != nil && hasDest && isDir(dest) {
 		name := uriResponseFilename(r)
 		if name == "" {
