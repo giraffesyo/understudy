@@ -24,11 +24,17 @@ const (
 )
 
 // pySSLLines maps a CPython release to its _ssl.c lines, measured with
-// that build's ssl module.
+// that build's ssl module (the distribution's package where noted).
 var pySSLLines = map[string][3]int{
-	"3.11.16": {1016, 3927, 4178},
-	"3.12.14": {1010, 3855, 4106},
-	"3.14.7":  {1082, 4163, 4416},
+	"3.9.6":   {1129, 4044, 4293}, // macOS /usr/bin/python3
+	"3.9.18":  {1129, 4044, 4293}, // Rocky Linux 9.3
+	"3.9.25":  {1147, 4062, 4311}, // Rocky Linux 9.6
+	"3.11.2":  {992, 3874, 4123},  // Debian 12
+	"3.11.16": {1016, 3927, 4178}, // Homebrew
+	"3.12.3":  {1000, 3845, 4096}, // Ubuntu 24.04
+	"3.12.13": {1010, 3855, 4106}, // Alpine 3.20
+	"3.12.14": {1010, 3855, 4106}, // Homebrew
+	"3.14.7":  {1082, 4163, 4416}, // Homebrew
 }
 
 // sslSuffix is " (_ssl.c:N)" for the target's Python build, or "".
