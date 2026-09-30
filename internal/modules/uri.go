@@ -380,6 +380,12 @@ func uriNoLog(res *agentproto.Result, secret string) *agentproto.Result {
 				out[strings.ReplaceAll(k, secret, mask)] = scrub(e)
 			}
 			return out
+		case *omap.OMap:
+			out := omap.NewOMap()
+			for _, k := range t.Keys() {
+				out.Set(strings.ReplaceAll(k, secret, mask), scrub(t.Get(k)))
+			}
+			return out
 		}
 		return v
 	}

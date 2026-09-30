@@ -17,8 +17,8 @@ func ordered(kv ...any) *omap.OMap {
 	return m
 }
 
-// TestWireKeepsOrder: ordered maps cross the wire in their key order, in
-// results and in task arguments, at any depth; plain maps stay plain.
+// TestWireKeepsOrder: ordered maps in results cross the wire in their key
+// order, at any depth; plain maps stay plain; task arguments arrive plain.
 func TestWireKeepsOrder(t *testing.T) {
 	body := ordered("zeta", int64(1), "alpha", ordered("y", 2.0, "b", []any{ordered("k2", "v", "k1", nil)}), "mid", map[string]any{"b": 1.5, "a": int64(2)})
 	res := &Result{Changed: true, Msg: "done", Extra: map[string]any{"json": body, "count": int64(3), "ratio": 4.0}}
@@ -65,7 +65,8 @@ func TestWireKeepsOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b, ok := back.Args["body"].(*omap.OMap); !ok || !reflect.DeepEqual(b.Keys(), []string{"zeta", "alpha", "mid"}) {
+	// Arguments arrive plain, as modules see them in process.
+	if b, ok := back.Args["body"].(map[string]any); !ok || len(b) != 3 {
 		t.Errorf("body = %#v", back.Args["body"])
 	}
 	if back.Args["mode"] != int64(420) || !reflect.DeepEqual(back.Args["names"], []any{"b", "a"}) || back.Module != "uri" {

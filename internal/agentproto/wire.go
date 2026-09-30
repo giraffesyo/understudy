@@ -14,9 +14,8 @@ import (
 // orderedKey, as the first key of a JSON object on the agent wire, marks
 // an ordered map: the object decodes to an *omap.OMap in the order its
 // keys were written, where a plain object decodes to a map[string]any.
-// Dicts keep their order across the wire both ways (task arguments such
-// as a uri body; module results such as uri's json), as they do when a
-// module runs in process.
+// Dicts in module results (uri's json, nested result dicts) keep their
+// order across the wire, as they do when a module runs in process.
 const orderedKey = "_understudy_ordered"
 
 // encodeWire writes v as agent-wire JSON: *omap.OMap values in their key
@@ -215,7 +214,10 @@ func marshalRequest(req *TaskRequest) ([]byte, error) {
 	w := wireRequest{TaskRequest: req}
 	if req.Args != nil {
 		var b bytes.Buffer
-		if err := encodeWire(&b, req.Args); err != nil {
+		// Modules see plain JSON-shaped arguments, as on the in-process
+		// path (order-sensitive values, such as a uri body, are
+		// serialized by their action before they get here).
+		if err := encodeWire(&b, omap.AsMap(req.Args)); err != nil {
 			return nil, err
 		}
 		w.Args = b.Bytes()
