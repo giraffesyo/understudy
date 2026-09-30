@@ -1,0 +1,158 @@
+# community.general.ini_file: file content and result dicts for adding,
+# changing and removing options and sections, multi-values, no-value
+# options, commented options, spacing, check mode and diffs.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: "{{ workdir }}/ini"
+    f: "{{ workdir }}/ini/a.ini"
+    nobackup: "{{ r | dict2items | rejectattr('key', 'equalto', 'backup_file') | items2dict }}"
+  tasks:
+    - file: {path: "{{ d }}", state: directory}
+
+    - name: create new file with section and option
+      community.general.ini_file: {path: "{{ f }}", section: drinks, option: fav, value: lemonade, mode: "0600"}
+      register: r
+    - debug: {var: r}
+
+    - name: same again (no-op)
+      community.general.ini_file: {path: "{{ f }}", section: drinks, option: fav, value: lemonade, mode: "0600"}
+      register: r
+    - debug: {var: r}
+
+    - name: change value with diff
+      community.general.ini_file: {path: "{{ f }}", section: drinks, option: fav, value: tea}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: add option to existing section, no extra spaces
+      community.general.ini_file: {path: "{{ f }}", section: drinks, option: temp, value: cold, no_extra_spaces: true}
+      register: r
+    - debug: {var: r}
+
+    - name: option outside of a section
+      community.general.ini_file: {path: "{{ f }}", option: top, value: "1"}
+      register: r
+    - debug: {var: r}
+
+    - name: bool and int values
+      community.general.ini_file: {path: "{{ f }}", section: types, option: "{{ item.o }}", value: "{{ item.v }}"}
+      loop:
+        - {o: b, v: true}
+        - {o: i, v: 3}
+      register: r
+    - debug: {var: r}
+
+    - name: multiple values
+      community.general.ini_file: {path: "{{ f }}", section: drinks, option: beverage, values: [coke, pepsi]}
+      register: r
+    - debug: {var: r}
+
+    - name: non-exclusive add
+      community.general.ini_file: {path: "{{ f }}", section: drinks, option: beverage, value: juice, exclusive: false}
+      register: r
+    - debug: {var: r}
+
+    - name: exclusive collapse to one value
+      community.general.ini_file: {path: "{{ f }}", section: drinks, option: beverage, value: pepsi}
+      register: r
+    - debug: {var: r}
+
+    - name: allow_no_value option
+      community.general.ini_file: {path: "{{ f }}", section: flags, option: skip-name-resolve, allow_no_value: true}
+      register: r
+    - debug: {var: r}
+
+    - name: only section
+      community.general.ini_file: {path: "{{ f }}", section: empty, allow_no_value: true}
+      register: r
+    - debug: {var: r}
+
+    - copy:
+        dest: "{{ d }}/b.ini"
+        content: "; comment\n[main]\n# key = old\nother=1\n\n[second]\n  key   =  spaced\nx = y"
+
+    - name: commented option gets replaced, file missing final newline
+      community.general.ini_file: {path: "{{ d }}/b.ini", section: main, option: key, value: new}
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: ignore_spaces keeps a spacing-only difference
+      community.general.ini_file: {path: "{{ d }}/b.ini", section: second, option: key, value: spaced, ignore_spaces: true}
+      register: r
+    - debug: {var: r}
+
+    - name: without ignore_spaces the line is rewritten
+      community.general.ini_file: {path: "{{ d }}/b.ini", section: second, option: key, value: spaced}
+      register: r
+    - debug: {var: r}
+
+    - name: modify_inactive_option false adds a new line
+      community.general.ini_file: {path: "{{ d }}/b.ini", section: main, option: inactive, value: "2", modify_inactive_option: false}
+      register: r
+    - debug: {var: r}
+
+    - name: check mode change
+      community.general.ini_file: {path: "{{ d }}/b.ini", section: second, option: x, value: z}
+      check_mode: true
+      diff: true
+      register: r
+    - debug: {var: r}
+
+    - name: remove an option
+      community.general.ini_file: {path: "{{ d }}/b.ini", section: second, option: x, state: absent}
+      register: r
+    - debug: {var: r}
+
+    - name: remove a section
+      community.general.ini_file: {path: "{{ d }}/b.ini", section: second, state: absent}
+      register: r
+    - debug: {var: r}
+
+    - name: remove a missing section (no-op)
+      community.general.ini_file: {path: "{{ d }}/b.ini", section: nothere, state: absent}
+      register: r
+    - debug: {var: r}
+
+    - name: section_has_values selects a section
+      community.general.ini_file:
+        path: "{{ d }}/wg.ini"
+        section: Peer
+        section_has_values:
+          - option: AllowedIps
+            value: 10.0.0.1/32
+        option: PublicKey
+        value: abc
+      loop: [1, 2]
+      register: r
+    - debug: {var: r}
+
+    - name: backup
+      community.general.ini_file: {path: "{{ f }}", section: drinks, option: fav, value: coffee, backup: true}
+      register: r
+    - debug: {var: nobackup}
+    - debug: {msg: "{{ r.backup_file is defined }}"}
+
+    - name: create false on missing file
+      community.general.ini_file: {path: "{{ d }}/missing.ini", section: s, option: o, value: v, create: false}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - name: missing value
+      community.general.ini_file: {path: "{{ f }}", section: s, option: o}
+      register: r
+      ignore_errors: true
+    - debug: {var: r}
+
+    - slurp: {src: "{{ f }}"}
+      register: s1
+    - debug: {msg: "{{ s1.content | b64decode }}"}
+    - slurp: {src: "{{ d }}/b.ini"}
+      register: s2
+    - debug: {msg: "{{ s2.content | b64decode }}"}
+    - slurp: {src: "{{ d }}/wg.ini"}
+      register: s3
+    - debug: {msg: "{{ s3.content | b64decode }}"}
