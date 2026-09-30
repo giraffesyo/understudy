@@ -21,6 +21,9 @@ func runRaw(ctx context.Context, actx *Context, args map[string]any, freeForm st
 	}
 	res, err := actx.Conn.Exec(ctx, freeForm, execOptions(actx))
 	if err != nil {
+		if bf := BecomeFailure(err); bf != nil {
+			return bf
+		}
 		return agentproto.Fail("raw: %v", err)
 	}
 	out := &agentproto.Result{

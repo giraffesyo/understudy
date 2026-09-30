@@ -109,18 +109,88 @@ func atoi(s string) int {
 	return n
 }
 
-// runTool runs a playbook (twice, returning the second run's output) so the
+// toolRun is one tool's run of a playbook: its combined output and exit
+// code.
+type toolRun struct {
+	out string
+	rc  int
+}
+
+// runTool runs a playbook (twice, returning the second run) so the
 // comparison is at steady state — idempotence differences surface as recap
 // mismatches.
-func runTool(t *testing.T, bin string, args, env []string, runs int) string {
+func runTool(t *testing.T, bin string, args, env []string, runs int) toolRun {
 	t.Helper()
-	var out []byte
+	var run toolRun
 	for i := 0; i < runs; i++ {
 		cmd := exec.Command(bin, args...)
 		cmd.Env = append(os.Environ(), env...)
-		out, _ = cmd.CombinedOutput()
+		out, err := cmd.CombinedOutput()
+		run = toolRun{out: string(out), rc: cmd.ProcessState.ExitCode()}
+		if err != nil && cmd.ProcessState == nil {
+			t.Fatalf("running %s: %v", bin, err)
+		}
 	}
-	return string(out)
+	return run
+}
+
+// taskBanners is the sequence of task and handler names a run printed.
+func taskBanners(output string) []string {
+	var names []string
+	for _, raw := range strings.Split(output, "\n") {
+		if m := taskBanner.FindStringSubmatch(stripANSI(strings.TrimRight(raw, "\r"))); m != nil {
+			names = append(names, m[1])
+		}
+	}
+	return names
+}
+
+// errorLines are the "[ERROR]: ..." headlines of a run (the first line of
+// each error block), with the given work directories normalized.
+func errorLines(output string, work ...string) []string {
+	var lines []string
+	for _, raw := range strings.Split(output, "\n") {
+		line := stripANSI(strings.TrimRight(raw, "\r"))
+		if strings.HasPrefix(line, "[ERROR]: ") || strings.HasPrefix(line, "ERROR! ") {
+			for _, w := range work {
+				line = strings.ReplaceAll(line, w, "WORK")
+			}
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// compareRuns asserts that understudy made the same decisions as
+// ansible-playbook: exit code, the task banners in order, per-task status
+// and the recap. A playbook either tool failed to run (no task results: a
+// parse or load error) fails the comparison, after checking that the two
+// errors read the same, so an error in both tools never passes as a match.
+func compareRuns(t *testing.T, a, u toolRun, work ...string) {
+	t.Helper()
+	dump := "\n\n--- ansible ---\n" + a.out + "\n--- understudy ---\n" + u.out
+	aStatus, aRecap := parseRun(a.out)
+	uStatus, uRecap := parseRun(u.out)
+	if len(aStatus) == 0 || len(uStatus) == 0 {
+		if ae, ue := errorLines(a.out, work...), errorLines(u.out, work...); !reflect.DeepEqual(ae, ue) {
+			t.Errorf("error messages differ\n ansible:    %q\n understudy: %q", ae, ue)
+		}
+		t.Fatalf("no task results (ansible: %d, exit %d; understudy: %d, exit %d): the playbook did not run%s",
+			len(aStatus), a.rc, len(uStatus), u.rc, dump)
+	}
+	if a.rc != u.rc {
+		t.Errorf("exit code differs: ansible %d, understudy %d%s", a.rc, u.rc, dump)
+	}
+	if ab, ub := taskBanners(a.out), taskBanners(u.out); !reflect.DeepEqual(ab, ub) {
+		t.Errorf("task sequence differs\n ansible:    %q\n understudy: %q%s", ab, ub, dump)
+	}
+	if !reflect.DeepEqual(aRecap, uRecap) {
+		t.Errorf("PLAY RECAP differs\n ansible:    %v\n understudy: %v%s",
+			sortRecap(aRecap), sortRecap(uRecap), dump)
+	}
+	if !reflect.DeepEqual(aStatus, uStatus) {
+		t.Errorf("per-task status differs\n%s%s", diffStatus(aStatus, uStatus), dump)
+	}
 }
 
 func TestGoldenDifferential(t *testing.T) {
@@ -160,20 +230,9 @@ func TestGoldenDifferential(t *testing.T) {
 			aArgs := append([]string{"-i", invA, "-c", "local", "-e", "workdir=" + workA}, extra...)
 			uArgs := append([]string{"playbook", "-i", invB, "-c", "local", "-e", "workdir=" + workB}, extra...)
 
-			aOut := runTool(t, ansible, append(aArgs, pb), env, 2)
-			uOut := runTool(t, understudy, append(uArgs, pb), env, 2)
-
-			aStatus, aRecap := parseRun(aOut)
-			uStatus, uRecap := parseRun(uOut)
-
-			if !reflect.DeepEqual(aRecap, uRecap) {
-				t.Errorf("PLAY RECAP differs\n ansible:   %v\n understudy: %v\n\n--- ansible ---\n%s\n--- understudy ---\n%s",
-					sortRecap(aRecap), sortRecap(uRecap), aOut, uOut)
-			}
-			if !reflect.DeepEqual(aStatus, uStatus) {
-				t.Errorf("per-task status differs\n%s\n\n--- ansible ---\n%s\n--- understudy ---\n%s",
-					diffStatus(aStatus, uStatus), aOut, uOut)
-			}
+			a := runTool(t, ansible, append(aArgs, pb), env, 2)
+			u := runTool(t, understudy, append(uArgs, pb), env, 2)
+			compareRuns(t, a, u, workA, workB)
 		})
 	}
 }

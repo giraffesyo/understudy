@@ -27,6 +27,11 @@ type Config struct {
 	CallbacksEnabled    []string
 	DisplayOkHosts      bool
 	DisplaySkippedHosts bool
+
+	DeprecationWarnings bool // deprecation_warnings / ANSIBLE_DEPRECATION_WARNINGS
+	// InjectFactsSet: inject_facts_as_vars is configured (ini or
+	// ANSIBLE_INJECT_FACT_VARS) rather than left at its default.
+	InjectFactsSet bool
 }
 
 // Defaults returns Ansible's defaults for the supported keys.
@@ -38,6 +43,7 @@ func Defaults() *Config {
 		Timeout:             10 * time.Second,
 		DisplayOkHosts:      true,
 		DisplaySkippedHosts: true,
+		DeprecationWarnings: true,
 	}
 }
 
@@ -131,6 +137,10 @@ func applyINI(cfg *Config, content string) {
 				cfg.DisplaySkippedHosts = iniBool(val, cfg.DisplaySkippedHosts)
 			case "roles_path":
 				cfg.RolesPath = splitPathspec(val)
+			case "deprecation_warnings":
+				cfg.DeprecationWarnings = iniBool(val, cfg.DeprecationWarnings)
+			case "inject_facts_as_vars":
+				cfg.InjectFactsSet = true
 			case "interpreter_python":
 				// Parsed and ignored.
 			}
@@ -207,6 +217,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ANSIBLE_DISPLAY_OK_HOSTS"); v != "" {
 		cfg.DisplayOkHosts = iniBool(v, cfg.DisplayOkHosts)
+	}
+	if v := os.Getenv("ANSIBLE_DEPRECATION_WARNINGS"); v != "" {
+		cfg.DeprecationWarnings = iniBool(v, cfg.DeprecationWarnings)
+	}
+	if os.Getenv("ANSIBLE_INJECT_FACT_VARS") != "" {
+		cfg.InjectFactsSet = true
 	}
 	if v := os.Getenv("ANSIBLE_DISPLAY_SKIPPED_HOSTS"); v != "" {
 		cfg.DisplaySkippedHosts = iniBool(v, cfg.DisplaySkippedHosts)

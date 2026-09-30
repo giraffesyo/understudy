@@ -1,0 +1,7 @@
+---
+# Load error: two with_<lookup> loops on one task
+- hosts: all
+  tasks:
+    - debug: msg=hi
+      with_items: [1]
+      with_list: [2]

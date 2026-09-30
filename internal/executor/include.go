@@ -89,7 +89,7 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 				}
 				ictx = base.WithOverlay(overlay)
 			}
-			skip, err := whenSkip(ictx, task.When)
+			skip, err := whenSkip(ictx, task.When, task.WhenPos)
 			if err != nil {
 				r.record(host, task, agentproto.Fail("The conditional check failed: %v", err), nil)
 				continue

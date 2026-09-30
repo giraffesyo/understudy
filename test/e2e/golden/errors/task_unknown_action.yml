@@ -1,0 +1,7 @@
+---
+# Load error: an action nothing implements, even in a task that never runs
+- hosts: all
+  tasks:
+    - name: x
+      when: false
+      community.general.nosuch: {}

@@ -1364,6 +1364,8 @@ type pyJSONEncoder struct {
 func (e *pyJSONEncoder) write(v any, depth int) {
 	b := &e.b
 	switch t := v.(type) {
+	case Deprecated:
+		e.write(t.Value, depth)
 	case nil:
 		b.WriteString("null")
 	case bool:
@@ -1511,6 +1513,8 @@ func pyJSONQuote(s string, ensureASCII bool) string {
 // values (UnsafeString -> string, Mapping -> map, lazy range -> list).
 func jsonSanitize(v any) any {
 	switch t := v.(type) {
+	case Deprecated:
+		return jsonSanitize(t.Value)
 	case yaml.UnsafeString:
 		return string(t)
 	case Mapping:

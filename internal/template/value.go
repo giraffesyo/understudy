@@ -26,6 +26,8 @@ func sprintf(format string, args ...any) string { return fmt.Sprintf(format, arg
 // first (it errors in boolean context).
 func truthy(v any) bool {
 	switch t := v.(type) {
+	case Deprecated:
+		return truthy(t.Value)
 	case nil:
 		return false
 	case bool:
@@ -56,6 +58,8 @@ func truthy(v any) bool {
 // output and the ~ operator.
 func toStr(v any) string {
 	switch t := v.(type) {
+	case Deprecated:
+		return toStr(t.Value)
 	case nil:
 		return "None"
 	case bool:
@@ -120,6 +124,8 @@ func toStr(v any) string {
 // pyRepr renders a value like Python repr(): strings get quotes.
 func pyRepr(v any) string {
 	switch t := v.(type) {
+	case Deprecated:
+		return pyRepr(t.Value)
 	case string:
 		return "'" + strings.ReplaceAll(t, "'", "\\'") + "'"
 	case yaml.UnsafeString:
@@ -179,6 +185,7 @@ func mappingToMap(m Mapping) map[string]any {
 
 // asInt reports v as an int64 if it is integral.
 func asInt(v any) (int64, bool) {
+	v = Undeprecate(v)
 	switch t := v.(type) {
 	case int64:
 		return t, true
@@ -194,6 +201,7 @@ func asInt(v any) (int64, bool) {
 }
 
 func asFloat(v any) (float64, bool) {
+	v = Undeprecate(v)
 	if i, ok := asInt(v); ok {
 		return float64(i), true
 	}
@@ -209,6 +217,7 @@ func isNumber(v any) bool {
 }
 
 func asString(v any) (string, bool) {
+	v = Undeprecate(v)
 	switch t := v.(type) {
 	case string:
 		return t, true
@@ -406,6 +415,7 @@ func opName(op tokKind) string {
 }
 
 func typeName(v any) string {
+	v = Undeprecate(v)
 	switch v.(type) {
 	case nil:
 		return "None"
@@ -434,6 +444,7 @@ func typeName(v any) string {
 // compare returns -1/0/1 for Python-style ordering, or an error for
 // incomparable types (Python 3 raises on e.g. int < str).
 func compare(a, b any) (int, error) {
+	a, b = Undeprecate(a), Undeprecate(b)
 	if af, ok := asFloat(a); ok {
 		if bf, ok := asFloat(b); ok {
 			switch {
@@ -473,6 +484,7 @@ func compare(a, b any) (int, error) {
 // equal implements Python ==: cross-type numeric comparison works; other
 // cross-type comparisons are false, never an error.
 func equal(a, b any) bool {
+	a, b = Undeprecate(a), Undeprecate(b)
 	if isUndefined(a) || isUndefined(b) {
 		return isUndefined(a) && isUndefined(b)
 	}
@@ -526,6 +538,7 @@ func equal(a, b any) bool {
 }
 
 func anyToMap(v any) (map[string]any, bool) {
+	v = Undeprecate(v)
 	switch t := v.(type) {
 	case map[string]any:
 		return t, true
@@ -540,6 +553,7 @@ func anyToMap(v any) (map[string]any, bool) {
 // no inherent order and yields sorted keys for determinism. Used by filters
 // (dict2items) that must iterate a dict the way Python would.
 func orderedMap(v any) ([]string, map[string]any, bool) {
+	v = Undeprecate(v)
 	switch t := v.(type) {
 	case Mapping:
 		return t.Keys(), mappingToMap(t), true
@@ -587,6 +601,7 @@ func contains(needle, haystack any) (bool, error) {
 
 // length implements the length/count filter and len() semantics.
 func length(v any) (int, error) {
+	v = Undeprecate(v)
 	switch t := v.(type) {
 	case string:
 		return len([]rune(t)), nil
@@ -607,6 +622,7 @@ func length(v any) (int, error) {
 // iterate returns the items of an iterable: list items, string runes (as
 // 1-char strings), or mapping keys (sorted for determinism).
 func iterate(v any) ([]any, error) {
+	v = Undeprecate(v)
 	switch t := v.(type) {
 	case []any:
 		return t, nil

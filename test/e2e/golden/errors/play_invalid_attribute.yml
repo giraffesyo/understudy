@@ -1,0 +1,6 @@
+---
+# Load error: a play key that is not a Play attribute
+- hosts: all
+  bogus: 1
+  tasks:
+    - debug: msg=hi

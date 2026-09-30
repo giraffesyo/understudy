@@ -670,7 +670,7 @@ func TestRoleNotFoundError(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = playbook.ResolveRoles(plays, dir, nil)
-	if err == nil || !strings.Contains(err.Error(), `"nosuchrole" was not found`) {
+	if err == nil || !strings.Contains(err.Error(), "The role 'nosuchrole' was not found in: "+dir+"/roles:"+dir) {
 		t.Errorf("err = %v", err)
 	}
 }
