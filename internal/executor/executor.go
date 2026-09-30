@@ -3,6 +3,7 @@
 package executor
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -87,6 +88,11 @@ type Runner struct {
 	Opts     Options
 	Limit    string // --limit pattern, intersected with each play's hosts
 
+	// DebugIn/DebugOut are the task debugger's terminal (default stdin
+	// and stdout).
+	DebugIn  io.Reader
+	DebugOut io.Writer
+
 	stats          map[string]*HostStats
 	order          []string
 	failed         map[string]bool
@@ -102,6 +108,9 @@ type Runner struct {
 	startedAt      bool
 	stepContinue   bool
 	aborted        bool // any_errors_fatal: stop the playbook
+	userQuit       bool // task debugger: quit (exit 99, no recap)
+	dbgReader      *bufio.Reader
+	dbgMu          sync.Mutex
 	playEnded      bool // meta: end_play
 	batchEnded     bool // meta: end_batch
 	mu             sync.Mutex
@@ -184,6 +193,10 @@ func (r *Runner) Run(ctx context.Context, plays []*playbook.Play) (int, error) {
 	for _, play := range plays {
 		if err := r.runPlay(ctx, play); err != nil {
 			return 1, err
+		}
+		if r.quitRequested() {
+			// The debugger's quit: sys.exit(99), as on KeyboardInterrupt.
+			return 99, nil
 		}
 		if r.aborted {
 			break
@@ -923,23 +936,69 @@ func playPos(play *playbook.Play) template.Position {
 // runTaskOnHost is the per-host task pipeline: when -> loop -> template args
 // -> retries -> changed_when/failed_when -> register -> stats.
 func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, playHosts []string) {
+	var override map[string]any
+	for {
+		if r.quitRequested() {
+			return
+		}
+		res, items := r.execTaskOnHost(ctx, play, task, host, playHosts, override)
+		if !r.needsDebugger(play, task, res) {
+			r.record(host, task, res, items)
+			return
+		}
+		// The result is displayed and counted first, then the debugger
+		// runs; redo rolls the host's state back.
+		snap := r.snapshotHost(host)
+		r.record(host, task, res, items)
+		copied := *task
+		copied.Args = maps.Clone(task.Args)
+		if override == nil {
+			override = map[string]any{}
+		}
+		pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
+		vctx := r.newHostContext(host, pos, playHosts)
+		if len(task.Vars) > 0 {
+			vctx = vctx.WithOverlay(task.Vars)
+		}
+		s := &debugSession{r: r, task: &copied, host: host, vctx: vctx.WithOverlay(override), res: res, play: play, override: override}
+		switch r.runDebugger(s) {
+		case debugContinue:
+			return
+		case debugQuit:
+			r.requestQuit()
+			return
+		case debugRedo:
+			r.restoreHost(host, snap, res)
+			task = s.task
+			if raw, ok := task.Args["_raw_params"]; ok {
+				// task.args['_raw_params'] is the free-form command.
+				task.FreeForm = template.PyStr(raw)
+				delete(task.Args, "_raw_params")
+			}
+		}
+	}
+}
+
+// execTaskOnHost runs one task (all loop items) on a host and returns the
+// result to record, with the per-item results for loops.
+func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, playHosts []string, override map[string]any) (*agentproto.Result, []any) {
 	pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
 	base := r.newHostContext(host, pos, playHosts)
 	if len(task.Vars) > 0 {
 		base = base.WithOverlay(task.Vars)
 	}
+	if len(override) > 0 {
+		base = base.WithOverlay(override)
+	}
 
 	// Resolve the loop (nil = run once with no loop var).
 	items, isLoop, err := r.resolveLoop(task, base)
 	if err != nil {
-		r.recordFailure(host, task, agentproto.Fail("error templating loop: %v", err))
-		return
+		return agentproto.Fail("error templating loop: %v", err), nil
 	}
 
 	if !isLoop {
-		res := r.runOnce(ctx, play, task, host, base, nil)
-		r.record(host, task, res, nil)
-		return
+		return r.runOnce(ctx, play, task, host, base, nil), nil
 	}
 
 	// Loop: aggregate per-item results Ansible-style.
@@ -953,6 +1012,9 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 		itemCtx := r.newHostContext(host, pos, playHosts)
 		if len(task.Vars) > 0 {
 			itemCtx = itemCtx.WithOverlay(task.Vars)
+		}
+		if len(override) > 0 {
+			itemCtx = itemCtx.WithOverlay(override)
 		}
 		overlay := map[string]any{task.LoopVar: vars.Final{V: item}}
 		if task.IndexVar != "" {
@@ -1000,7 +1062,7 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 	default:
 		agg.Msg = "All items completed"
 	}
-	r.record(host, task, agg, itemResults)
+	return agg, itemResults
 }
 
 // resolveLoop templates the loop value. Returns isLoop=false when absent.
@@ -1984,4 +2046,63 @@ func assertThat(vctx *vars.Context, raw any) any {
 		return l
 	}
 	return raw
+}
+
+func (r *Runner) quitRequested() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.userQuit
+}
+
+// requestQuit stops the run after the debugger's quit.
+func (r *Runner) requestQuit() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.userQuit, r.aborted, r.playEnded = true, true, true
+}
+
+// hostSnapshot is the per-host state a debugger redo rolls back.
+type hostSnapshot struct {
+	failed   bool
+	failedIn map[int]bool
+	blockF   map[int]bool
+}
+
+func (r *Runner) snapshotHost(host string) hostSnapshot {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return hostSnapshot{failed: r.failed[host],
+		failedIn: maps.Clone(r.failedIn[host]), blockF: maps.Clone(r.blockFailed[host])}
+}
+
+// restoreHost undoes a recorded result for a redo the way ansible-core's
+// debugger does: the host's failed state is rolled back, and the stats
+// are decremented (never below zero) for each of failed, unreachable,
+// changed and skipped the result has, plus ok, whether or not the result
+// was counted that way.
+func (r *Runner) restoreHost(host string, snap hostSnapshot, res *agentproto.Result) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.stats[host]
+	dec := func(n *int) {
+		if *n > 0 {
+			*n--
+		}
+	}
+	if res.Failed {
+		dec(&st.Failed)
+	}
+	if res.Extra != nil && res.Extra["unreachable"] == true {
+		dec(&st.Unreachable)
+	}
+	if res.Changed {
+		dec(&st.Changed)
+	}
+	if res.Skipped {
+		dec(&st.Skipped)
+	}
+	dec(&st.OK)
+	r.failed[host] = snap.failed
+	r.failedIn[host] = snap.failedIn
+	r.blockFailed[host] = snap.blockF
 }

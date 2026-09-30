@@ -26,6 +26,7 @@ type Play struct {
 	Tags        []string
 	Environment map[string]any
 	CheckMode   *bool // play-level check_mode (nil = the run's --check)
+	Debugger    string
 	Diff        *bool // play-level diff (nil = the run's --diff)
 
 	// Serial batches the play across hosts (rolling execution). Entries are
@@ -98,7 +99,8 @@ type Task struct {
 	ChangedWhen    []string
 	Until          string
 	Retries        int
-	RetriesSet     bool // retries keyword given (else 3 when until is set)
+	RetriesSet     bool   // retries keyword given (else 3 when until is set)
+	Debugger       string // debugger keyword (task, else inherited block/play)
 	Delay          int
 	Become         BecomeFields
 	Vars           map[string]any

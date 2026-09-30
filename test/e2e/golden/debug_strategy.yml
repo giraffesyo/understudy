@@ -1,0 +1,29 @@
+# The debug strategy runs like linear and opens the task debugger on a
+# failed result. With no terminal input (the harness's stdin is empty)
+# the debugger reads end of input and quits: "User interrupted
+# execution", exit 99, no recap. TestGoldenDebugger drives it with
+# scripted input.
+- hosts: all
+  gather_facts: false
+  strategy: debug
+  vars:
+    word: bad
+  tasks:
+    - debug: {msg: before}
+    - name: ignored failures do not open the debugger
+      command: "false"
+      ignore_errors: true
+    - name: fails until word is fixed
+      command: "test {{ word }} = good"
+      register: fixed
+    - debug: {msg: "after {{ fixed.rc }}"}
+    - name: debugger never
+      command: "false"
+      debugger: never
+      ignore_errors: true
+    - name: debugger always on success
+      debug: {msg: always}
+      debugger: always
+    - name: a loop opens it once for the whole task
+      command: "test {{ item }} = ok"
+      loop: [ok, nope]

@@ -40,6 +40,7 @@ var playKeywords = map[string]bool{
 	"force_handlers": true, "vars_prompt": true,
 	"gather_subset": true, "gather_timeout": true, "fact_path": true,
 	"check_mode": true, "diff": true, "become_flags": true, "become_exe": true,
+	"debugger": true,
 }
 
 // Deferred play keys that must fail loudly rather than be ignored.
@@ -177,6 +178,12 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 			if err := parseBecomeKey(&play.Become, key, val, file); err != nil {
 				return nil, err
 			}
+		case "debugger":
+			d, err := parseDebugger(val, file)
+			if err != nil {
+				return nil, err
+			}
+			play.Debugger = d
 		case "tasks", "pre_tasks", "post_tasks", "handlers":
 			tasks, err := parseTaskList(val, file, key == "handlers")
 			if err != nil {
@@ -241,11 +248,13 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 		case "strategy":
 			s, _ := val.Str()
 			switch s {
-			case "linear", "free", "host_pinned":
+			case "linear", "free", "host_pinned", "debug":
 				play.Strategy = s
+			case "ansible.builtin.linear", "ansible.builtin.free", "ansible.builtin.host_pinned", "ansible.builtin.debug":
+				play.Strategy = strings.TrimPrefix(s, "ansible.builtin.")
 			case "":
 			default:
-				return nil, errAt(file, val, "strategy %q is not supported (linear, free, host_pinned)", s)
+				return nil, errAt(file, val, "strategy %q is not supported (linear, free, host_pinned, debug)", s)
 			}
 		case "remote_user":
 			play.RemoteUser, _ = val.Str()
@@ -378,6 +387,8 @@ func parseImportTasks(item, pathNode *yaml.Node, file string, handlers bool, bc 
 			inh.Tags = decodeStringList(val)
 		case "become", "become_user", "become_method", "become_flags", "become_exe":
 			err = parseBecomeKey(&inh.Become, key, val, file)
+		case "debugger":
+			inh.Debugger, err = parseDebugger(val, file)
 		case "environment":
 			inh.Environment, err = decodeMap(val, file, "environment")
 		case "no_log":
@@ -503,7 +514,7 @@ func parseRoleRefs(node *yaml.Node, file string) ([]*RoleRef, error) {
 var blockKeywords = map[string]bool{
 	"block": true, "rescue": true, "always": true, "name": true,
 	"when": true, "become": true, "become_user": true, "become_method": true,
-	"become_flags": true, "become_exe": true, "vars": true, "tags": true, "environment": true, "no_log": true,
+	"become_flags": true, "become_exe": true, "debugger": true, "vars": true, "tags": true, "environment": true, "no_log": true,
 	"ignore_errors": true, "check_mode": true, "diff": true, "delegate_to": true, "any_errors_fatal": true,
 }
 
@@ -528,6 +539,8 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 			inh.When = decodeExprList(val)
 		case "become", "become_user", "become_method", "become_flags", "become_exe":
 			err = parseBecomeKey(&inh.Become, key, val, file)
+		case "debugger":
+			inh.Debugger, err = parseDebugger(val, file)
 		case "vars":
 			inh.Vars, err = decodeMap(val, file, "vars")
 		case "tags":
@@ -611,6 +624,9 @@ func applyBlockInheritance(t *Task, inh *Task) {
 	}
 	if t.Become.Exe == "" {
 		t.Become.Exe = inh.Become.Exe
+	}
+	if t.Debugger == "" {
+		t.Debugger = inh.Debugger
 	}
 	if len(inh.Vars) > 0 {
 		merged := make(map[string]any, len(inh.Vars)+len(t.Vars))
@@ -803,6 +819,12 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			if err := parseBecomeKey(&task.Become, key, val, file); err != nil {
 				return nil, err
 			}
+		case "debugger":
+			d, err := parseDebugger(val, file)
+			if err != nil {
+				return nil, err
+			}
+			task.Debugger = d
 		case "vars":
 			m, err := decodeMap(val, file, "vars")
 			if err != nil {
@@ -867,7 +889,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			}
 			task.Diff = &b
 		case "throttle", "timeout", "ignore_unreachable", "collections",
-			"module_defaults", "debugger", "port":
+			"module_defaults", "port":
 			// Accepted: no effect on execution outcome here.
 		case "async":
 			// Async with poll > 0 runs synchronously (same outcome; the
@@ -1259,4 +1281,14 @@ func parseBecomeKey(bf *BecomeFields, key string, val *yaml.Node, file string) e
 		bf.Exe, _ = val.Str()
 	}
 	return nil
+}
+
+// parseDebugger validates the debugger keyword.
+func parseDebugger(val *yaml.Node, file string) (string, error) {
+	s, _ := val.Str()
+	switch s {
+	case "", "always", "never", "on_failed", "on_unreachable", "on_skipped":
+		return s, nil
+	}
+	return "", errAt(file, val, "debugger must be one of always, never, on_failed, on_unreachable or on_skipped, got %q", s)
 }
