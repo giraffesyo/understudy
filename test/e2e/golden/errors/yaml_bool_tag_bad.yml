@@ -1,0 +1,6 @@
+# YAML load error: a !!bool that is not a boolean
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: !!bool maybe

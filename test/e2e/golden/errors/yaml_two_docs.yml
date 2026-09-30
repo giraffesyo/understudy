@@ -1,0 +1,7 @@
+# YAML load error: a second document in the playbook
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=1
+---
+- hosts: all

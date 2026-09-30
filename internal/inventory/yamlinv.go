@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -19,7 +20,7 @@ import (
 //	      vars:
 //	        pg_port: 5432
 func LoadYAML(inv *Inventory, data []byte, filename string) error {
-	v, err := yaml.Unmarshal(data, filename)
+	v, err := yaml.Unmarshal(data, absPath(filename))
 	if err != nil {
 		return err
 	}
@@ -34,6 +35,15 @@ func LoadYAML(inv *Inventory, data []byte, filename string) error {
 		}
 	}
 	return nil
+}
+
+// absPath is the path ansible-core names an inventory file by in load
+// warnings and errors (sources are made absolute).
+func absPath(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
 }
 
 func loadYAMLGroup(inv *Inventory, name string, body any, filename string) error {

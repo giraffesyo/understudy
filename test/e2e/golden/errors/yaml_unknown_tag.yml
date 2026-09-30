@@ -1,0 +1,6 @@
+# YAML load error: an unknown tag
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: !foo bar

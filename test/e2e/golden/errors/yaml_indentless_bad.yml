@@ -1,0 +1,8 @@
+# YAML load error: an indentless sequence item followed by a misindented key
+- hosts: all
+  gather_facts: false
+  tasks:
+- hosts: all
+  tasks:
+  - debug: msg=1
+   when: true

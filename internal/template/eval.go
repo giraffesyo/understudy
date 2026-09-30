@@ -617,6 +617,29 @@ func (ec *EvalCtx) evalCall(t *callExpr) (any, error) {
 	if err := ec.rejectUndefined(fn, t.off); err != nil {
 		return nil, err
 	}
+	if f, ok := fn.(kwOrderFunc); ok {
+		// Keyword arguments in call order (dict(b=1, a=2) keeps b first).
+		args, _, err := ec.evalArgs(t.args, nil)
+		if err != nil {
+			return nil, err
+		}
+		kw := yaml.NewOMap()
+		for _, k := range t.kwargs {
+			v, err := ec.eval(k.val)
+			if err != nil {
+				return nil, err
+			}
+			if err := ec.rejectUndefined(v, k.val.exprOff()); err != nil {
+				return nil, err
+			}
+			kw.Set(k.name, v)
+		}
+		out, err := f(ec, args, kw)
+		if err != nil {
+			return nil, ec.errf(t.off, "%s", err)
+		}
+		return out, nil
+	}
 	args, kwargs, err := ec.evalArgs(t.args, t.kwargs)
 	if err != nil {
 		return nil, err

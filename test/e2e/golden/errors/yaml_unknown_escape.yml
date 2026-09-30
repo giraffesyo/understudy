@@ -1,0 +1,6 @@
+# YAML load error: an unknown escape in a double-quoted scalar
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "a\qb"

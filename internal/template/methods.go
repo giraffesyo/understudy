@@ -14,6 +14,9 @@ type boundMethod func(ec *EvalCtx, args []any, kwargs map[string]any) (any, erro
 // globalFunc is a callable global (range, dict, lookup, query).
 type globalFunc func(ec *EvalCtx, args []any, kwargs map[string]any) (any, error)
 
+// kwOrderFunc is a global that needs its keyword arguments in call order.
+type kwOrderFunc func(ec *EvalCtx, args []any, kwargs *yaml.OMap) (any, error)
+
 // lookupMethod resolves builtin str/list/dict methods for getattr.
 func lookupMethod(x any, name string) (boundMethod, bool) {
 	if s, ok := asString(x); ok {

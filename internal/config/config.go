@@ -29,6 +29,10 @@ type Config struct {
 	DisplaySkippedHosts bool
 
 	DeprecationWarnings bool // deprecation_warnings / ANSIBLE_DEPRECATION_WARNINGS
+	// DuplicateDictKey is what loading YAML with a repeated mapping key
+	// does: "warn", "error" or "ignore" (duplicate_dict_key /
+	// ANSIBLE_DUPLICATE_YAML_DICT_KEY).
+	DuplicateDictKey string
 	// InjectFactsSet: inject_facts_as_vars is configured (ini or
 	// ANSIBLE_INJECT_FACT_VARS) rather than left at its default.
 	InjectFactsSet bool
@@ -44,6 +48,7 @@ func Defaults() *Config {
 		DisplayOkHosts:      true,
 		DisplaySkippedHosts: true,
 		DeprecationWarnings: true,
+		DuplicateDictKey:    "warn",
 	}
 }
 
@@ -137,6 +142,8 @@ func applyINI(cfg *Config, content string) {
 				cfg.DisplaySkippedHosts = iniBool(val, cfg.DisplaySkippedHosts)
 			case "roles_path":
 				cfg.RolesPath = splitPathspec(val)
+			case "duplicate_dict_key":
+				cfg.DuplicateDictKey = strings.ToLower(strings.TrimSpace(val))
 			case "deprecation_warnings":
 				cfg.DeprecationWarnings = iniBool(val, cfg.DeprecationWarnings)
 			case "inject_facts_as_vars":
@@ -217,6 +224,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ANSIBLE_DISPLAY_OK_HOSTS"); v != "" {
 		cfg.DisplayOkHosts = iniBool(v, cfg.DisplayOkHosts)
+	}
+	if v := os.Getenv("ANSIBLE_DUPLICATE_YAML_DICT_KEY"); v != "" {
+		cfg.DuplicateDictKey = strings.ToLower(strings.TrimSpace(v))
 	}
 	if v := os.Getenv("ANSIBLE_DEPRECATION_WARNINGS"); v != "" {
 		cfg.DeprecationWarnings = iniBool(v, cfg.DeprecationWarnings)

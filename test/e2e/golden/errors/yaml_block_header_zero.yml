@@ -1,0 +1,7 @@
+# YAML load error: a 0 block scalar indentation indicator
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: |0
+          text

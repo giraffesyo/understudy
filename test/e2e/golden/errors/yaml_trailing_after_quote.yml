@@ -1,0 +1,6 @@
+# YAML load error: text after a quoted scalar
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "a" b

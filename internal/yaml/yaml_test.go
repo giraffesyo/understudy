@@ -283,13 +283,15 @@ func TestErrors(t *testing.T) {
 		src     string
 		wantSub string
 	}{
-		{"a: b\n c: d\n", "mapping values are not allowed here"},
-		{"? complex\n: key\n", "complex mapping keys"},
-		{"a: *nope\n", `undefined alias "nope"`},
-		{"a: &a\n  b: *a\n", "circular reference"},
-		{"\ta: 1\n", "tab"},
-		{"a: [1, 2\n", "missing ']'"},
-		{"%TAG !x! tag:example.com\n---\na: 1\n", "%TAG directives are not supported"},
+		{"a: b\n c: d\n", "err.yml:2:3: YAML parsing failed: Mapping values are not allowed in this context."},
+		{"? [a]\n: key\n", "err.yml:1:3: YAML parsing failed: While constructing a mapping found unhashable key."},
+		{"a: *nope\n", "err.yml:1:4: YAML parsing failed: Found undefined alias."},
+		{"a: &a\n  b: *a\n", "Found unconstructable recursive node."},
+		{"\ta: 1\n", "err.yml:1:1: YAML parsing failed: Tabs are usually invalid in YAML."},
+		{"a: [1, 2\n", "err.yml:2:1: YAML parsing failed: While parsing a flow sequence did not find expected ',' or ']'."},
+		{"a: 1\n---\nb: 2\n", "err.yml:2:1: YAML parsing failed: Expected a single document in the stream but found another document."},
+		{"a: !foo 1\n", "err.yml:1:4: YAML parsing failed: Could not determine a constructor for the tag '!foo'."},
+		{"a: !!int x\n", "err.yml: YAML parsing failed: invalid literal for int() with base 10: 'x'"},
 	}
 	for _, c := range cases {
 		_, err := Unmarshal([]byte(c.src), "err.yml")
@@ -304,12 +306,13 @@ func TestErrors(t *testing.T) {
 }
 
 func TestDuplicateKeysLastWinsWithWarning(t *testing.T) {
-	var warned []string
-	OnWarning = func(msg string) { warned = append(warned, msg) }
+	var warned []Warning
+	OnWarning = func(w Warning) { warned = append(warned, w) }
 	defer func() { OnWarning = nil }()
 	eq(t, "a: 1\na: 2\n", mapv("a", int64(2)))
-	if len(warned) != 1 || !strings.Contains(warned[0], `duplicate mapping key "a"`) {
-		t.Errorf("warnings = %v", warned)
+	want := Warning{Msg: "Found duplicate mapping key 'a'.", Help: "Using last defined value only.", File: "test.yml", Line: 2, Col: 1}
+	if len(warned) != 1 || warned[0] != want {
+		t.Errorf("warnings = %+v", warned)
 	}
 }
 
@@ -387,10 +390,10 @@ func TestKeyOrderPreserved(t *testing.T) {
 	if got := om.Keys(); !reflect.DeepEqual(got, []string{"z", "a", "m", "b"}) {
 		t.Errorf("key order = %v, want source order [z a m b]", got)
 	}
-	// Merge keys keep the mapping's own key order, appending merged keys.
+	// Merged keys come first, then the mapping's own (PyYAML's flatten_mapping).
 	v2, _ := Unmarshal([]byte("base: &b {x: 1, y: 2}\nchild:\n  <<: *b\n  first: 0\n"), "m.yml")
 	child := v2.(*OMap).Get("child").(*OMap)
-	if got := child.Keys(); !reflect.DeepEqual(got, []string{"first", "x", "y"}) {
-		t.Errorf("merge order = %v, want [first x y]", got)
+	if got := child.Keys(); !reflect.DeepEqual(got, []string{"x", "y", "first"}) {
+		t.Errorf("merge order = %v, want [x y first]", got)
 	}
 }
