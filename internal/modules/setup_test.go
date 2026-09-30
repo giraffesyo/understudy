@@ -805,3 +805,16 @@ func TestDateTimeDST(t *testing.T) {
 		t.Errorf("got %#v", dt)
 	}
 }
+
+func TestReverseAddrName(t *testing.T) {
+	for addr, want := range map[string]string{
+		"127.0.0.1":   "1.0.0.127.in-addr.arpa",
+		"::1":         "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa",
+		"fe80::1%lo0": "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.e.f.ip6.arpa",
+		"nonsense":    "",
+	} {
+		if got := reverseAddrName(addr); got != want {
+			t.Errorf("reverseAddrName(%q) = %q, want %q", addr, got, want)
+		}
+	}
+}
