@@ -2,7 +2,9 @@
 
 // RHEL golden differential: runs the same playbook through real
 // ansible-playbook AND understudy against a live Rocky Linux container over
-// SSH, then asserts identical per-task status and PLAY RECAP. This catches
+// SSH, then asserts the same decisions (compareRuns: exit code, task
+// sequence, per-task status and PLAY RECAP; a playbook that fails to load
+// in either tool fails the test after comparing the errors). This catches
 // module-behavior divergences on a real target (e.g. file-ownership
 // preservation) automatically, the way the local golden test catches
 // template/filter divergences. Reuses parseRun/recap/diff helpers from
@@ -18,7 +20,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -146,24 +147,15 @@ func TestRHELGoldenDifferential(t *testing.T) {
 				"sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf 2>/dev/null; " +
 				"dnf -y remove zip chrony 2>/dev/null; true"
 			exec.Command("docker", "exec", "understudy-rhelgolden", "sh", "-c", resetCmd).Run()
-			aOut := runTool(t, ansible, []string{"-i", invA, pb}, env, 1)
+			a := runTool(t, ansible, []string{"-i", invA, pb}, env, 1)
 
 			exec.Command("docker", "exec", "understudy-rhelgolden", "sh", "-c", resetCmd).Run()
-			uOut := runTool(t, understudy, []string{"playbook", "-i", invB, pb}, env, 1)
+			u := runTool(t, understudy, []string{"playbook", "-i", invB, pb}, env, 1)
 
 			if os.Getenv("UNDERSTUDY_GOLDEN_LOG") != "" {
-				t.Logf("--- ansible ---\n%s\n--- understudy ---\n%s", aOut, uOut)
+				t.Logf("--- ansible ---\n%s\n--- understudy ---\n%s", a.out, u.out)
 			}
-			aStatus, aRecap := parseRun(aOut)
-			uStatus, uRecap := parseRun(uOut)
-			if !reflect.DeepEqual(aRecap, uRecap) {
-				t.Errorf("PLAY RECAP differs\n ansible:    %v\n understudy: %v\n\n--- ansible ---\n%s\n--- understudy ---\n%s",
-					sortRecap(aRecap), sortRecap(uRecap), aOut, uOut)
-			}
-			if !reflect.DeepEqual(aStatus, uStatus) {
-				t.Errorf("per-task status differs\n%s\n\n--- ansible ---\n%s\n--- understudy ---\n%s",
-					diffStatus(aStatus, uStatus), aOut, uOut)
-			}
+			compareRuns(t, a, u)
 		})
 	}
 }
