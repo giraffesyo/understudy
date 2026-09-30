@@ -101,6 +101,8 @@ var verboseMasks = []struct {
 	{regexp.MustCompile(`\.[0-9]+\.[0-9]{4}-[0-9]{2}-[0-9]{2}@[0-9]{2}:[0-9]{2}:[0-9]{2}~"`), `.PID.TIME~"`},
 	// tempfile's random names (the corpus uses the default and "work_" prefixes).
 	{regexp.MustCompile(`/(ansible\.|work_)[a-z0-9_]{8}`), "/${1}X"},
+	// cron's backup_file: tempfile.mkstemp(prefix='crontab').
+	{regexp.MustCompile(`/crontab[a-z0-9_]{8}"`), `/crontabX"`},
 	// stat/find timestamps (positional Python floats) and inode numbers.
 	{regexp.MustCompile(`"(atime|mtime|ctime|birthtime)": [0-9]+\.[0-9]+([,}])`), `"$1": T$2`},
 	{regexp.MustCompile(`"inode": [0-9]+`), `"inode": N`},
