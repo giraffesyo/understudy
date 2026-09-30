@@ -88,7 +88,7 @@ func TestRoundTrip(t *testing.T) {
 }
 
 // crossCheck loads pem with python-cryptography when it is installed
-// (UNDERSTUDY_TEST_PYTHON or python3), which must derive the same public
+// with bcrypt (UNDERSTUDY_TEST_PYTHON or python3), which must derive the same public
 // key.
 func crossCheck(t *testing.T, pem, pw []byte, want string) {
 	t.Helper()
@@ -96,7 +96,7 @@ func crossCheck(t *testing.T, pem, pw []byte, want string) {
 	if py == "" {
 		py = "python3"
 	}
-	if err := exec.Command(py, "-c", "import cryptography").Run(); err != nil {
+	if err := exec.Command(py, "-c", "import cryptography, bcrypt").Run(); err != nil {
 		return
 	}
 	f := filepath.Join(t.TempDir(), "key")
