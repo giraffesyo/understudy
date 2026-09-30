@@ -550,7 +550,7 @@ func (r *getURLRun) fetch(rawURL string, lastMod time.Time, force bool, method s
 	challengeAuth := false
 	switch {
 	case p.Bool("use_gssapi"):
-		return nil, nil, &agentproto.Result{Failed: true, Msg: missingRequiredLib("gssapi", "for use_gssapi=True", "https://pypi.org/project/gssapi/")}
+		return nil, nil, &agentproto.Result{Failed: true, Msg: missingRequiredLib(r.env, "gssapi", "for use_gssapi=True", "https://pypi.org/project/gssapi/")}
 	case username != "" && !p.Bool("force_basic_auth"):
 		challengeAuth = true
 	case username != "":
@@ -777,25 +777,6 @@ func opensslCipherName(iana string) string {
 		name = enc
 	}
 	return strings.ReplaceAll(name, "_", "-")
-}
-
-// missingRequiredLib is basic.missing_required_lib().
-func missingRequiredLib(library, reason, url string) string {
-	host, _ := os.Hostname()
-	py, err := lookPath("python3")
-	if err != nil {
-		py = "/usr/bin/python3"
-	}
-	msg := fmt.Sprintf("Failed to import the required Python library (%s) on %s's Python %s.", library, host, py)
-	if reason != "" {
-		msg += " This is required " + reason + "."
-	}
-	if url != "" {
-		msg += " See " + url + " for more info."
-	}
-	return msg + " Please read the module documentation and install it in the appropriate location." +
-		" If the required library is installed, but Ansible is using the wrong Python interpreter," +
-		" please consult the documentation on ansible_python_interpreter"
 }
 
 // pyOSErrorURL renders an OSError for a urlopen error message.

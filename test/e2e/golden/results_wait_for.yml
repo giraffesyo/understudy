@@ -137,6 +137,10 @@
       wait_for: {state: drained, timeout: 1}
       ignore_errors: true
 
+    - name: drained counts connections (off Linux with psutil, naming the task's Python)
+      wait_for: {port: 1, state: drained, timeout: 1}
+      ignore_errors: true
+
     - name: check mode is not supported
       wait_for: {port: 1, timeout: 1}
       check_mode: true
