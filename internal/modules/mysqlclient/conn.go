@@ -25,6 +25,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -189,8 +190,15 @@ func pyOSError(err error) string {
 	}
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		if dnsErr.IsNotFound {
+		// The C library's gai_strerror text: glibc's, or musl's (Alpine).
+		musl, _ := filepath.Glob("/lib/ld-musl-*.so.1")
+		switch {
+		case dnsErr.IsNotFound && len(musl) > 0:
+			return "[Errno -2] Name does not resolve"
+		case dnsErr.IsNotFound:
 			return "[Errno -2] Name or service not known"
+		case len(musl) > 0:
+			return "[Errno -3] Try again"
 		}
 		return "[Errno -3] Temporary failure in name resolution"
 	}
