@@ -1,0 +1,58 @@
+---
+# Undefined values are markers: an attribute missing on a value words
+# its type ("object of type 'NoneType' has no attribute 'x'"); filters
+# that accept undefined arguments (default, ternary) get them lazily; a
+# list or dict literal keeps an undefined item until it is used. debug's
+# var= renders each undefined value in place ("<< error N - ... >>") and
+# warns "Encountered N template error(s)." at the template it came from.
+- name: undefined markers
+  hosts: all
+  gather_facts: false
+  vars:
+    d: {a: 1}
+    l: [1, 2]
+    none_var:
+    ref: "{{ d.zz }}"
+    lst: ["{{ d.q }}", 1]
+  tasks:
+    - debug: msg="{{ none_var.x }}"
+      ignore_errors: true
+    - debug: msg="{{ 'q' | default(d.y) }}"
+    - debug: msg="{{ d.x | default(d.y) }}"
+      ignore_errors: true
+    - debug: msg="{{ true | ternary('a', nope) }}"
+    - debug: msg="{{ false | ternary('a', nope) }}"
+      ignore_errors: true
+    - debug: msg="{{ lookup('vars', 'nope') | default('dflt') }}"
+    - debug: msg="{{ lookup('vars', 'nope') }}"
+      ignore_errors: true
+    - debug: msg="{{ [d.x] | length }}"
+    - debug: msg="{{ [d.x, 1] | select('defined') | list }}"
+    - debug: msg="{{ [d.x] | join }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ {'k': d.x} }}"
+      ignore_errors: true
+    - debug: msg="{{ hostvars['nohost'] is defined }}"
+    - debug: msg="{{ hostvars['nohost'] }}"
+      ignore_errors: true
+    - debug: var=d.x
+    - debug: var=d.x.y
+    - debug: var=nope.x
+    - debug: var=l.x
+    - debug: var="l[5]"
+    - debug: var=none_var.x
+    - debug: var="[d.x, d.y, 1]"
+    - debug: var="d.x ~ 'a'"
+    - debug:
+        var: "{'k': d.x, 'j': nope}"
+    - debug: var="d.x | length"
+    - debug: var="[d.x] | first"
+    - debug: var=ref
+    - debug: var=lst
+    - debug: var="hostvars['nohost']"
+    - debug: var="hostvars[inventory_hostname].nope"
+    - debug: var="lookup('vars', 'nope')"
+    - debug: var="d.x | default('dd')"
+    - debug: var="'x' | upper(1)"
+      ignore_errors: true

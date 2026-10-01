@@ -45,6 +45,8 @@ type Context struct {
 	// SetIncludeVars stores include_vars results at their precedence layer
 	// for this host (or its delegate / run_once batch).
 	SetIncludeVars func(vars map[string]any)
+	// Warn displays a warning block (de-duplicated, as Display does).
+	Warn func(block string)
 }
 
 // Action runs one task occurrence. args/freeForm are already templated.

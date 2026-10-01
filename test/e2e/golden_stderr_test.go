@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -14,7 +15,8 @@ import (
 // on (the other golden tests turn them off) and compares stdout, stderr
 // and the exit code byte for byte: the deprecation warnings' wording,
 // origins, de-duplication and order. With deprecation_warnings off, both
-// tools must print nothing on stderr.
+// tools must print nothing on stderr. A playbook's <name>.env file adds
+// environment variables (KEY=VALUE lines: configuration) to both runs.
 func TestGoldenStderr(t *testing.T) {
 	ansible := ansiblePlaybookBin(t)
 	understudy := understudyBin(t)
@@ -31,6 +33,14 @@ func TestGoldenStderr(t *testing.T) {
 		for _, deprecations := range []string{"True", "False"} {
 			t.Run(filepath.Base(pb)+"/deprecation_warnings="+deprecations, func(t *testing.T) {
 				abs, _ := filepath.Abs(pb)
+				env := env
+				if data, err := os.ReadFile(strings.TrimSuffix(pb, ".yml") + ".env"); err == nil {
+					for _, line := range strings.Split(string(data), "\n") {
+						if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+							env = append(append([]string{}, env...), line)
+						}
+					}
+				}
 				run := func(bin string, pre ...string) (string, string, int) {
 					work := t.TempDir()
 					inv := writeGoldenInventory(t, work, "")

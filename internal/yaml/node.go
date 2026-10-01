@@ -36,7 +36,8 @@ type Node struct {
 	Line    int     // 1-based
 	Column  int     // 1-based
 
-	recursive bool // a collection that contains an alias to itself
+	recursive bool   // a collection that contains an alias to itself
+	file      string // the file a collection was parsed from (its origin)
 }
 
 // File is one parsed YAML file: zero or more documents.

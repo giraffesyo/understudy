@@ -81,10 +81,13 @@ func registerRegexFilters(e *Engine) {
 		if !ok {
 			s = toStr(in)
 		}
-		if len(args) < 1 {
-			return nil, fmt.Errorf("regex_replace requires a pattern")
+		// regex_replace(value='', pattern='', replacement='', ...).
+		pattern := ""
+		if len(args) > 0 {
+			pattern, _ = asString(args[0])
+		} else if p, ok := kwargs["pattern"]; ok {
+			pattern, _ = asString(p)
 		}
-		pattern, _ := asString(args[0])
 		repl := ""
 		if len(args) > 1 {
 			repl, _ = asString(args[1])

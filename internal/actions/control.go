@@ -46,17 +46,29 @@ func runDebug(_ context.Context, actx *Context, args map[string]any, _ string) *
 		}
 	}
 	if varName, ok := args["var"].(string); ok {
-		// debug var= evaluates the NAME as an expression against host vars.
-		val, err := actx.Vars.At(actx.ArgPos["var"]).EvalExpr(varName)
+		// debug var= evaluates the NAME as an expression against host
+		// vars, an undefined value rendered in place and warned about.
+		val, markers, err := actx.Vars.At(actx.ArgPos["var"]).EvalExprReplacing(varName)
+		if err == nil && actx.Warn != nil {
+			for _, w := range template.MarkerWarnings(markers) {
+				actx.Warn(warningBlock(w.Msg, w.Pos))
+			}
+		}
 		if err != nil {
 			var re *template.RecursionError
-			if ue, isUndef := err.(*template.UndefinedError); isUndef {
-				// ansible-core 2.19+ renders the template error in place.
-				val = fmt.Sprintf("<< error 1 - '%s' is undefined >>", ue.Name)
-			} else if errors.As(err, &re) {
+			if errors.As(err, &re) {
 				// A recursive value cannot be finalized.
 				inner := "Error while resolving `var` expression: " + re.Error()
 				res := agentproto.Fail("Task failed: %s", inner)
+				res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: inner}
+				if p, has := actx.ArgPos["var"]; has {
+					res.ErrorChain.InnerFile, res.ErrorChain.InnerLine, res.ErrorChain.InnerCol = p.File, p.Line, p.Col
+				}
+				return res
+			} else if cause, ok := template.Cause(err); ok {
+				inner := "Error while resolving `var` expression: " + cause
+				res := agentproto.Fail("Task failed: %s", inner)
+				res.Origin = "verbatim"
 				res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: inner}
 				if p, has := actx.ArgPos["var"]; has {
 					res.ErrorChain.InnerFile, res.ErrorChain.InnerLine, res.ErrorChain.InnerCol = p.File, p.Line, p.Col
@@ -73,7 +85,9 @@ func runDebug(_ context.Context, actx *Context, args map[string]any, _ string) *
 		if m == nil {
 			return &agentproto.Result{VerboseAlways: true, Extra: map[string]any{"msg": nil}}
 		}
-		if s, isStr := m.(string); isStr {
+		if s, isStr := m.(string); isStr && s == "" {
+			return &agentproto.Result{VerboseAlways: true, Extra: map[string]any{"msg": ""}}
+		} else if isStr {
 			msg = s
 		} else {
 			return &agentproto.Result{VerboseAlways: true, Extra: map[string]any{"msg": jsonSafe(m)}}
@@ -141,6 +155,9 @@ func runAssert(_ context.Context, actx *Context, args map[string]any, _ string) 
 				res := agentproto.Fail("Task failed: %s", cause)
 				res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: cause,
 					InnerFile: pos.File, InnerLine: pos.Line, InnerCol: pos.Col}
+				if be, broken := template.IsBrokenConditional(err); broken {
+					res.ErrorChain.Help = be.Help
+				}
 				return res
 			}
 		default:
@@ -196,4 +213,13 @@ func jsonSafe(v any) any {
 	// Engine values (ordered maps, unsafe strings, lazy ranges) become plain
 	// JSON-shaped values; ints stay ints and floats stay floats.
 	return template.Plain(v)
+}
+
+// warningBlock is Display's warning with its origin and source excerpt.
+func warningBlock(msg string, pos template.Position) string {
+	if pos.File == "" {
+		return "[WARNING]: " + msg + "\n"
+	}
+	return fmt.Sprintf("[WARNING]: %s\nOrigin: %s:%d:%d\n\n%s\n", msg, pos.File, pos.Line, pos.Col,
+		template.SourceExcerpt(pos.File, pos.Line, pos.Col))
 }

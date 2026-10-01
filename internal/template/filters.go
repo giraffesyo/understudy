@@ -213,7 +213,19 @@ func registerFilters(e *Engine) {
 	}
 
 	f["join"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		sep, err := argSoftStr(args, 0, "")
+		// sync_do_join(value, d='', attribute=None).
+		var sepV, attr any = "", nil
+		if len(args) > 0 {
+			sepV = args[0]
+		} else if v, ok := kwargs["d"]; ok {
+			sepV = v
+		}
+		if len(args) > 1 {
+			attr = args[1]
+		} else if v, ok := kwargs["attribute"]; ok {
+			attr = v
+		}
+		sep, err := softStr(sepV)
 		if err != nil {
 			return nil, err
 		}
@@ -223,6 +235,16 @@ func registerFilters(e *Engine) {
 		}
 		parts := make([]string, len(items))
 		for i, item := range items {
+			if attr != nil {
+				v, err := extractAttr(item, attr)
+				if err != nil {
+					return nil, err
+				}
+				if u, isU := v.(Undefined); isU {
+					return nil, u.useError(ec.pos)
+				}
+				item = v
+			}
 			parts[i] = toStr(item)
 		}
 		return strings.Join(parts, sep), nil

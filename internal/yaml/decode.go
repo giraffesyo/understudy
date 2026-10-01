@@ -283,13 +283,16 @@ func (n *Node) decodeSequence(st *decodeState, unsafe bool) (any, error) {
 	// an item that aliases it shares it.
 	out := make([]any, len(n.Content), max(len(n.Content), 1))
 	st.memo[key] = out
+	items := make(map[string]*Node, len(n.Content))
 	for i, item := range n.Content {
 		v, err := item.decodeIn(st, unsafe)
 		if err != nil {
 			return nil, err
 		}
 		out[i] = v
+		items[indexKey(i)] = item
 	}
+	recordContainer(out, n, items)
 	return out, nil
 }
 
@@ -304,6 +307,8 @@ func (n *Node) decodeMapping(st *decodeState, unsafe bool) (any, error) {
 	}
 	out := NewOMap()
 	st.memo[key] = out
+	items := make(map[string]*Node, len(pairs)/2)
+	defer recordContainer(out, n, items)
 	names := map[any]string{} // Python-equal keys share the first's name
 	for i := 0; i+1 < len(pairs); i += 2 {
 		k, err := pairs[i].decodeIn(st, false)
@@ -321,6 +326,7 @@ func (n *Node) decodeMapping(st *decodeState, unsafe bool) (any, error) {
 			names[id] = name
 		}
 		out.Set(name, v)
+		items[name] = pairs[i+1]
 	}
 	return out, nil
 }

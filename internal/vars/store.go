@@ -5,6 +5,7 @@
 package vars
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -43,7 +44,10 @@ const (
 type Store struct {
 	mu     sync.RWMutex
 	layers [layerCount]map[string]map[string]any // layer -> scope key -> vars
-	engine *template.Engine
+	// origins is where each layer's values came from, where known (a
+	// broken conditional names its result's origin).
+	origins [layerCount]map[string]map[string]valueOrigin
+	engine  *template.Engine
 
 	// VaultDecrypt decrypts a !vault-tagged value at use time. Nil means no
 	// vault password is configured; encountering an encrypted value errors.
@@ -65,8 +69,46 @@ func (s *Store) set(layer Layer, scope string, vars map[string]any) {
 		dst = map[string]any{}
 		s.layers[layer][scope] = dst
 	}
+	if s.origins[layer] == nil {
+		s.origins[layer] = map[string]map[string]valueOrigin{}
+	}
+	orig := s.origins[layer][scope]
+	if orig == nil {
+		orig = map[string]valueOrigin{}
+		s.origins[layer][scope] = orig
+	}
 	for k, v := range vars {
 		dst[k] = v
+		if file, line, col, ok := yaml.ChildOrigin(vars, k); ok {
+			orig[k] = valueOrigin{pos: template.Position{File: file, Line: line, Col: col}}
+		} else {
+			delete(orig, k)
+		}
+	}
+}
+
+// valueOrigin is where a variable's value came from; inherit: its items
+// too (a JSON file's values, a CLI option's).
+type valueOrigin struct {
+	pos     template.Position
+	inherit bool
+}
+
+// SetValueOrigins records where the values of a layer's variables came
+// from, for sources other than YAML (an INI inventory line, -e): pos
+// with Line 0 names a file or a description ("<CLI option '-e'>"), the
+// origin of their items too.
+func (s *Store) SetValueOrigins(layer Layer, scope string, origins map[string]template.Position) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.origins[layer] == nil {
+		s.origins[layer] = map[string]map[string]valueOrigin{}
+	}
+	if s.origins[layer][scope] == nil {
+		s.origins[layer][scope] = map[string]valueOrigin{}
+	}
+	for k, p := range origins {
+		s.origins[layer][scope][k] = valueOrigin{pos: p, inherit: p.Line == 0}
 	}
 }
 
@@ -77,6 +119,10 @@ func (s *Store) SetPlayVars(vars map[string]any) {
 	s.layers[LPlayVarsFiles] = nil
 	s.layers[LRoleDefaults] = nil
 	s.layers[LRoleVars] = nil
+	s.origins[LPlayVars] = nil
+	s.origins[LPlayVarsFiles] = nil
+	s.origins[LRoleDefaults] = nil
+	s.origins[LRoleVars] = nil
 	s.mu.Unlock()
 	if vars != nil {
 		s.set(LPlayVars, "", vars)
@@ -99,11 +145,21 @@ func (s *Store) SetExtraVars(vars map[string]any) { s.set(LExtraVars, "", vars) 
 // registered result, a set_fact value, a gathered fact, a loop item):
 // reading it never templates it again, as in Ansible, where such values
 // are unsafe/final — command output containing "{{" stays literal.
-type Final struct{ V any }
+type Final struct {
+	V any
+	// Origin is where a set_fact value came from (nil: unknown, as a
+	// registered result's is).
+	Origin *template.OriginRef
+}
 
 // SetHostFact records set_fact/register results for one host.
 func (s *Store) SetHostFact(host, name string, value any) {
-	s.set(LHostFacts, host, map[string]any{name: Final{value}})
+	s.set(LHostFacts, host, map[string]any{name: Final{V: value}})
+}
+
+// SetHostFactOrigin is SetHostFact for a value with a known origin.
+func (s *Store) SetHostFactOrigin(host, name string, value any, origin template.OriginRef) {
+	s.set(LHostFacts, host, map[string]any{name: Final{V: value, Origin: &origin}})
 }
 
 // SetIncludeVars records include_vars results for one host. Unlike
@@ -144,7 +200,7 @@ func (s *Store) RawHostVar(host, name string) (any, bool) {
 func (s *Store) SetFacts(host string, facts map[string]any) {
 	final := make(map[string]any, len(facts))
 	for k, v := range facts {
-		final[k] = Final{v}
+		final[k] = Final{V: v}
 	}
 	s.set(LFacts, host, final)
 }
@@ -178,17 +234,35 @@ func (s *Store) flatten(host string) map[string]any {
 // flattenWith is flatten with a private role's defaults and vars at
 // their layers' precedence (after the play-wide ones).
 func (s *Store) flattenWith(host string, roleDefaults, roleVars []map[string]any) map[string]any {
+	out, _ := s.flattenOrigins(host, roleDefaults, roleVars)
+	return out
+}
+
+// flattenOrigins is flattenWith with where each value came from.
+func (s *Store) flattenOrigins(host string, roleDefaults, roleVars []map[string]any) (map[string]any, map[string]valueOrigin) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := map[string]any{}
+	origins := map[string]valueOrigin{}
+	put := func(k string, v any, o valueOrigin, known bool) {
+		out[k] = v
+		if known {
+			origins[k] = o
+		} else {
+			delete(origins, k)
+		}
+	}
 	for layer := Layer(0); layer < layerCount; layer++ {
 		if scopes := s.layers[layer]; scopes != nil {
+			scopeOrigins := s.origins[layer]
 			for k, v := range scopes[""] {
-				out[k] = v
+				o, known := scopeOrigins[""][k]
+				put(k, v, o, known)
 			}
 			if host != "" {
 				for k, v := range scopes[host] {
-					out[k] = v
+					o, known := scopeOrigins[host][k]
+					put(k, v, o, known)
 				}
 			}
 		}
@@ -201,11 +275,12 @@ func (s *Store) flattenWith(host string, roleDefaults, roleVars []map[string]any
 		}
 		for _, m := range private {
 			for k, v := range m {
-				out[k] = v
+				file, line, col, known := yaml.ChildOrigin(m, k)
+				put(k, v, valueOrigin{pos: template.Position{File: file, Line: line, Col: col}}, known)
 			}
 		}
 	}
-	return out
+	return out, origins
 }
 
 // WithRoleScope is the context of a task of a role whose defaults and
@@ -216,7 +291,7 @@ func (c *Context) WithRoleScope(defaults, roleVars []map[string]any) *Context {
 		return c
 	}
 	child := *c
-	child.flat = c.store.flattenWith(c.host, defaults, roleVars)
+	child.flat, child.flatOrigins = c.store.flattenOrigins(c.host, defaults, roleVars)
 	child.resolving = map[string]bool{}
 	child.cache = map[string]any{}
 	return &child
@@ -227,14 +302,18 @@ func (c *Context) WithRoleScope(defaults, roleVars []map[string]any) *Context {
 // and memoization; task vars and the loop variable overlay the flattened
 // store.
 type Context struct {
-	host      string
-	store     *Store
-	overlay   map[string]any // task vars, loop var — highest below magic
-	magic     map[string]any
-	flat      map[string]any
-	resolving map[string]bool
-	cache     map[string]any
-	pos       template.Position
+	host    string
+	store   *Store
+	overlay map[string]any // task vars, loop var — highest below magic
+	magic   map[string]any
+	flat    map[string]any
+	// flatOrigins and overlayOrigins are where flat's and overlay's
+	// values came from, where known.
+	flatOrigins    map[string]valueOrigin
+	overlayOrigins map[string]valueOrigin
+	resolving      map[string]bool
+	cache          map[string]any
+	pos            template.Position
 
 	keepDeprecated bool
 	// sourced: templates in the value being resolved report their own
@@ -242,6 +321,9 @@ type Context struct {
 	sourced bool
 	// inContainer: the value being templated is an item of a container.
 	inContainer bool
+	// markers: a template in a variable's value that uses an undefined
+	// value yields it (a marker) rather than failing (debug's var=).
+	markers bool
 }
 
 // NewContext builds a variable context for one host and task.
@@ -251,11 +333,11 @@ func (s *Store) NewContext(host string, pos template.Position) *Context {
 		store:     s,
 		overlay:   map[string]any{},
 		magic:     map[string]any{},
-		flat:      s.flatten(host),
 		resolving: map[string]bool{},
 		cache:     map[string]any{},
 		pos:       pos,
 	}
+	c.flat, c.flatOrigins = s.flattenOrigins(host, nil, nil)
 	c.magic["inventory_hostname"] = host
 	c.magic["inventory_hostname_short"] = shortHostname(host)
 	c.magic["omit"] = template.Omit{}
@@ -267,11 +349,20 @@ func (s *Store) NewContext(host string, pos template.Position) *Context {
 func (c *Context) WithOverlay(vars map[string]any) *Context {
 	child := *c
 	child.overlay = make(map[string]any, len(c.overlay)+len(vars))
+	child.overlayOrigins = make(map[string]valueOrigin, len(c.overlayOrigins))
 	for k, v := range c.overlay {
 		child.overlay[k] = v
 	}
+	for k, o := range c.overlayOrigins {
+		child.overlayOrigins[k] = o
+	}
 	for k, v := range vars {
 		child.overlay[k] = v
+		if file, line, col, ok := yaml.ChildOrigin(vars, k); ok {
+			child.overlayOrigins[k] = valueOrigin{pos: template.Position{File: file, Line: line, Col: col}}
+		} else {
+			delete(child.overlayOrigins, k)
+		}
 	}
 	child.resolving = map[string]bool{}
 	child.cache = map[string]any{}
@@ -500,7 +591,12 @@ func (c *Context) deepTemplateIn(v any, seen map[containerID]any) (any, error) {
 	}
 	switch t := v.(type) {
 	case string:
-		return c.store.engine.RenderTemplate(t, c, c.origin(t))
+		out, err := c.store.engine.RenderTemplate(t, c, c.origin(t))
+		var ue *template.UndefinedError
+		if err != nil && c.markers && errors.As(err, &ue) {
+			return template.Undefined{Name: ue.Name, Err: ue}, nil
+		}
+		return out, err
 	case yaml.UnsafeString:
 		return t, nil // never re-templated
 	case Final:
@@ -596,31 +692,12 @@ func (c *Context) RenderFileWith(src string, pos template.Position, opts templat
 	return c.store.engine.WithOptions(opts).RenderFile(src, c, pos, searchPath)
 }
 
-// EvalWhen evaluates a when: clause list (implicit AND).
+// EvalWhen evaluates a when: clause list (implicit AND): each must have
+// a boolean result (see template.EvalConditional).
 func (c *Context) EvalWhen(exprs []string) (ok bool, err error) {
 	defer capturePanic(&err)
 	for _, e := range exprs {
-		if e == "" {
-			continue
-		}
-		if isAllTemplate(e) {
-			// ansible-core resolves a conditional wrapped entirely in
-			// template delimiters; a string result is then evaluated as an
-			// expression (indirection), anything else is the result.
-			v, err := c.store.engine.RenderTemplate(e, c, c.pos)
-			if err != nil {
-				return false, err
-			}
-			s, isStr := v.(string)
-			if !isStr {
-				if !template.Truthy(v) {
-					return false, nil
-				}
-				continue
-			}
-			e = s
-		}
-		b, err := c.store.engine.EvalBool(e, c, c.pos)
+		b, err := c.store.engine.EvalConditional(e, c, c.pos)
 		if err != nil {
 			return false, err
 		}
@@ -629,6 +706,68 @@ func (c *Context) EvalWhen(exprs []string) (ok bool, err error) {
 		}
 	}
 	return true, nil
+}
+
+// VarOrigin implements template.OriginSource: the raw value of a
+// variable, with where it came from.
+func (c *Context) VarOrigin(name string) (template.OriginRef, bool) {
+	if _, ok := c.magic[name]; ok {
+		return template.OriginRef{}, false
+	}
+	var raw any
+	var o valueOrigin
+	var found, known bool
+	if v, ok := c.store.extraVar(name); ok {
+		raw, found = v, true
+		c.store.mu.RLock()
+		o, known = c.store.origins[LExtraVars][""][name]
+		c.store.mu.RUnlock()
+	} else if v, ok := c.overlay[name]; ok {
+		raw, found = v, true
+		o, known = c.overlayOrigins[name]
+	} else if v, ok := c.flat[name]; ok {
+		raw, found = v, true
+		o, known = c.flatOrigins[name]
+	}
+	if !found {
+		return template.OriginRef{}, false
+	}
+	raw = template.Undeprecate(raw)
+	if f, isFinal := raw.(Final); isFinal {
+		if f.Origin == nil {
+			return template.OriginRef{}, false
+		}
+		return *f.Origin, true
+	}
+	ref := template.OriginRef{Raw: raw, HasRaw: true, Inherit: o.inherit}
+	if file, line, col, ok := yaml.ValueOrigin(raw); ok {
+		ref.Pos = template.Position{File: file, Line: line, Col: col}
+	} else if known {
+		ref.Pos = o.pos
+	}
+	return ref, true
+}
+
+// ValueOrigin is where the raw value raw, written at pos, comes from once
+// templated here: what set_fact records for a fact.
+func (c *Context) ValueOrigin(raw any, pos template.Position) template.OriginRef {
+	ref := template.OriginRef{Raw: raw, HasRaw: true, Pos: pos}
+	if file, line, col, ok := yaml.ValueOrigin(raw); ok {
+		ref.Pos = template.Position{File: file, Line: line, Col: col}
+	}
+	return c.store.engine.ResolveOrigin(ref, c)
+}
+
+// EvalExprReplacing evaluates a bare expression as debug's var= does:
+// undefined values become placeholders, reported as markers.
+func (c *Context) EvalExprReplacing(expr string) (v any, markers []template.Marker, err error) {
+	defer capturePanic(&err)
+	// Variables resolve anew, an undefined item of one a marker in place.
+	child := *c
+	child.markers = true
+	child.resolving = map[string]bool{}
+	child.cache = map[string]any{}
+	return c.store.engine.EvalExpressionReplacing(expr, &child, c.pos)
 }
 
 // EvalExpr evaluates a bare expression (until:, failed_when:).

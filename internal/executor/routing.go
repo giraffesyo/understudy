@@ -62,6 +62,15 @@ func RoutingDeprecationWarnings(plays []*playbook.Play) []string {
 	for _, pl := range plays {
 		for _, list := range [][]*playbook.Task{pl.PreTasks, pl.Tasks, pl.PostTasks, pl.Handlers} {
 			for _, t := range list {
+				for _, d := range t.LoadDeprecations {
+					a := d.Pos
+					msg := fmt.Sprintf("[DEPRECATION WARNING]: %s This feature will be removed from ansible-core version %s.\n"+
+						"Origin: %s:%d:%d\n\n%s\n%s\n\n", d.Msg, d.Version, a.File, a.Line, a.Col, playbook.SourceContext(a.File, a.Line, a.Col), d.Help)
+					if !seen[msg] {
+						seen[msg] = true
+						out = append(out, DeprecationHint()+msg)
+					}
+				}
 				d, ok := routingDeprecations[t.Module]
 				if !ok {
 					continue

@@ -206,10 +206,12 @@ func regexTest(anchored bool) TestFunc {
 		if !ok {
 			return false, fmt.Errorf("regex tests require a string, got %s", typeName(in))
 		}
-		if len(args) < 1 {
-			return false, fmt.Errorf("regex test requires a pattern")
+		pattern := ""
+		if len(args) > 0 {
+			pattern, _ = asString(args[0])
+		} else if p, ok := ec.testKwargs["pattern"]; ok {
+			pattern, _ = asString(p)
 		}
-		pattern, _ := asString(args[0])
 		ignorecase := len(args) > 1 && truthy(args[1])
 		if msg := pyre.SyntaxError(pattern); msg != "" {
 			return false, errors.New(msg) // re.error
