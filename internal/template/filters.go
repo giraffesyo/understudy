@@ -576,7 +576,7 @@ func softStr(in any) (string, error) {
 
 // pyTypeName matches Ansible's type_debug output (Python type names).
 func pyTypeName(v any) string {
-	switch v.(type) {
+	switch t := v.(type) {
 	case nil:
 		return "NoneType"
 	case bool:
@@ -601,6 +601,12 @@ func pyTypeName(v any) string {
 		return "dict"
 	case Undefined:
 		return "AnsibleUndefined"
+	case *methodValue:
+		typ, _ := t.pyTypeRepr()
+		return typ
+	case *globalValue:
+		typ, _ := t.pyTypeRepr()
+		return typ
 	}
 	return fmt.Sprintf("%T", v)
 }
