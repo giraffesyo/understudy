@@ -2038,6 +2038,7 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		Delegated:     target != host,
 		DelegateFacts: task.DelegateFacts,
 		ArgPos:        argPositions(task),
+		RawArgs:       task.Args,
 		RunModule: func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error) {
 			if req.PythonInterpreter == "" {
 				req.PythonInterpreter = pythonInterpreter(vctx)
@@ -2948,6 +2949,16 @@ func loopFailure(err error) *agentproto.Result {
 		if cause, ok := template.Cause(le.err); ok {
 			res := agentproto.Fail("%s", cause)
 			res.Origin = "verbatim"
+			if se, ok := template.AsStorageError(le.err); ok {
+				pos := le.pos
+				if se.Pos.File != "" {
+					pos = se.Pos
+				}
+				res.ErrorChain = &agentproto.ErrorChain{Outer: se.Rendering(),
+					OuterFile: pos.File, OuterLine: pos.Line, OuterCol: pos.Col,
+					Inner: se.Error(), InnerValue: se.Repr}
+				return res
+			}
 			res.ErrorChain = &agentproto.ErrorChain{Inner: cause,
 				InnerFile: le.pos.File, InnerLine: le.pos.Line, InnerCol: le.pos.Col}
 			return res

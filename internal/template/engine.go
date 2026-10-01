@@ -170,6 +170,9 @@ func Cause(err error) (msg string, ok bool) {
 	if errors.As(err, &re) {
 		return re.Error(), true
 	}
+	if se, ok := AsStorageError(err); ok {
+		return strings.TrimSuffix(se.Rendering(), ".") + ": " + se.Error(), true
+	}
 	return "", false
 }
 
@@ -315,6 +318,10 @@ func (ec *EvalCtx) lookupName(name string) (any, bool) {
 		}
 	}
 	if v, ok := ec.engine.Globals[name]; ok {
+		switch v.(type) {
+		case globalFunc, kwOrderFunc:
+			return &globalValue{fn: v, name: name}, true
+		}
 		return v, true
 	}
 	return nil, false
@@ -371,6 +378,10 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 		if HasCycle(v) {
 			return nil, &RecursionError{In: "template"}
 		}
+		if err := checkStorable(v, false, pos); err != nil {
+			return nil, err
+		}
+		v = dropNestedOmit(v)
 		return ec.finalize(v), nil
 	}
 

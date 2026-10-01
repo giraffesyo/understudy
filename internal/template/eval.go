@@ -37,7 +37,11 @@ func (ec *EvalCtx) eval(e Expr) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return ec.getAttr(x, t.name, t.off)
+		v, err := ec.getAttr(x, t.name, t.off)
+		if m, ok := v.(boundMethod); ok && err == nil {
+			return &methodValue{call: m, name: t.name, recv: ec.access(x), fromVar: ec.isVarRef(t.x)}, nil
+		}
+		return v, err
 
 	case *getItemExpr:
 		x, err := ec.eval(t.x)
@@ -716,6 +720,12 @@ func (ec *EvalCtx) evalCall(t *callExpr) (any, error) {
 	}
 	if err := ec.rejectUndefined(fn, t.off); err != nil {
 		return nil, err
+	}
+	switch f := fn.(type) {
+	case *globalValue:
+		fn = f.fn
+	case *methodValue:
+		fn = f.call
 	}
 	if f, ok := fn.(kwOrderFunc); ok {
 		// Keyword arguments in call order (dict(b=1, a=2) keeps b first).

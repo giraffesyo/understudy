@@ -1,0 +1,102 @@
+---
+# debug's arguments and var expression as ansible-core's action takes
+# them: unsupported parameters, a var expression a template produced
+# (untrusted unless it is a variable's own value), an omitted result,
+# undefined values as placeholders, and values no variable can hold (a
+# method, a class) failing as "unsupported for variable storage" — in
+# var, in a module argument, in a loop's items. A template's result
+# drops the omitted items of its containers.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: {a: 1}
+    l: [1, 2]
+    name_of_d: d
+  tasks:
+    - name: unsupported parameter
+      debug: foo=1
+      ignore_errors: true
+
+    - name: unsupported parameter given as a mapping
+      debug:
+        msg: x
+        bogus: 1
+        also: 2
+      ignore_errors: true
+
+    - name: a variable's value is a trusted expression
+      debug:
+        var: "{{ item }}"
+      loop: [d, name_of_d]
+
+    - name: a computed one is not
+      debug:
+        var: "{{ name_of_d | upper | lower }}"
+      ignore_errors: true
+
+    - name: nor one with text around it
+      debug:
+        var: "{{ name_of_d }}.a"
+      ignore_errors: true
+
+    - name: an omitted result is a placeholder
+      debug:
+        var: nope | default(omit)
+
+    - name: undefined values render in place
+      debug:
+        var: "[nope, d.nope, d.a]"
+
+    - name: omitted items are dropped
+      debug:
+        var: "[1, omit, {'a': omit, 'b': 2}]"
+
+    - debug:
+        msg: "{{ [1, omit, 2] }}"
+
+    - name: a method cannot be stored
+      debug:
+        var: d.items
+      ignore_errors: true
+
+    - debug:
+        var: l.index
+      ignore_errors: true
+
+    - debug:
+        var: d.copy
+      ignore_errors: true
+
+    - name: nor a class
+      debug:
+        var: range
+      ignore_errors: true
+
+    - debug:
+        var: namespace
+      ignore_errors: true
+
+    - name: in a module argument
+      debug:
+        msg: "{{ d.values }}"
+      ignore_errors: true
+
+    - name: inside a container
+      set_fact:
+        x: "{{ [d.get] }}"
+      ignore_errors: true
+
+    - name: text around it shows its repr
+      debug:
+        msg: "x {{ d.items }} {{ dict }}"
+
+    - name: in a loop's items
+      debug:
+        msg: "{{ item }}"
+      loop:
+        - "{{ d.items }}"
+      ignore_errors: true
+
+    - name: called, it is a method as before
+      debug:
+        msg: "{{ d.items() | list }} {{ d.items is callable }} {{ range(2) | list }}"
