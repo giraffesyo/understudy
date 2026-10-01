@@ -48,6 +48,7 @@ func testGoldenOutput(t *testing.T, flags ...string) {
 		"ANSIBLE_LOCALHOST_WARNING=False", "ANSIBLE_INVENTORY_UNPARSED_WARNING=False",
 		"ANSIBLE_DEPRECATION_WARNINGS=False", "ANSIBLE_SYSTEM_WARNINGS=False",
 	}
+	env = append(env, goldenPackagingEnv(ansible)...)
 	// An explicit interpreter skips discovery, whose discovered_interpreter
 	// facts are a Python-only artifact.
 	if py, err := exec.LookPath("python3"); err == nil {

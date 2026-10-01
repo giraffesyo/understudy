@@ -33,6 +33,28 @@ func ansiblePlaybookBin(t *testing.T) string {
 	return p
 }
 
+// goldenPackagingEnv names, as GOLDEN_PACKAGING_PYTHON, a Python with
+// the `packaging` library the pip module needs: the one running
+// ansible-playbook (its script's shebang).
+func goldenPackagingEnv(ansible string) []string {
+	data, err := os.ReadFile(ansible)
+	if err != nil || !strings.HasPrefix(string(data), "#!") {
+		return nil
+	}
+	line, _, _ := strings.Cut(string(data[2:]), "\n")
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return nil
+	}
+	py := fields[0]
+	if filepath.Base(py) == "env" && len(fields) > 1 {
+		if p, err := exec.LookPath(fields[1]); err == nil {
+			py = p
+		}
+	}
+	return []string{"GOLDEN_PACKAGING_PYTHON=" + py}
+}
+
 func understudyBin(t *testing.T) string {
 	bin, _ := filepath.Abs("../../bin/understudy")
 	if _, err := os.Stat(bin); err != nil {
@@ -216,6 +238,7 @@ func TestGoldenDifferential(t *testing.T) {
 			env := []string{"NO_COLOR=1", "ANSIBLE_NOCOLOR=1", "ANSIBLE_HOST_KEY_CHECKING=False",
 				"ANSIBLE_LOCALHOST_WARNING=False", "ANSIBLE_INVENTORY_UNPARSED_WARNING=False",
 				"ANSIBLE_DEPRECATION_WARNINGS=False", "ANSIBLE_SYSTEM_WARNINGS=False"}
+			env = append(env, goldenPackagingEnv(ansible)...)
 
 			// Filename-prefix directives: "check_" runs --check; "tags_"
 			// runs --tags run_me,also to exercise tag filtering.

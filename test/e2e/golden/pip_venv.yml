@@ -1,0 +1,143 @@
+---
+# pip installing for real, offline, into a virtualenv it creates: local
+# wheels (files/pip/pip_fixtures.py) found through PIP_FIND_LINKS, a
+# project built by an in-tree backend (a path, editable, and a git
+# repository). The module runs under a Python that has `packaging`
+# (GOLDEN_PACKAGING_PYTHON, the harness sets it to ansible-playbook's),
+# whose Requirement decides how names appear on pip's command line and
+# whether an installed version satisfies them in check mode.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: "{{ lookup('env', 'GOLDEN_PACKAGING_PYTHON') }}"
+    venv: "{{ workdir }}/venv"
+  environment:
+    PIP_NO_INDEX: "1"
+    PIP_FIND_LINKS: "{{ workdir }}/fx/wheels"
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PIP_NO_CACHE_DIR: "1"
+    PIP_NO_COLOR: "1"
+  tasks:
+    - name: fixtures
+      command: python3 {{ playbook_dir }}/files/pip/pip_fixtures.py {{ workdir }}/fx
+      changed_when: false
+    - name: the vcs fixture is a git repository
+      shell: >-
+        cd {{ workdir }}/fx/repo && git init -q && git add -A &&
+        git -c user.name=g -c user.email=g@example.com commit -q -m fixture
+      args: {creates: "{{ workdir }}/fx/repo/.git"}
+      changed_when: false
+
+    - name: create the virtualenv and install into it
+      pip:
+        name: goldpkg==1.0
+        virtualenv: venv
+        chdir: "{{ workdir }}"
+        virtualenv_command: python3 -m venv
+    - name: already satisfied
+      pip: {name: goldpkg==1.0, virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+
+    - name: check mode against what is installed
+      pip: {name: "{{ item }}", virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+      check_mode: true
+      loop:
+        - goldpkg
+        - GoldPkg>=1.0
+        - goldpkg>1.0
+        - goldpkg==1.0.*
+        - goldpkg~=1.0.0
+        - goldpkg!=1.0
+        - goldpkg==1.0+local
+        - goldpkg[extra]==1.0
+        - goldpkg; python_version > '3'
+        - goldpkg (<2)
+        - gold.pkg===1.0
+        - goldpkg>=1.0,!=1.5,<2
+        - not-installed
+    - name: check mode, absent
+      pip: {name: "{{ item }}", virtualenv: "{{ venv }}", state: absent, chdir: "{{ workdir }}"}
+      check_mode: true
+      loop: [goldpkg, goldpkg==2.0, not-installed]
+    - name: check mode always changes with extra_args
+      pip: {name: goldpkg, extra_args: --no-deps, virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+      check_mode: true
+    - name: check mode always changes with latest
+      pip: {name: goldpkg, state: latest, virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+      check_mode: true
+    - name: check mode always changes with a requirements file
+      pip: {requirements: fx/requirements.txt, virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+      check_mode: true
+
+    - name: version as its own argument
+      pip: {name: goldpkg, version: "1.5", virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+    - name: a version specifier as its own argument
+      pip: {name: goldpkg, version: " <2", virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+    - name: specifiers split over list items rejoin
+      pip: {name: ["goldpkg>=1.0", "<2.0", Gold_Dash], virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+    - name: latest skips the prerelease
+      pip: {name: goldpkg, state: latest, virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+    - name: a prerelease when asked for
+      pip: {name: goldpkg==2.0rc1, virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+      check_mode: true
+    - name: forcereinstall
+      pip: {name: goldpkg, state: forcereinstall, virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+    - name: extras pull in their dependencies
+      pip: {name: "goldextra[more]", virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+    - name: a local version
+      pip: {name: goldlocal, virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+    - name: a local version in check mode
+      pip: {name: "{{ item }}", virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+      check_mode: true
+      loop: [goldlocal==1.0, goldlocal==1.0+local.7, goldlocal==1.0+other, goldlocal>1.0, goldlocal<=1.0]
+    - name: a requirements file (changed when the package list changes)
+      pip: {requirements: fx/requirements.txt, virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+    - name: an editable project
+      pip: {name: "{{ workdir }}/fx/proj", editable: true, extra_args: -q, virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+    - name: a vcs url (changed when the package list changes)
+      pip: {name: "git+file://{{ workdir }}/fx/repo#egg=goldvcs", extra_args: -q, virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+    - name: check mode resolves a path through pip
+      pip: {name: "{{ item }}", virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+      check_mode: true
+      loop:
+        - "{{ workdir }}/fx/proj"
+        - "{{ workdir }}/fx/wheels/goldpkg-1.0-py3-none-any.whl"
+    - name: executable instead of a virtualenv
+      pip: {name: Gold-Dash, executable: "{{ venv }}/bin/pip", chdir: "{{ workdir }}"}
+    - name: break_system_packages is an environment variable
+      pip: {name: golddep, break_system_packages: true, virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+
+    - name: absent
+      pip: {name: [goldpkg, golddep], state: absent, virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+    - name: absent again
+      pip: {name: goldpkg, state: absent, virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+    - name: a package pip cannot find
+      pip: {name: no-such-package-golden, virtualenv: "{{ venv }}", chdir: "{{ workdir }}"}
+      ignore_errors: true
+
+    - name: an empty virtualenv, with site packages and a umask
+      pip: {name: [], virtualenv: "{{ workdir }}/venv2", virtualenv_command: python3 -m venv, virtualenv_site_packages: true, umask: "0077"}
+    - stat: {path: "{{ workdir }}/venv2"}
+      register: venv2
+      no_log: true
+    - debug: {msg: "{{ venv2.stat.mode }}"}
+    - name: nothing to do
+      pip: {name: [], virtualenv: "{{ workdir }}/venv2"}
+    - name: a bad umask
+      pip: {name: goldpkg, virtualenv: "{{ venv }}", umask: "0o8"}
+      ignore_errors: true
+    - name: an octal umask Python accepts
+      pip: {name: goldpkg, state: absent, virtualenv: "{{ venv }}", umask: " 0o0_22 "}
+    - name: a virtualenv_command that is not installed
+      pip: {name: goldpkg, virtualenv: "{{ workdir }}/venv3", virtualenv_command: no-such-virtualenv-golden}
+      ignore_errors: true
+    - name: virtualenv_python with the venv module
+      pip: {name: goldpkg, virtualenv: "{{ workdir }}/venv3", virtualenv_command: python3 -mvenv, virtualenv_python: python3}
+      ignore_errors: true
+    - name: editable with a requirements file
+      pip: {requirements: r.txt, editable: false}
+      ignore_errors: true
+    - name: name given as null
+      pip: {name: null, virtualenv: "{{ venv }}"}
+    - name: neither name nor requirements
+      pip: {virtualenv: "{{ venv }}"}
+      ignore_errors: true
