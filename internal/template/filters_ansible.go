@@ -87,24 +87,27 @@ func registerAnsibleFilters(e *Engine) {
 		if err != nil {
 			return nil, err
 		}
-		out := append([]any{}, items...)
 		reverse := truthy(kwargs["reverse"])
 		caseSensitive := truthy(kwargs["case_sensitive"])
 		attr, byAttr := kwargs["attribute"]
-		var sortErr error
-		sort.SliceStable(out, func(i, j int) bool {
-			a, b := out[i], out[j]
-			if byAttr {
-				var err error
-				if a, err = extractStrict(a, attr); err != nil {
-					sortErr = err
-					return false
-				}
-				if b, err = extractStrict(b, attr); err != nil {
-					sortErr = err
-					return false
+		fromVar := ec.inputItemsFromVar(len(items))
+		order := make([]int, len(items))
+		for i := range order {
+			order[i] = i
+		}
+		// sorted(value, key=...): every item's key first, in order.
+		keys := items
+		if byAttr {
+			keys = make([]any, len(items))
+			for i, item := range items {
+				if keys[i], err = extractStrict(item, attr); err != nil {
+					return nil, err
 				}
 			}
+		}
+		var sortErr error
+		sort.SliceStable(order, func(i, j int) bool {
+			a, b := keys[order[i]], keys[order[j]]
 			if !caseSensitive {
 				if as, ok := asString(a); ok {
 					if bs, ok2 := asString(b); ok2 {
@@ -116,8 +119,8 @@ func registerAnsibleFilters(e *Engine) {
 			if err != nil {
 				if sortErr == nil {
 					// Items of a variable's list are its lazy and tagged values.
-					v := ec.fromVar(-1) && !byAttr
-					sortErr = fmt.Errorf("'<' not supported between instances of '%s' and '%s'", pyClassName(a, v), pyClassName(b, v))
+					aVar, bVar := fromVar[order[i]] && !byAttr, fromVar[order[j]] && !byAttr
+					sortErr = itemsCompareError(err, a, b, aVar, bVar)
 				}
 				return false
 			}
@@ -128,6 +131,10 @@ func registerAnsibleFilters(e *Engine) {
 		})
 		if sortErr != nil {
 			return nil, sortErr
+		}
+		out := make([]any, len(order))
+		for i, k := range order {
+			out[i] = items[k]
 		}
 		return out, nil
 	}
@@ -267,11 +274,10 @@ func registerAnsibleFilters(e *Engine) {
 				return nil, whileHandling("items2dict requires each dictionary in the list to contain the keys '%s' and '%s', got %s instead.",
 					toStr(keyName), toStr(valName), toStr(in))
 			}
-			ks, ok := asString(k)
-			if !ok {
-				ks = toStr(k)
+			if err := dictSet(out, k, v); err != nil {
+				// An unhashable key's TypeError.
+				return nil, whileHandling("items2dict requires a list of dictionaries, got %s instead.", toStr(in))
 			}
-			out.Set(ks, v)
 		}
 		return out, nil
 	}
@@ -440,11 +446,16 @@ func registerAnsibleFilters(e *Engine) {
 		}
 		out := make([]any, 0, len(m))
 		for _, k := range keys {
-			out = append(out, []any{k, m[k]})
+			out = append(out, []any{mapKey(in, k), m[k]})
+		}
+		fromVar := ec.inputItemsFromVar(len(out))
+		order := make([]int, len(out))
+		for i := range order {
+			order[i] = i
 		}
 		var sortErr error
-		sort.SliceStable(out, func(i, j int) bool {
-			a, b := out[i].([]any)[pos], out[j].([]any)[pos]
+		sort.SliceStable(order, func(i, j int) bool {
+			a, b := out[order[i]].([]any)[pos], out[order[j]].([]any)[pos]
 			if !caseSensitive {
 				if as, ok := asString(a); ok {
 					a = strings.ToLower(as)
@@ -453,19 +464,24 @@ func registerAnsibleFilters(e *Engine) {
 					b = strings.ToLower(bs)
 				}
 			}
+			aVar, bVar := fromVar[order[i]], fromVar[order[j]]
 			if reverse {
-				a, b = b, a
+				a, b, aVar, bVar = b, a, bVar, aVar
 			}
 			c, err := compare(a, b)
 			if err != nil && sortErr == nil {
-				sortErr = err
+				sortErr = itemsCompareError(err, a, b, aVar, bVar)
 			}
 			return c < 0
 		})
 		if sortErr != nil {
 			return nil, sortErr
 		}
-		return out, nil
+		sorted := make([]any, len(order))
+		for i, k := range order {
+			sorted[i] = out[k]
+		}
+		return sorted, nil
 	}
 
 	// Math filters (all return floats, matching ansible).
@@ -685,7 +701,7 @@ func registerAnsibleFilters(e *Engine) {
 		}
 		// json.dumps default sort_keys=False: preserve dict insertion order.
 		indent, sortKeys := jsonOpts(kwargs, 0, false)
-		return pyJSON(in, indent, sortKeys), nil
+		return filterJSON(in, indent, sortKeys)
 	}
 	f["to_nice_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		if err := jsonKwargs(kwargs); err != nil {
@@ -693,7 +709,7 @@ func registerAnsibleFilters(e *Engine) {
 		}
 		// Ansible's to_nice_json passes sort_keys=True.
 		indent, sortKeys := jsonOpts(kwargs, 4, true)
-		return pyJSON(in, indent, sortKeys), nil
+		return filterJSON(in, indent, sortKeys)
 	}
 	f["from_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
@@ -1082,10 +1098,12 @@ func seqReduce(op string) FilterFunc {
 			return v
 		}
 		best := 0
+		fromVar := ec.inputItemsFromVar(len(items))
+		_, byAttr := kwargs["attribute"]
 		for i := 1; i < len(items); i++ {
 			c, err := compareOp(key(keys[i]), key(keys[best]), op)
 			if err != nil {
-				return nil, err
+				return nil, itemsCompareError(err, keys[i], keys[best], fromVar[i] && !byAttr, fromVar[best] && !byAttr)
 			}
 			if (op == "<" && c < 0) || (op == ">" && c > 0) {
 				best = i
@@ -1449,8 +1467,13 @@ func asOMap(v any) (*yaml.OMap, bool) {
 		return nil, false
 	}
 	out := yaml.NewOMap()
+	src, _ := Undeprecate(v).(*yaml.OMap)
 	for _, k := range keys {
-		out.Set(k, m[k])
+		if src != nil {
+			out.SetFrom(src, k, m[k])
+		} else {
+			out.Set(k, m[k])
+		}
 	}
 	return out, true
 }
@@ -1463,6 +1486,14 @@ func asOMap(v any) (*yaml.OMap, bool) {
 func mergeOMap(dst, src *yaml.OMap, recursive bool, listMerge string) {
 	for _, k := range src.Keys() {
 		v := src.Get(k)
+		if typed, ok := src.TypedKey(k); ok {
+			// Keys equal in Python are one key: dst's.
+			if have, ok := dictKeyOf(dst, typed); ok {
+				k = have
+			} else {
+				dst.SetTyped(k, typed, nil)
+			}
+		}
 		existing, has := dst.GetItem(k)
 		if recursive {
 			if dstChild, ok := asOMap(existing); ok {
@@ -1715,11 +1746,87 @@ func PyStr(v any) string { return toStr(v) }
 // PyRepr is Python repr() of a value.
 func PyRepr(v any) string { return pyRepr(v) }
 
+// filterJSON is to_json's and to_nice_json's json.dumps: the tagless
+// profile converts a dict's keys that are not str (ints, floats, bools,
+// None) to their JSON text, and refuses any other key and the values it
+// has no JSON for (a timezone, a timedelta).
+func filterJSON(v any, indent int, sortKeys bool) (any, error) {
+	if err := jsonKeys(v, map[cycleID]bool{}); err != nil {
+		return nil, err
+	}
+	e := pyJSONEncoder{indent: indent, sortKeys: sortKeys, ensureASCII: true, typedKeys: true}
+	e.write(v, 0)
+	return e.b.String(), nil
+}
+
+// jsonKeys is the error the tagless profile raises for v, or a key or
+// value it holds, that JSON has no text for, in json.dumps' order.
+func jsonKeys(v any, active map[cycleID]bool) error {
+	switch Undeprecate(v).(type) {
+	case *pyTZ, pyTimedelta:
+		return fmt.Errorf("Object of type %s is not JSON serializable by the 'tagless' profile.", pyStrRepr(pyTypeName(Undeprecate(v))))
+	}
+	id, ok := containerOf(Undeprecate(v))
+	if !ok || active[id] {
+		return nil
+	}
+	active[id] = true
+	defer delete(active, id)
+	switch t := Undeprecate(v).(type) {
+	case []any:
+		for _, item := range t {
+			if err := jsonKeys(item, active); err != nil {
+				return err
+			}
+		}
+	case map[string]any:
+		for _, k := range sortedKeys(t) {
+			if err := jsonKeys(t[k], active); err != nil {
+				return err
+			}
+		}
+	case *yaml.OMap:
+		for _, k := range t.Keys() {
+			if typed, ok := t.TypedKey(k); ok {
+				switch typed.(type) {
+				case nil, bool, int64, int, *big.Int, float64:
+				default:
+					// A variable's date or time carries its tags.
+					return fmt.Errorf("Key of type %s is not JSON serializable by the 'tagless' profile.", pyStrRepr(pyClassName(typed, true)))
+				}
+			}
+			if err := jsonKeys(t.Get(k), active); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// jsonKeyText is the JSON text of a dict key that is not a str.
+func jsonKeyText(k any) string {
+	switch t := k.(type) {
+	case nil:
+		return "null"
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
+	case float64:
+		return pyJSONFloat(t)
+	}
+	return toStr(k)
+}
+
 type pyJSONEncoder struct {
 	b           strings.Builder
 	indent      int
 	sortKeys    bool
 	ensureASCII bool
+	// typedKeys: a dict's keys that are not str are written as JSON's
+	// text for them (to_json), not as results show them.
+	typedKeys bool
 	// pretty is json.dumps given an indent, even 0 (newlines, no
 	// spaces); indentStr is a str indent.
 	pretty    bool
@@ -1786,6 +1893,23 @@ func (e *pyJSONEncoder) write(v any, depth int) {
 		e.object(sortedKeys(t), func(k string) any { return t[k] }, len(t), depth)
 	case Mapping:
 		keys := t.Keys()
+		if om, ok := t.(*yaml.OMap); ok && e.typedKeys {
+			// Keyed by their JSON text, sorted by it.
+			text := make(map[string]string, len(keys))
+			byText := make([]string, len(keys))
+			for i, k := range keys {
+				byText[i] = k
+				if typed, ok := om.TypedKey(k); ok {
+					byText[i] = jsonKeyText(typed)
+				}
+				text[byText[i]] = k
+			}
+			if e.sortKeys {
+				sort.Strings(byText)
+			}
+			e.object(byText, func(k string) any { return om.Get(text[k]) }, len(keys), depth)
+			return
+		}
 		if e.sortKeys {
 			keys = append([]string(nil), keys...)
 			sort.Strings(keys)

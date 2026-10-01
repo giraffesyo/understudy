@@ -46,6 +46,16 @@ func (m *OMap) SetTyped(key string, typed, val any) {
 	m.typed[key] = typed
 }
 
+// SetFrom is Set for key as src holds it: a key that is not a string in
+// src stays one.
+func (m *OMap) SetFrom(src *OMap, key string, val any) {
+	if typed, ok := src.TypedKey(key); ok {
+		m.SetTyped(key, typed, val)
+		return
+	}
+	m.Set(key, val)
+}
+
 // TypedKey is the key that key (a key's text) stands for, when it is not
 // a string.
 func (m *OMap) TypedKey(key string) (any, bool) {

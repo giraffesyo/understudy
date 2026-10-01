@@ -63,6 +63,18 @@ func lookupMethod(x any, name string) (boundMethod, bool) {
 			keys := t.Keys()
 			mm := mappingToMap(t)
 			return func(ec *EvalCtx, args []any, kwargs map[string]any) (any, error) {
+				if om, isOMap := t.(*yaml.OMap); isOMap && name == "get" && len(args) > 0 {
+					if _, isStr := asString(args[0]); !isStr {
+						// A key that is not a str.
+						var out any
+						if have, ok := dictKeyOf(om, Undeprecate(args[0])); ok {
+							out = om.Get(have)
+						} else if len(args) > 1 {
+							out = args[1]
+						}
+						return ec.dictMethodReads(name, mm, out, nil)
+					}
+				}
 				out, err := m(keys, mm, args)
 				if err == nil && (name == "keys" || name == "items") {
 					out = typedKeys(t, out, name == "items")

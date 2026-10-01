@@ -1,0 +1,34 @@
+---
+# to_json and to_nice_json (ansible-core's tagless profile) refuse a
+# timezone or timedelta value; dates and times are their isoformat().
+- hosts: localhost
+  gather_facts: false
+  ignore_errors: true
+  vars:
+    dt: 2020-01-02 03:04:05+02:00
+    d: 2020-01-02
+  tasks:
+    - debug:
+        msg: "{{ dt.tzinfo | to_json }}"
+    - debug:
+        msg: "{{ dt.tzinfo | to_nice_json }}"
+    - debug:
+        msg: "{{ [dt.tzinfo] | to_json }}"
+    - debug:
+        msg: "{{ {'a': dt.tzinfo} | to_json }}"
+    - debug:
+        msg: "{{ dt.tzinfo | type_debug }}"
+    - debug:
+        msg: "{{ dt.tzinfo | string }}"
+    - debug:
+        msg: "{{ dt.tzinfo | tojson }}"
+    - debug:
+        msg: "{{ (dt - dt) | to_json }}"
+    - debug:
+        msg: "{{ dt | to_json }}"
+    - debug:
+        msg: "{{ dt.time() | to_json }}"
+    - debug:
+        msg: "{{ dt.tzinfo | to_yaml }}"
+    - debug:
+        msg: "{{ dt.utcoffset() | to_json }}"

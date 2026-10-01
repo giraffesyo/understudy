@@ -695,7 +695,17 @@ func equal(a, b any) bool {
 		if !bIsMap || len(ma) != len(mb) {
 			return false
 		}
+		oa, _ := a.(*yaml.OMap)
+		ob, _ := b.(*yaml.OMap)
 		for k, va := range ma {
+			if oa != nil && ob != nil {
+				if typed, ok := oa.TypedKey(k); ok {
+					// Keys equal in Python (1 and 1.0) are one key.
+					if have, ok := dictKeyOf(ob, typed); ok {
+						k = have
+					}
+				}
+			}
 			vb, ok := mb[k]
 			if !ok || !equal(va, vb) {
 				return false
@@ -769,9 +779,19 @@ func contains(needle, haystack any) (bool, error) {
 		return found, nil
 	case Mapping:
 		s, ok := asString(needle)
+		om, isOMap := h.(*yaml.OMap)
 		if !ok {
+			if isOMap {
+				_, found := dictKeyOf(om, Undeprecate(needle))
+				return found, nil
+			}
 			_, typed := typedKeyText(h, needle)
 			return typed, nil
+		}
+		if isOMap {
+			if _, typed := om.TypedKey(s); typed {
+				return false, nil // a key of that text that is not a str
+			}
 		}
 		_, found := h.GetItem(s)
 		return found, nil
@@ -922,6 +942,60 @@ func keyText(k any) string {
 		return t.Isoformat()
 	}
 	return toStr(k)
+}
+
+// dictSet is d[k] = v as a Python dict sets it: a key equal to one d
+// has (1, 1.0 and True are one key) keeps that key; a str is held as
+// itself, any other hashable key under its text (keyText) and remembered
+// as itself; an unhashable key fails as Python's TypeError. A str key and
+// another key of the same text are one key here.
+func dictSet(d *yaml.OMap, k, v any) error {
+	k = Undeprecate(k)
+	if s, ok := asString(k); ok {
+		d.Set(s, v)
+		return nil
+	}
+	switch k.(type) {
+	case []any, map[string]any, Mapping:
+		name := pyStrRepr(pyClassName(k, false))
+		return &pyTypeError{fmt.Sprintf("cannot use %s as a dict key (unhashable type: %s)", name, name)}
+	}
+	if have, ok := dictKeyOf(d, k); ok {
+		d.Set(have, v)
+		return nil
+	}
+	d.SetTyped(keyText(k), k, v)
+	return nil
+}
+
+// dictKeyOf is the text d holds a key equal to k (not a string) under,
+// when d has one.
+func dictKeyOf(d *yaml.OMap, k any) (string, bool) {
+	text := keyText(k)
+	if _, ok := d.GetItem(text); ok {
+		return text, true
+	}
+	if isNumber(k) {
+		for _, have := range d.Keys() {
+			if t, ok := d.TypedKey(have); ok && isNumber(t) && equal(t, k) {
+				return have, true
+			}
+		}
+	}
+	return "", false
+}
+
+// dictSetFrom is dictSet for key k of src.
+func dictSetFrom(d, src *yaml.OMap, k string, v any) {
+	if typed, ok := src.TypedKey(k); ok {
+		if have, ok := dictKeyOf(d, typed); ok {
+			d.Set(have, v)
+		} else {
+			d.SetTyped(k, typed, v)
+		}
+		return
+	}
+	d.Set(k, v)
 }
 
 // typedKeyText is the text m holds the key k (not a string) under, when

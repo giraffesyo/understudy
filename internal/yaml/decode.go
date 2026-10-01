@@ -335,6 +335,15 @@ func (n *Node) decodeMapping(st *decodeState, unsafe bool) (any, error) {
 		if !ok {
 			name = keyString(k)
 			names[id] = name
+			switch k.(type) {
+			case string, UnsafeString:
+			default:
+				// A key that is not a str stays itself, held under
+				// its text.
+				out.SetTyped(name, k, v)
+				items[name] = pairs[i+1]
+				continue
+			}
 		}
 		out.Set(name, v)
 		items[name] = pairs[i+1]
@@ -342,17 +351,25 @@ func (n *Node) decodeMapping(st *decodeState, unsafe bool) (any, error) {
 	return out, nil
 }
 
-// keyString is a decoded mapping key as the string OMap stores: Python's
-// str() of the key.
+// keyString is the text OMap holds a decoded mapping key under: a str
+// as itself, any other key as results show it (JSON's bools, the
+// isoformat of a date or time, else Python's repr).
 func keyString(k any) string {
 	switch t := k.(type) {
 	case string:
 		return t
 	case UnsafeString:
 		return string(t)
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
 	case Datetime:
 		return t.Isoformat("T")
 	case Date:
+		return t.Isoformat()
+	case Time:
 		return t.Isoformat()
 	}
 	return pyValueRepr(k)

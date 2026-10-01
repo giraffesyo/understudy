@@ -64,7 +64,11 @@ func registerGlobals(e *Engine) {
 		}
 		out := yaml.NewOMap()
 		if len(args) == 1 {
-			if m, ok := args[0].(Mapping); ok {
+			if om, ok := args[0].(*yaml.OMap); ok {
+				for _, k := range om.Keys() {
+					out.SetFrom(om, k, om.Get(k))
+				}
+			} else if m, ok := args[0].(Mapping); ok {
 				for _, k := range m.Keys() {
 					v, _ := m.GetItem(k)
 					out.Set(k, v)
@@ -87,7 +91,9 @@ func registerGlobals(e *Engine) {
 						}
 						return nil, fmt.Errorf("dictionary update sequence element #%d has length %d; 2 is required", i, n)
 					}
-					out.Set(toStr(pair[0]), pair[1])
+					if err := dictSet(out, pair[0], pair[1]); err != nil {
+						return nil, err
+					}
 				}
 			}
 		}

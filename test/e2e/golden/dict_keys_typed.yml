@@ -1,0 +1,155 @@
+---
+# Dict keys that are not strings (ints, floats, bools, None, dates) stay
+# themselves in dict literals, YAML mappings, dict(), items2dict, combine
+# and variable storage, keys equal in Python (1, 1.0, True) being one
+# key; results show them as ansible-core's callback does, to_json writes
+# JSON's text for them and refuses a date key, to_yaml represents them.
+- hosts: localhost
+  gather_facts: false
+  ignore_errors: true
+  vars:
+    dt: 2020-01-02
+    dtt: 2020-01-02 03:04:05
+    yd: {1: a, 2020-01-01: b, true: c, null: d, 1.5: e}
+    yb: {true: a, false: b, 2: c, 2.0: d}
+  tasks:
+    - debug:
+        msg: "{{ {1: 'a'} }}"
+    - debug:
+        msg: "{{ {1: 'a', '1': 'b'} }}"
+    - debug:
+        msg: "{{ {1: 'a', 1.0: 'b', true: 'c'} }}"
+    - debug:
+        msg: "{{ {none: 1, 2.5: 2} }}"
+    - debug:
+        msg: "{{ {1: 'a'}[1] }}"
+    - debug:
+        msg: "{{ {1: 'a'} | type_debug }}"
+    - debug:
+        msg: "{{ {1: 'a'}.keys() | list }}"
+    - debug:
+        msg: "{{ {1: 'a'} | dict2items }}"
+    - debug:
+        msg: "{{ [{'key': 1, 'value': 'a'}] | items2dict }}"
+    - debug:
+        msg: "{{ {1: 'a'} | combine({'1': 'b'}) }}"
+    - debug:
+        msg: "{{ {1: 'a'} | combine({1: 'b'}) }}"
+    - debug:
+        msg: "{{ {1: {2: 'a'}} | combine({1: {3: 'b'}}, recursive=true) }}"
+    - debug:
+        msg: "{{ {1: 'a'} | to_json }}"
+    - debug:
+        msg: "{{ {1: 'a', 2.5: 'b', true: 'c', none: 'd'} | to_json }}"
+    - debug:
+        msg: "{{ {1: 'a'} | to_nice_json }}"
+    - debug:
+        msg: "{{ {1: 'a'} | to_yaml }}"
+    - debug:
+        msg: "{{ {1: 'a', 2.5: 'b', true: 'c', none: 'd'} | to_yaml }}"
+    - debug:
+        msg: "{{ {1: 'a'} | to_nice_yaml }}"
+    - debug:
+        msg: "{{ {(1, 2): 'a'} }}"
+    - debug:
+        msg: "{{ {dt: 'a'} }}"
+    - debug:
+        msg: "{{ {dt: 'a'} | to_json }}"
+    - debug:
+        msg: "{{ {dt: 'a'} | to_yaml }}"
+    - debug:
+        msg: "{{ ({dt: 'a'}.keys() | first) | type_debug }}"
+    - debug:
+        msg: "{{ {[1]: 'a'} }}"
+    - debug:
+        msg: "{{ {{}: 'a'} }}"
+    - debug: var=yd
+    - debug:
+        msg: "{{ yd | to_json }}"
+    - debug:
+        msg: "{{ yd.keys() | map('type_debug') | list }}"
+    - debug:
+        msg: "{{ yd | dict2items }}"
+    - set_fact:
+        sfd: "{{ {1: 'a', dt: 'b'} }}"
+    - debug: var=sfd
+    - debug:
+        msg: "{{ sfd.keys() | map('type_debug') | list }}"
+    - debug:
+        msg: "{{ {1: 'a'} | dictsort }}"
+    - debug:
+        msg: "{{ {1: 'a', 'b': 2} | dictsort }}"
+    - debug:
+        msg: "{{ dict([[1, 'a']]) }}"
+    - debug:
+        msg: "{{ {1: 'a'} == {1.0: 'a'} }}"
+    - debug:
+        msg: "{{ 1 in {1: 'a'} }}"
+    - debug:
+        msg: "{{ '1' in {1: 'a'} }}"
+    - debug:
+        msg: "{{ {1: 'a'} | string }}"
+    - debug:
+        msg: "{{ [{'key': [1], 'value': 'a'}] | items2dict }}"
+    - debug:
+        msg: "{{ {1: 'a'}.get(1) }}"
+    - debug:
+        msg: "{{ {1: 'a'}.items() | list }}"
+    - debug:
+        msg: "{{ {1: 'a'} | to_json(sort_keys=true) }}"
+    - debug:
+        msg: "{{ {1: 'a', 'b': 2} | to_json(sort_keys=true) }}"
+    - debug:
+        msg: "{{ {true: 'x', false: 'y'} }}"
+    - debug:
+        msg: "{{ {true: 'x'} | to_json }}"
+    - debug:
+        msg: "{{ {dtt: 'x'} }}"
+    - debug:
+        msg: "{{ {dtt: 'x'} | to_yaml }}"
+    - debug:
+        msg: "{{ {1.0: 'x'} }}"
+    - debug:
+        msg: "{{ {1.0: 'x'} | to_json }}"
+    - debug:
+        msg: "{{ {1: 'a', '1': 'b'} | to_json }}"
+    - debug:
+        msg: "{{ {1: 'a', 1.0: 'b', true: 'c'} | string }}"
+    - debug:
+        msg: "{{ {true: 'c', 1: 'a'} | string }}"
+    - debug: var=yb
+    - debug:
+        msg: "{{ yb | string }}"
+    - debug:
+        msg: "{{ {1: 'a'} | combine({true: 'b'}) | string }}"
+    - debug:
+        msg: "{{ {'a': 1} | combine({1: 'b'}) | string }}"
+    - debug:
+        msg: "{{ [{'key': true, 'value': 'a'}, {'key': none, 'value': 2}] | items2dict | string }}"
+    - debug:
+        msg: "{{ dict([[1, 'a'], [true, 'b']]) | string }}"
+    - debug:
+        msg: "{{ dict(a=1) | combine({2: 3}) | dict2items }}"
+    - debug:
+        msg: "{{ {none: 1} | to_yaml }}"
+    - debug:
+        msg: "{{ {1: 'a'} | to_nice_json(sort_keys=true) }}"
+    - debug:
+        msg: "{{ {1: 'a', 'b': 2} | to_nice_yaml }}"
+    - debug:
+        msg: "{{ {1: 'a', 'b': 2} | to_yaml(sort_keys=true) }}"
+    - debug:
+        msg: "{{ {1: 'a'} ~ '' }}"
+    - debug:
+        msg: "{{ {1: 'a'} | dictsort }}"
+    - debug:
+        msg: "{{ {1: 'a'} | to_json(sort_keys=true) }}"
+    - debug:
+        msg: "{{ {1: 'a', 'b': 2} | to_nice_json }}"
+    - debug:
+        msg: "{{ {dtt: 'x'}.keys() | first }}"
+    - set_fact:
+        sfb: "{{ {true: 'x', 2: 'y', none: 'z'} }}"
+    - debug: var=sfb
+    - debug:
+        msg: "{{ sfb | string }}"
