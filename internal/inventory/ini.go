@@ -54,7 +54,7 @@ func parseINI(inv *Inventory, data []byte) error {
 			continue
 		}
 		if m := iniSection.FindStringSubmatch(line); m != nil {
-			groupName, state = m[1], m[2]
+			groupName, state = inv.groupNameFor(m[1], false), m[2]
 			if state == "" {
 				state = "hosts"
 			}

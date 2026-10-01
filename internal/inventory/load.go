@@ -56,6 +56,10 @@ type Options struct {
 	// Verbose receives the messages ansible-core's Display shows at a
 	// verbosity (-v is 1): the plugins tried on each source, and why.
 	Verbose func(level int, msg string)
+	// TransformGroupChars is TRANSFORM_INVALID_GROUP_CHARS ("never", the
+	// default, "always", "ignore" or "silently"): how the plugins name
+	// groups with invalid characters.
+	TransformGroupChars string
 	// ExtraVars are the run's extra vars (-e), which the constructed and
 	// generator plugins can template with (use_extra_vars).
 	ExtraVars map[string]any
@@ -86,6 +90,7 @@ func Load(sources []string, varsDirs []string) (*Inventory, error) {
 // VarsDirs in order — later wins.
 func LoadWith(sources []string, o Options) (*Inventory, error) {
 	inv := New()
+	inv.TransformGroupChars = o.TransformGroupChars
 	inv.warn = func(msg string) {
 		if o.Warn != nil {
 			o.Warn(msg + "\n")

@@ -408,8 +408,10 @@ than silently diverging. Known boundaries:
   and hosts take their `group_vars/` and `host_vars/` files, which stay
   over the variables `add_host` gives. `TRANSFORM_INVALID_GROUP_CHARS`
   applies to the groups the two create (a parent named with invalid
-  characters then fails as in ansible-core); groups in the inventory
-  sources keep their names, as with the default (`never`). Host patterns
+  characters then fails as in ansible-core) and to those every inventory
+  plugin adds, with its warnings: a child an INI `:children` section or
+  a TOML `children` list names as written then is not found, as in
+  ansible-core. Host patterns
   are cached until the inventory changes, so a host left half-made by a
   failed `add_host` is not matched until the next change, as in
   ansible-core.

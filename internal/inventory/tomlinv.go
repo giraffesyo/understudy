@@ -107,8 +107,16 @@ func parseTOMLGroup(inv *Inventory, name string, body any) error {
 				if err := parseTOMLGroup(inv, child, yaml.NewOMap()); err != nil {
 					return err
 				}
-				if err := inv.addChild(group, inv.Groups[child]); err != nil {
-					return err
+				// The child is named as written, which add_group may
+				// have changed (TRANSFORM_INVALID_GROUP_CHARS).
+				if g, ok := inv.Groups[child]; ok {
+					if err := inv.addChild(group, g); err != nil {
+						return err
+					}
+				} else if h, ok := inv.Hosts[child]; ok {
+					addHostToGroup(group, h)
+				} else {
+					return fmt.Errorf("%s is not a known host nor group", child)
 				}
 			}
 		case "hosts":
