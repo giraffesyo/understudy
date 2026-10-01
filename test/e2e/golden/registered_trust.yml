@@ -1,0 +1,92 @@
+---
+# A registered result's values carry their own trust and origin: an
+# action run on the controller passes back its arguments' values (debug's
+# msg and var, set_fact's facts, assert's and fail's messages, set_stats'
+# data, a loop's items), which stay trusted where they were written; a
+# module's output and the text an action writes itself are untrusted, so
+# a conditional or debug's var= made of them fails the trust check, and
+# a broken conditional names where a passed-back value was written.
+- hosts: localhost
+  gather_facts: false
+  ignore_errors: true
+  vars:
+    lit: "1 == 1"
+    nested: {a: "1 == 1", b: ["1 == 1"]}
+  tasks:
+    - command: echo "1 == 1"
+      register: cmd
+      changed_when: false
+    - debug: msg="1 == 1"
+      register: dbg
+    - debug: msg="{{ lit }}"
+      register: dbg2
+    - debug: msg="{{ '1 == ' ~ 1 }}"
+      register: dbg3
+    - debug: msg="{{ cmd.stdout }}"
+      register: dbg4
+    - set_fact:
+        sf: "1 == 1"
+        sf2: "{{ cmd.stdout }}"
+      register: sfr
+    - command: echo dbg
+      register: vname
+      changed_when: false
+    - assert: {that: [true]}
+      register: asr
+    - assert: {that: [true], success_msg: "1 == 1"}
+      register: asr2
+    - fail: msg="1 == 1"
+      register: fl
+    - debug: var=lit
+      register: dv
+    - debug: var=cmd.stdout
+      register: dv2
+    - debug: msg="1 == 1"
+      loop: [1]
+      register: lp
+    - debug:
+        msg: "{{ nested }}"
+      register: dn
+    - debug:
+        msg: {x: "1 == 1", y: "{{ cmd.stdout }}"}
+      register: dm
+    - set_stats:
+        data: {s: "1 == 1"}
+      register: ss
+    - {debug: {msg: trusted}, when: "{{ dbg.msg }}"}
+    - {debug: {msg: untrusted}, when: "{{ cmd.stdout }}"}
+    - {debug: {msg: trusted}, when: "{{ dbg2.msg }}"}
+    - {debug: {msg: untrusted}, when: "{{ dbg3.msg }}"}
+    - {debug: {msg: untrusted}, when: "{{ dbg4.msg }}"}
+    - {debug: {msg: trusted}, when: "{{ sfr.ansible_facts.sf }}"}
+    - {debug: {msg: untrusted}, when: "{{ sfr.ansible_facts.sf2 }}"}
+    - {debug: {msg: untrusted}, when: "{{ sf2 }}"}
+    - {debug: {msg: untrusted}, when: "{{ asr.msg }}"}
+    - {debug: {msg: trusted}, when: "{{ asr2.msg }}"}
+    - {debug: {msg: trusted}, when: "{{ fl.msg }}"}
+    - {debug: {msg: trusted}, when: "{{ dv.lit }}"}
+    - {debug: {msg: untrusted}, when: "{{ dv2['cmd.stdout'] }}"}
+    - {debug: {msg: trusted}, when: "{{ lp.results[0].msg }}"}
+    - {debug: {msg: trusted}, when: "{{ dn.msg.a }}"}
+    - {debug: {msg: trusted}, when: "{{ dn.msg.b[0] }}"}
+    - {debug: {msg: trusted}, when: "{{ dm.msg.x }}"}
+    - {debug: {msg: untrusted}, when: "{{ dm.msg.y }}"}
+    - {debug: {msg: trusted}, when: "{{ ss.ansible_stats.data.s }}"}
+    - {debug: {msg: untrusted}, when: "{{ cmd.stdout_lines[0] }}"}
+    - {debug: {msg: untrusted}, when: "{{ cmd.cmd[0] }}"}
+    - {debug: {msg: broken}, when: "{{ lp.results[0].item }}"}
+    - {debug: {msg: broken}, when: dn.msg.a}
+    - {debug: {msg: broken}, when: asr2.msg}
+    - {debug: {msg: broken}, when: "lp.results[0].msg"}
+    - {debug: {msg: broken}, when: dbg.msg}
+    - {debug: {msg: broken}, when: cmd.stdout}
+    - debug:
+        var: "{{ vname.stdout }}"
+    - debug:
+        var: "{{ dbg.msg }}"
+    - assert:
+        that: "{{ cmd.stdout }}"
+    - assert:
+        that: "{{ dbg.msg }}"
+    - debug: var=dbg4.msg
+    - debug: var=dm

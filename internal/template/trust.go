@@ -61,7 +61,13 @@ func (ec *EvalCtx) trustOf(ref OriginRef, depth int) (bool, Position) {
 		return false, ref.Pos
 	}
 	if inner, ok := ec.originOfExpr(single.expr, depth+1); ok {
-		return ec.trustOf(inner, depth+1)
+		trusted, at := ec.trustOf(inner, depth+1)
+		if !trusted && at.File == "" {
+			// Untrusted text of no origin (a module's result) is where
+			// this template passed it along.
+			at = ref.Pos
+		}
+		return trusted, at
 	}
 	if varsLookup(single.expr) {
 		// The vars lookup gives the variable's value as it is.

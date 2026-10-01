@@ -719,9 +719,14 @@ than silently diverging. Known boundaries:
   gathered fact is untrusted. A conditional whose template yields
   untrusted text, `assert`'s `that` and `debug`'s `var` fail as
   ansible-core's trust check does, where that text came from. A
-  registered result is taken as trusted (ansible-core trusts the
-  playbook text an action such as `debug` passes back, not a module's
-  output).
+  registered result's values keep their own trust and origin: the
+  arguments' values an action run on the controller passes back
+  (`debug`'s `msg` and `var`, `set_fact`'s facts, `assert`'s and
+  `fail`'s messages, `set_stats`' data, a loop's items) stay trusted
+  where they were written, while a module's output and the text an
+  action writes itself are untrusted. Not modeled: the registered value
+  `changed_when`, `failed_when` and `until` see while the task runs is
+  taken as trusted.
 - **Broken conditionals**: a conditional whose result is not a boolean
   fails as ansible-core's broken conditional (or, with
   `ALLOW_BROKEN_CONDITIONALS`, warns), naming where the result's value

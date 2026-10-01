@@ -422,6 +422,11 @@ func (ec *EvalCtx) childRef(ref OriginRef, key string, depth int) (OriginRef, bo
 	if !found {
 		return inherited()
 	}
+	if leaf, isRef := child.(OriginRef); isRef {
+		// A registered result's origins: the value's own (an action's
+		// argument passed back), or none and untrusted (a module's).
+		return leaf, true
+	}
 	out := OriginRef{Raw: child, HasRaw: true, Inherit: ref.Inherit}
 	if file, line, col, ok := yaml.ValueOrigin(Undeprecate(child)); ok {
 		out.Pos = Position{File: file, Line: line, Col: col}
