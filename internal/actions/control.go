@@ -15,6 +15,11 @@ func init() {
 	Register("set_fact", actionFunc(runSetFact))
 	Register("fail", actionFunc(runFail))
 	Register("assert", actionFunc(runAssert))
+	// set_stats runs in the executor, which knows where its data names
+	// were written; registered here so tasks naming it resolve.
+	Register("set_stats", actionFunc(func(context.Context, *Context, map[string]any, string) *agentproto.Result {
+		return agentproto.Fail("set_stats runs in the executor")
+	}))
 }
 
 type actionFunc func(ctx context.Context, actx *Context, args map[string]any, freeForm string) *agentproto.Result

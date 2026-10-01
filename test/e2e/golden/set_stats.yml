@@ -1,0 +1,61 @@
+# set_stats: its result (ansible_stats at -v), its data checks (a
+# non-mapping data, invalid variable names where written or templated,
+# unknown options) and run_once/loop forms. The CUSTOM STATS recap section
+# is off by default (golden/cli/set_stats_* show it).
+- hosts: all
+  gather_facts: false
+  tasks:
+    - set_stats:
+        data:
+          a: 1
+          l: [x]
+          d: {k: v}
+          s: str
+    - set_stats:
+        data:
+          a: 2
+          s: "{{ inventory_hostname }}"
+          invocation: 1
+        per_host: "{{ 'yes' }}"
+        aggregate: "no"
+    - set_stats:
+    - name: templated data
+      set_stats:
+        data: "{{ {'t': 1} }}"
+    - set_stats:
+        data: "notadict"
+      ignore_errors: true
+    - set_stats:
+        data:
+          "bad name": 1
+      ignore_errors: true
+    - set_stats:
+        data: "{{ {'bad name': 1} }}"
+      ignore_errors: true
+    - set_stats:
+        data:
+          "{{ 'x y' }}": 1
+      ignore_errors: true
+    - set_stats:
+        data:
+          1: 1
+      ignore_errors: true
+    - set_stats:
+        data:
+          a: 1
+        bogus: 1
+      ignore_errors: true
+    - set_stats:
+        data:
+          "{{ 'tmpl' }}": "{{ item }}"
+      loop: [1, 2]
+    - set_stats:
+        data:
+          once: 1
+        per_host: true
+      run_once: true
+    - set_stats:
+        data:
+          a: 1
+      register: st
+    - debug: var=st

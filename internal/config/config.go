@@ -33,6 +33,7 @@ type Config struct {
 	CallbacksEnabled    []string
 	DisplayOkHosts      bool
 	DisplaySkippedHosts bool
+	ShowCustomStats     bool // show_custom_stats / ANSIBLE_SHOW_CUSTOM_STATS
 
 	DeprecationWarnings bool // deprecation_warnings / ANSIBLE_DEPRECATION_WARNINGS
 	// DuplicateDictKey is what loading YAML with a repeated mapping key
@@ -178,6 +179,8 @@ func applyINI(cfg *Config, content string) {
 				cfg.DisplayOkHosts = iniBool(val, cfg.DisplayOkHosts)
 			case "display_skipped_hosts":
 				cfg.DisplaySkippedHosts = iniBool(val, cfg.DisplaySkippedHosts)
+			case "show_custom_stats":
+				cfg.ShowCustomStats = iniBool(val, cfg.ShowCustomStats)
 			case "roles_path":
 				cfg.RolesPath = splitPathspec(val)
 			case "duplicate_dict_key":
@@ -320,6 +323,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ANSIBLE_DISPLAY_SKIPPED_HOSTS"); v != "" {
 		cfg.DisplaySkippedHosts = iniBool(v, cfg.DisplaySkippedHosts)
+	}
+	if v := os.Getenv("ANSIBLE_SHOW_CUSTOM_STATS"); v != "" {
+		cfg.ShowCustomStats = iniBool(v, cfg.ShowCustomStats)
 	}
 	if v := os.Getenv("ANSIBLE_DEPRECATION_WARNINGS"); v != "" {
 		cfg.DeprecationWarnings = iniBool(v, cfg.DeprecationWarnings)
