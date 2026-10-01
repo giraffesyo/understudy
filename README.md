@@ -411,9 +411,17 @@ than silently diverging. Known boundaries:
   sources keep their names, as with the default (`never`). Host patterns
   are cached until the inventory changes, so a host left half-made by a
   failed `add_host` is not matched until the next change, as in
-  ansible-core. Not modeled: the connection variables ansible-core adds
-  to a task's variables under their other names (`ansible_port` for an
-  `ansible_ssh_port` that a `host:port` name sets).
+  ansible-core.
+- **Connection variables**: a task's connection settings join its
+  variables under the names it does not set, as ansible-core's
+  PlayContext and connection plugin add them: every name of each setting
+  (`ansible_port` and `ansible_ssh_port`, `ansible_host` and
+  `ansible_ssh_host`, ...) for `when` and the task's arguments, the
+  plugin's own names for `debug`'s `var`, `changed_when`, `failed_when`
+  and `until`; a delegated task takes the delegated host's. Neither
+  `vars` nor `hostvars` lists them, and a delegated result's label names
+  the host's address (`h1 -> d1(192.0.2.1)`) where its connection plugin
+  resolves one other than its name.
 - **Command line and configuration**: `ansible-playbook` and `ansible`
   parse their options as ansible-core's argparse does (abbreviations,
   combined short options, mutually exclusive options), with the same

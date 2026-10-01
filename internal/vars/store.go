@@ -324,6 +324,12 @@ type Context struct {
 	// markers: a template in a variable's value that uses an undefined
 	// value yields it (a marker) rather than failing (debug's var=).
 	markers bool
+	// conn are the connection variables a task execution adds under the
+	// names the task's variables do not define (PlayContext.update_vars,
+	// ConnectionBase.update_vars): visible by name, but not among the
+	// variables "vars" and hostvars list.
+	conn   map[string]any
+	noConn bool
 }
 
 // NewContext builds a variable context for one host and task.
@@ -369,6 +375,36 @@ func (c *Context) WithOverlay(vars map[string]any) *Context {
 	return &child
 }
 
+// WithConnectionVars returns a child context where the connection
+// variables vars stand in for the names nothing else defines.
+func (c *Context) WithConnectionVars(vars map[string]any) *Context {
+	if len(vars) == 0 {
+		return c
+	}
+	child := *c
+	child.conn = vars
+	return &child
+}
+
+// Has reports whether name is defined in the context, without templating
+// its value (connection variables aside).
+func (c *Context) Has(name string) bool {
+	if name == "vars" {
+		return true
+	}
+	if _, ok := c.magic[name]; ok {
+		return true
+	}
+	if _, ok := c.store.extraVar(name); ok {
+		return true
+	}
+	if _, ok := c.overlay[name]; ok {
+		return true
+	}
+	_, ok := c.flat[name]
+	return ok
+}
+
 // SetMagic installs a magic variable (groups, play_hosts, ansible_facts...).
 func (c *Context) SetMagic(name string, v any) { c.magic[name] = v }
 
@@ -412,7 +448,9 @@ func (m *varsMapping) GetItem(key string) (any, bool) {
 	if key == "vars" {
 		return nil, false
 	}
-	return m.ctx.getSafe(key)
+	c := *m.ctx
+	c.noConn = true
+	return c.getSafe(key)
 }
 
 func (m *varsMapping) Keys() []string {
@@ -492,6 +530,9 @@ func (c *Context) GetTagged(name string) (any, bool) {
 		raw, ok = c.flat[name]
 	}
 	if !ok {
+		if v, isConn := c.conn[name]; isConn && !c.noConn {
+			return v, true
+		}
 		return nil, false
 	}
 	if c.resolving[name] {

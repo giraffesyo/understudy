@@ -1,0 +1,12 @@
+[targets]
+h1 ansible_connection=local ansible_ssh_port=2222 ansible_ssh_user=bob
+h2 ansible_connection=local ansible_port=23 ansible_user=al
+h3 ansible_connection=local ansible_ssh_host=192.0.2.3 ansible_timeout=30
+
+[others]
+s1 ansible_connection=ssh ansible_host=192.0.2.11
+s2 ansible_connection=ssh ansible_ssh_host=192.0.2.12 ansible_host=192.0.2.120
+s3 ansible_connection=ssh
+s4 ansible_connection=ssh ansible_host=s4
+l1 ansible_connection=local ansible_host=192.0.2.14
+n1 ansible_host=192.0.2.15

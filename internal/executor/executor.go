@@ -1362,24 +1362,6 @@ func (r *Runner) newHostContext(host string, pos template.Position, playHosts []
 	c.SetMagic("playbook_dir", r.Opts.BaseDir)
 	c.SetMagic("ansible_check_mode", r.Opts.CheckMode)
 	r.setRunMagic(c, host, playHosts)
-	// ansible_connection reflects the connection in effect when the host
-	// does not set it: play keyword, then -c, then the default.
-	if _, ok := r.Store.RawHostVar(host, "ansible_connection"); !ok {
-		conn := ""
-		if r.curPlay != nil {
-			conn = r.curPlay.Connection
-		}
-		if conn == "" && r.Conns != nil {
-			conn = r.Conns.Opts.Connection
-		}
-		if conn == "" || conn == "smart" {
-			conn = "ssh"
-			if (host == "localhost" || host == "127.0.0.1") && r.Inv != nil && r.Inv.Host(host) == nil {
-				conn = "local"
-			}
-		}
-		c.SetMagic("ansible_connection", conn)
-	}
 	// hostvars: a lazy mapping from any inventory host to that host's
 	// resolved variable view. Building another host's context is deferred
 	// until hostvars['other'] is actually accessed.
@@ -1728,6 +1710,20 @@ func (r *Runner) resolveLoop(task *playbook.Task, vctx *vars.Context) ([]any, bo
 
 // runOnce executes one occurrence (one loop item or the whole task).
 func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, vctx *vars.Context, item any) *agentproto.Result {
+	// The connection's settings join the task's variables under the names
+	// they do not define: all their names for the conditional and the
+	// arguments, the connection plugin's own for what runs after.
+	connTarget := host
+	if task.Delegate != "" {
+		if v, err := vctx.TemplateString(task.Delegate); err == nil {
+			connTarget = fmt.Sprintf("%v", v)
+		}
+	}
+	cc := r.connectionVars(play, task, host, connTarget, vctx, nil)
+	taskCtx := vctx
+	vctx = taskCtx.WithConnectionVars(cc.magic)
+	runCtx := taskCtx.WithConnectionVars(cc.common)
+
 	// when: gate.
 	if skip, err := whenSkip(vctx, task.When, task.WhenPos); err != nil {
 		return err.result()
@@ -1790,6 +1786,9 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 	if target != host {
 		delegated = target
 	}
+	if actx != nil {
+		actx.Vars = runCtx
+	}
 	if err != nil {
 		if ue, ok := err.(*unreachableError); ok {
 			return &agentproto.Result{Failed: true, Msg: ue.Error(), DelegatedTo: delegated,
@@ -1830,7 +1829,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			setExtra(res, "attempts", attempt)
 		}
 		if !res.Skipped {
-			if fail := applyChangedFailedWhen(task, vctx, res); fail != nil {
+			if fail := applyChangedFailedWhen(task, runCtx, res); fail != nil {
 				return fail
 			}
 		}
@@ -1840,7 +1839,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		done := !res.Failed
 		if task.Until != "" {
 			pos := conditionalPos(task, "until", task.Until)
-			ok, err := vctx.WithOverlay(registerOverlay(task, res)).At(pos).EvalWhen([]string{task.Until})
+			ok, err := runCtx.WithOverlay(registerOverlay(task, res)).At(pos).EvalWhen([]string{task.Until})
 			if err != nil {
 				return (&conditionalError{keyword: "until", pos: pos, err: err}).result()
 			}
@@ -1897,6 +1896,9 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		}
 	}
 	res.DelegatedTo = delegated
+	if target == connTarget {
+		res.DelegatedAddr = cc.address
+	}
 	res.ShowDiff = r.effectiveDiff(play, task)
 	if len(task.Notify) > 0 && !res.Failed && !res.Skipped {
 		res.Notify = [][]string{templateNotify(task, vctx)}

@@ -109,6 +109,7 @@ type Result struct {
 	Origin        string `json:"-"` // "action" (control-side) or "module"
 	VerboseAlways bool   `json:"-"` // shown with its JSON even at -v0 (debug, assert)
 	DelegatedTo   string `json:"-"` // delegate_to target, when not the host itself
+	DelegatedAddr string `json:"-"` // its address, when its connection names one other than its name
 	ShowDiff      bool   `json:"-"` // diff mode is on for the task: display Diff
 	Censored      bool   `json:"-"` // no_log: display only the censored placeholder
 	// WarningHelp is the help text Display appends to a warning of the
