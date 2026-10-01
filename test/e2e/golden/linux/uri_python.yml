@@ -28,3 +28,22 @@
       register: r
       ignore_errors: true
     - debug: {msg: "{{ r.results | map(attribute='msg') | list }}"}
+
+    # (Alpine is left out: musl applies the resolv.conf search list
+    # differently from the Go resolver understudy uses.)
+    - name: a host that does not resolve (the C library words the error)
+      environment: &noproxy {no_proxy: "*", NO_PROXY: "*"}
+      when: &resolving distro != "alpine"
+      uri: {url: "http://no-such-host.invalid/"}
+      register: r
+      ignore_errors: true
+    - debug: {var: r.msg}
+      when: *resolving
+    - name: get_url from a host that does not resolve
+      environment: *noproxy
+      when: *resolving
+      get_url: {url: "http://no-such-host.invalid/x", dest: /tmp/x}
+      register: r
+      ignore_errors: true
+    - debug: {var: r.msg}
+      when: *resolving

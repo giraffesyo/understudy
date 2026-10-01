@@ -3,6 +3,7 @@ package modules
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -28,7 +29,7 @@ func urlErrorMsg(err error) string {
 	}
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		return "Request failed: <urlopen error [Errno -2] Name or service not known>"
+		return "Request failed: <urlopen error " + pyGaiError(dnsErr) + ">"
 	}
 	var opErr *net.OpError
 	var errno syscall.Errno
@@ -37,6 +38,10 @@ func urlErrorMsg(err error) string {
 	}
 	if ne, ok := err.(net.Error); ok && ne.Timeout() {
 		return "Connection failure: timed out"
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		// http.client's RemoteDisconnected, a ConnectionError.
+		return "Connection failure: Remote end closed connection without response"
 	}
 	return "Request failed: <urlopen error " + err.Error() + ">"
 }
