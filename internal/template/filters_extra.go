@@ -374,6 +374,11 @@ func registerExtraFilters(e *Engine) {
 		if err != nil {
 			return nil, pyRaiseFrom("Unable to encrypt.", err.Error())
 		}
+		if v, ok := filterArg(args, 3, kwargs, "wrap_object"); ok && truthy(v) {
+			// ansible-core tags the secret (not the data) with the
+			// ciphertext, and returns it.
+			return secretV, nil
+		}
 		return out, nil
 	}
 

@@ -255,10 +255,11 @@ fire-and-forget).
 
 **Templating** — a Jinja2-compatible engine with `if`/`for`/`set`, macros and
 `call`, `include`/`import`/`extends`, block `set`/`filter`/`with`, recursive
-loops and `namespace()`, in-place list/dict methods (`append`, `update`, ...), ~70
-filters (`default`, `combine`, `selectattr`, `regex_replace`, `to_json`,
-`map`, `ternary`, `hash`, …), ~50 tests (`version`, `match`, task-result
-tests, …), chainable strict `Undefined`, and the native-types rule for
+loops and `namespace()`, in-place list/dict methods (`append`, `update`, ...), all
+122 builtin filters (`default`, `combine`, `selectattr`, `regex_replace`,
+`to_json`, `map`, `urlize`, `to_datetime`, `password_hash`, …) and 88 tests
+(`version`, `match`, task-result tests, `url`, …), chainable strict
+`Undefined`, and the native-types rule for
 `when:`/`loop:`. Templates compile through a port of Jinja2's lexer and
 parser, so a broken template fails with Jinja's own `TemplateSyntaxError`
 (`expected token 'end of print statement', got 'integer'`, `Encountered
@@ -573,20 +574,30 @@ than silently diverging. Known boundaries:
   `symmetric_difference` come out in CPython's set order for numbers
   (string hashes are randomized per Python process; understudy keeps
   their first-seen order), and seeded `random`/`shuffle` pick what
-  Python's Mersenne Twister picks. `password_hash` does not implement
-  `blowfish` (bcrypt). Not implemented (they fail as unknown, `No filter
-  named ...`): the filters `attr`, `combinations`, `permutations`,
-  `product`, `commonpath`, `e`/`escape`, `forceescape`, `safe`,
-  `striptags`, `expandvars`, `fileglob`, `filesizeformat`, `items`,
-  `normpath`, `relpath`, `pprint`, `rekey_on_member`, `subelements`,
-  `to_datetime`, `to_uuid`, `tojson`, `urldecode`, `urlencode`, `urlize`,
-  `vault`/`unvault`, `win_*`, `wordcount`, `xmlattr`, `zip_longest`, and
-  the tests `abs`/`is_abs`, `is_dir`, `is_file`, `is_link`, `is_mount`/
-  `mount`, `is_same_file`/`same_file`, `link_exists`, `isnan`/`nan`,
-  `issubset`/`issuperset`, `lower`, `upper`, `change`, `escaped`,
-  `filter`, `test`, `finished`, `started`, `successful`, `reachable`,
-  `unreachable`, `timedout`, `uri`/`url`/`urn`, `vault_encrypted`,
-  `vaulted_file`.
+  Python's Mersenne Twister picks. Every ansible.builtin filter and
+  test (Jinja2's and ansible-core's) is implemented. `password_hash`'s
+  `blowfish` (bcrypt) hashes as the controller's ansible-core does:
+  through passlib (no libxcrypt: the salt's unused bits repaired,
+  passlib's validation and errors) or libxcrypt's `crypt_gensalt` (the
+  salt's first 16 bytes encoded). `escape`, `safe`, `forceescape` and
+  `tojson` return markup, which stays markup through the case filters and
+  `+` (escaping the other operand) and becomes a str, with ansible-core's
+  warning, in a template's result; `to_datetime` returns a datetime
+  (attributes, `strftime`/`isoformat`/`timestamp`/`weekday`, subtraction
+  to a timedelta, comparison; stored as itself, shown as its
+  `isoformat()`), and a timedelta in a template's result fails as
+  unsupported for variable storage. String literals in `{{ }}` keep their
+  backslashes, as ansible-core's `escape_backslashes` has them. Not
+  modeled: markup through `format`, slicing and `%`; `rekey_on_member` on
+  a member that is not a string keys by its str() (dict keys are
+  strings); `fileglob` lists a directory in its own order, as Python's
+  `os.scandir` does; a plugin error about a value (`rekey_on_member`'s
+  missing key) shows the value with an unknown origin where ansible-core
+  knows a variable's; comparing or subtracting a variable's datetime
+  names `datetime.datetime` where ansible-core names
+  `_AnsibleTaggedDateTime`; `attr` of a method and a bare method in a
+  template's result render (an address) rather than failing as
+  unsupported for variable storage.
 - **Broken conditionals**: a conditional whose result is not a boolean
   fails as ansible-core's broken conditional (or, with
   `ALLOW_BROKEN_CONDITIONALS`, warns), naming where the result's value
