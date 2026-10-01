@@ -220,10 +220,9 @@ func tripMarkers(v any, pos Position) error {
 // markerSafeFilters pass the items of their input along without using
 // them, so an undefined item is not an error there.
 var markerSafeFilters = map[string]bool{
-	"length": true, "count": true, "first": true, "last": true, "list": true, "reverse": true,
-	"select": true, "reject": true, "selectattr": true, "rejectattr": true, "map": true,
+	"length": true, "count": true, "first": true, "last": true, "map": true,
 	"default": true, "d": true, "ternary": true, "mandatory": true, "type_debug": true,
-	"batch": true, "slice": true, "random": true, "shuffle": true,
+	"random": true, "shuffle": true,
 }
 
 // markerSafeTests do not use the items of their input.
@@ -232,4 +231,83 @@ var markerSafeTests = map[string]bool{
 	"mapping": true, "string": true, "number": true, "integer": true, "float": true,
 	"boolean": true, "callable": true, "sameas": true, "truthy": true, "falsy": true,
 	"true": true, "false": true,
+}
+
+// comparedMarker is the undefined item Python's a == b compares with a
+// value, which raises there: containers of one type and size compare
+// their items in order, each first by identity (a container is equal to
+// itself without comparing its items), until two differ.
+func comparedMarker(a, b any) (Undefined, bool) {
+	a, b = Undeprecate(a), Undeprecate(b)
+	if u, ok := a.(Undefined); ok {
+		return u, true
+	}
+	if u, ok := b.(Undefined); ok {
+		return u, true
+	}
+	if ia, ok := containerOf(a); ok {
+		if ib, ok := containerOf(b); ok && ia == ib {
+			return Undefined{}, false
+		}
+	}
+	if la, ok := a.([]any); ok {
+		lb, ok := b.([]any)
+		if !ok || len(la) != len(lb) {
+			return Undefined{}, false
+		}
+		return firstComparedMarker(la, lb)
+	}
+	keys, ma, ok := orderedMap(a)
+	if !ok {
+		return Undefined{}, false
+	}
+	_, mb, ok := orderedMap(b)
+	if !ok || len(ma) != len(mb) {
+		return Undefined{}, false
+	}
+	for _, k := range keys {
+		vb, ok := mb[k]
+		if !ok {
+			return Undefined{}, false
+		}
+		if u, ok := comparedMarker(ma[k], vb); ok {
+			return u, true
+		}
+		if !equal(ma[k], vb) {
+			return Undefined{}, false
+		}
+	}
+	return Undefined{}, false
+}
+
+// firstComparedMarker is comparedMarker for the items two lists compare
+// up to the first that differ (as ==, < and the like do).
+func firstComparedMarker(la, lb []any) (Undefined, bool) {
+	for i := 0; i < len(la) && i < len(lb); i++ {
+		if u, ok := comparedMarker(la[i], lb[i]); ok {
+			return u, true
+		}
+		if !equal(la[i], lb[i]) {
+			break
+		}
+	}
+	return Undefined{}, false
+}
+
+// containsMarker is the undefined item `needle in haystack` compares
+// before it finds needle in a list.
+func containsMarker(needle, haystack any) (Undefined, bool) {
+	l, ok := Undeprecate(haystack).([]any)
+	if !ok {
+		return Undefined{}, false
+	}
+	for _, item := range l {
+		if u, ok := comparedMarker(item, needle); ok {
+			return u, true
+		}
+		if equal(item, needle) {
+			break
+		}
+	}
+	return Undefined{}, false
 }

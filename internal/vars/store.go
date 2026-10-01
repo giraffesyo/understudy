@@ -385,6 +385,11 @@ type Context struct {
 	sourced bool
 	// inContainer: the value being templated is an item of a container.
 	inContainer bool
+	// lazyItems: an item of a container that fails to render is kept as
+	// a marker that raises where it is used, as ansible-core's lazy
+	// containers template an item only when it is read (a variable's
+	// value).
+	lazyItems bool
 	// markers: a template in a variable's value that uses an undefined
 	// value yields it (a marker) rather than failing (debug's var=).
 	markers bool
@@ -667,6 +672,7 @@ func (c *Context) GetTagged(name string) (any, bool) {
 	// an undefined variable).
 	sourced := *c
 	sourced.sourced = true
+	sourced.lazyItems = true
 	v, err := sourced.deepTemplate(raw)
 	if err != nil {
 		if ve, ok := template.AsVaultError(err); ok && ve.Pos.File == "" {
@@ -769,6 +775,52 @@ func idOf(v any) (containerID, bool) {
 	return containerID{}, false
 }
 
+// deepTemplateItem is deepTemplateIn for an item of a container: where
+// items are lazy, one whose template fails (an undefined value, a
+// plugin's or Jinja's error) becomes the marker ansible-core's lazy
+// container holds for it, raising only where the item is used.
+func (c *Context) deepTemplateItem(v any, seen map[containerID]any) (out any, err error) {
+	if !c.lazyItems {
+		return c.deepTemplateIn(v, seen)
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			e, ok := r.(error)
+			if !ok {
+				panic(r)
+			}
+			if out, ok = itemMarker(e); !ok {
+				panic(r)
+			}
+			err = nil
+		}
+	}()
+	out, err = c.deepTemplateIn(v, seen)
+	if err != nil {
+		if m, ok := itemMarker(err); ok {
+			return m, nil
+		}
+	}
+	return out, err
+}
+
+// itemMarker is the marker a lazy container's item that failed with err
+// holds: an undefined value's, or a captured template error's. Other
+// errors (a recursive or undecryptable variable) are raised.
+func itemMarker(err error) (any, bool) {
+	var ue *template.UndefinedError
+	if errors.As(err, &ue) {
+		return template.Undefined{Name: ue.Name, Err: ue}, true
+	}
+	var te *template.TemplateError
+	if errors.As(err, &te) {
+		if _, vault := template.AsVaultError(err); !vault {
+			return template.Undefined{Name: "captured error", Err: err}, true
+		}
+	}
+	return nil, false
+}
+
 func (c *Context) deepTemplateIn(v any, seen map[containerID]any) (any, error) {
 	id, isContainer := idOf(v)
 	if isContainer {
@@ -813,7 +865,7 @@ func (c *Context) deepTemplateIn(v any, seen map[containerID]any) (any, error) {
 			defer delete(seen, id)
 		}
 		for i, item := range t {
-			r, err := c.items().deepTemplateIn(item, seen)
+			r, err := c.items().deepTemplateItem(item, seen)
 			if err != nil {
 				return nil, err
 			}
@@ -825,7 +877,7 @@ func (c *Context) deepTemplateIn(v any, seen map[containerID]any) (any, error) {
 		seen[id] = out
 		defer delete(seen, id)
 		for k, val := range t {
-			r, err := c.items().deepTemplateIn(val, seen)
+			r, err := c.items().deepTemplateItem(val, seen)
 			if err != nil {
 				return nil, err
 			}
@@ -839,7 +891,7 @@ func (c *Context) deepTemplateIn(v any, seen map[containerID]any) (any, error) {
 		seen[id] = out
 		defer delete(seen, id)
 		for _, k := range t.Keys() {
-			r, err := c.items().deepTemplateIn(t.Get(k), seen)
+			r, err := c.items().deepTemplateItem(t.Get(k), seen)
 			if err != nil {
 				return nil, err
 			}

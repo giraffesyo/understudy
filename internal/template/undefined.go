@@ -30,6 +30,20 @@ func (u Undefined) useError(pos Position) error {
 	return &UndefinedError{Pos: pos, Name: u.Name}
 }
 
+// capturedUse is the error a captured error's marker raises in the
+// defined and undefined tests, which tell only undefined values apart
+// (ansible-core's wrapped_test_defined); nil for any other value.
+func capturedUse(v any, pos Position) error {
+	u, ok := v.(Undefined)
+	if !ok || u.Err == nil {
+		return nil
+	}
+	if _, undef := u.Err.(*UndefinedError); undef {
+		return nil
+	}
+	return u.useError(pos)
+}
+
 // captureSetError is how {% set %} treats its value's error: a call or
 // subscript that raised is bound as a marker that raises when used (so
 // `{% set _ = x.pop() %}` never used cannot fail the template); other

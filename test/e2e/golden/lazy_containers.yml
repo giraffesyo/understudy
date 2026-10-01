@@ -1,0 +1,86 @@
+---
+# A variable's container templates an item only when it is read, as
+# ansible-core's lazy containers do: an item that fails (undefined, a
+# filter's or Jinja's error) is a marker raising only where it is used —
+# compared with a value, read by a plugin, rendered — so length, keys,
+# its other items and comparisons that never reach it still work.
+- hosts: localhost
+  gather_facts: false
+  ignore_errors: true
+  vars:
+    d: {a: "{{ nope }}", b: 2}
+    l: ["{{ nope }}", 2]
+    j: {a: "{{ 'x' | from_json }}", b: 2}
+    z: {a: "{{ 1 / 0 }}", b: 2}
+    y: {a: "{{ 1 + }}", b: 2}
+    s: "{{ nope }}"
+  tasks:
+    - debug: msg=x
+      failed_when: d == 1
+    - debug: msg="{{ d == {'b':2} }}"
+    - debug: msg="{{ d == {'a':1,'b':2} }}"
+    - debug: msg="{{ d == d }}"
+    - debug: msg="{{ d != 1 }}"
+    - debug: msg="{{ d | length }}"
+    - debug: msg="{{ 'a' in d }}"
+    - debug: msg="{{ d.b }}"
+    - debug: msg="{{ d.a is defined }}"
+    - debug: msg="{{ d['a'] is undefined }}"
+    - debug: msg="{{ d.get('a', 'x') is defined }}"
+    - debug: msg="{{ d.a | default('dflt') }}"
+    - debug: msg="{{ d.keys() | list }}"
+    - debug: msg="{{ d.values() | list | length }}"
+    - debug: msg="{{ d.items() | list | length }}"
+    - debug: msg="{{ d | list }}"
+    - debug: msg="{{ d | dict2items | length }}"
+    - debug: msg="{{ d | dictsort | length }}"
+    - debug: msg="{{ d | combine({'c':1}) | length }}"
+    - debug: msg="{{ d | string }}"
+    - debug: msg="{{ d | bool }}"
+    - debug: msg="{{ 'yes' if d else 'no' }}"
+    - debug: msg="{{ d is mapping }}"
+    - debug: msg="{{ [d] | length }}"
+    - debug: msg="{{ l | length }}"
+    - debug: msg="{{ l | count }}"
+    - debug: msg="{{ l == l }}"
+    - debug: msg="{{ l == [1] }}"
+    - debug: msg="{{ l != [1, 2] }}"
+    - debug: msg="{{ l < [3] }}"
+    - debug: msg="{{ l > [] }}"
+    - debug: msg="{{ 2 in l }}"
+    - debug: msg="{{ 2 in [2] + l }}"
+    - debug: msg="{{ l[1] }}"
+    - debug: msg="{{ l[0] is defined }}"
+    - debug: msg="{{ l | first is defined }}"
+    - debug: msg="{{ l | last }}"
+    - debug: msg="{{ l | list | length }}"
+    - debug: msg="{{ l | reverse | list | length }}"
+    - debug: msg="{{ l | select | list | length }}"
+    - debug: msg="{{ l | rejectattr('x') | list | length }}"
+    - debug: msg="{{ l | batch(1) | list | length }}"
+    - debug: msg="{{ l | slice(1) | list | length }}"
+    - debug: msg="{{ l | map('default', 5) | list }}"
+    - debug: msg="{{ l | type_debug }}"
+    - debug: msg="{{ l | shuffle | length }}"
+    - debug: msg="{{ l | to_json }}"
+    - debug: msg="{{ l + [3] }}"
+    - debug: msg="{{ (l + [3]) | length }}"
+    - debug: msg="{{ l is sameas l }}"
+    - debug: msg="{{ l is iterable }}"
+    - debug: msg="{{ [nope, 2] | list | length }}"
+    - debug: msg="{{ [nope, 2] | first is defined }}"
+    - debug: msg="{{ [nope, 2] | rejectattr('x') | list | length }}"
+    - debug: msg="{{ j | length }}"
+    - debug: msg="{{ j == 1 }}"
+    - debug: msg="{{ j.a is defined }}"
+    - debug: msg="{{ z.b }}"
+    - debug: msg="{{ z == 1 }}"
+    - debug: msg="{{ y == 1 }}"
+    - debug: msg="{{ y }}"
+    - debug: msg="{{ s is defined }}"
+    - debug: msg="{{ s }}"
+    - set_fact:
+        cp: "{{ d }}"
+    - set_fact:
+        n: "{{ l | length }}"
+    - debug: var=n
