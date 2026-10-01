@@ -388,11 +388,14 @@ idempotence re-runs.
 understudy aims to run real playbooks faithfully, and fails loudly rather
 than silently diverging. Known boundaries:
 
-- **Targets**: the agent supports `linux/amd64` and `linux/arm64`. Other
-  platforms fall back to the `raw` module.
+- **Targets**: the agent is built for `linux/amd64` and `linux/arm64`,
+  the platforms its modules are written and tested for (each embedded
+  agent adds to the binary's size); on other platforms only `raw` runs,
+  as it needs no agent. The local connection runs modules in-process on
+  Linux and macOS controllers.
 - **Python plugins**: there is no Python anywhere, so plugins that exist
-  only as Python code (custom modules, filters, lookups, callbacks) cannot
-  be loaded. The common ones are implemented natively — including the
+  only as Python code (custom modules, filters, lookups, callbacks, cache
+  plugins) cannot be loaded: running them needs a Python interpreter. The common ones are implemented natively — including the
   `timer` and `profile_tasks` callbacks and the `minimal` stdout callback —
   and anything else is reported (`Skipping callback plugin ..., unable to
   load`, `couldn't resolve module/action ...`), never silently skipped.
@@ -415,9 +418,11 @@ than silently diverging. Known boundaries:
   is skipped as ansible-core skips one it cannot parse. TOML dates and
   times load as their `isoformat()` strings (as YAML timestamps load as
   strings). ansible-core orders a group's hosts two or more levels of
-  child groups down by Python set iteration (object addresses); understudy
-  takes them level by level in the order the groups were added, so such
-  hosts can list in another order in `groups`. `constructed`'s
+  child groups down by iterating a Python set of groups, which hash by
+  their object addresses in the ansible-core process (so the order can
+  change with memory layout, not with the inventory); understudy takes
+  them level by level in the order the groups were added, so such hosts
+  can list in another order in `groups`. `constructed`'s
   `use_vars_plugins` reads `group_vars/` and `host_vars/` next to the
   sources parsed before it, its options are read from the plugin's
   config, the environment and `ansible.cfg` (`[inventory_plugins]
@@ -466,8 +471,9 @@ than silently diverging. Known boundaries:
   Python's `configparser` reads it and its typed settings are checked as
   ansible-core's constants load; a bad file or value ends the command
   with `ERROR: <message>` and exit code 5, but without the Python
-  traceback ansible-core prints after the message. `--version` names
-  understudy in place of ansible-core's Python details.
+  traceback ansible-core prints after the message (its frames name
+  ansible-core's source files and lines, which have no counterpart here).
+  `--version` names understudy in place of ansible-core's Python details.
 - **Exit codes**: as ansible-playbook, the result of the last play run
   (failed and unreachable hosts carry over between plays until
   `clear_host_errors`); several playbooks each end with a recap, and one
@@ -486,8 +492,11 @@ than silently diverging. Known boundaries:
   A redo after `update_task` on a task with `register` ends the run as
   ansible-core 2.21's crashing worker does (`A worker was found in a dead
   state`, exit 1), without the Python traceback it prints.
-- **`dig` lookup**: covers A, AAAA, CNAME, MX, NS, TXT, PTR and SRV (not
-  yet byte-compared: Ansible's needs dnspython).
+- **`dig` lookup**: community.general's `dig` is built on dnspython's
+  resolver and record presentation; understudy's covers A, AAAA, CNAME,
+  MX, NS, TXT, PTR and SRV on Go's resolver and is not yet byte-compared
+  with it (its options, dict results and other record types are not
+  ported).
 - **Output that depends on the target's Python**: understudy never runs
   Python, but some of ansible's output comes from the Python that runs its
   modules. understudy identifies that interpreter as ansible would (the
@@ -548,17 +557,19 @@ than silently diverging. Known boundaries:
     24.1 or later, as the module does. A virtual environment's Python
     sees only its own site-packages unless it includes the system's.
     The module's crashes on a non-PEP 440 installed version (packaging
-    22-25) and on a pip it cannot ask its version are reproduced. Not
-    modeled: packaging 22.x's short-lived quirks, and the SyntaxError a
-    marker string Python cannot unescape raises before 26.3 (treated as
-    an invalid requirement).
+    22-25) and on a pip it cannot ask its version are reproduced. A
+    marker string Python cannot unescape crashes the module before
+    packaging 26.3 with a Python `SyntaxError` traceback, whose text is
+    CPython's compiler's; understudy reports an invalid requirement
+    there, as 26.3 does.
   - Errors that quote `sys.version` (`apt` and `dnf5` without their
     bindings): CPython assembles it from strings compiled into the
     interpreter or its libpython (`PY_VERSION`, the build date and time,
     the compiler banner, with its newline on older builds), which
     understudy reads off the ELF or Mach-O binary. Where they cannot be
-    found unambiguously (a stripped or non-CPython build) only the
-    `major.minor` version is shown.
+    found unambiguously (a stripped or non-CPython build, whose version
+    string only running it would tell) only the `major.minor` version is
+    shown.
   - `setup`'s `ansible_python` facts describe the interpreter running
     the module, named by its `sys.executable`, its type
     (`sys.implementation.name`: `cpython`, or `pypy`) read from its
@@ -581,9 +592,11 @@ than silently diverging. Known boundaries:
     `sys.version`), as ansible's modules do.
 - **`dnf` results**: the transaction runs through the dnf CLI, and
   `results` lists it as the modules do (`Installed: <nevra>`,
-  `Removed: <nevra>`). dnf4's module iterates a set, so for multi-package
-  transactions understudy lists the requested packages first and their
-  dependencies after, by name.
+  `Removed: <nevra>`). dnf4's module iterates a Python set of package
+  strings, whose order follows string hashes that Python randomizes per
+  process, so ansible-core's own order changes from run to run; for
+  multi-package transactions understudy lists the requested packages
+  first and their dependencies after, by name.
 - **Verbose output**: `-vv` prints what ansible-core does: the `PLAYBOOK:`
   banner and play count, task paths, handler notifications, `META:` lines,
   skipped stdout callbacks, static imports, plugin redirects
@@ -596,9 +609,14 @@ than silently diverging. Known boundaries:
   connection announces itself (`<host> ESTABLISH LOCAL CONNECTION FOR USER:
   ...`); the lines that trace ansible-core's Python machinery are not
   reproduced: the `EXEC`/`PUT` commands that stage and run AnsiballZ
-  payloads, `Using module file`, the variable manager's repeated ``Read
-  `vars_file` `` lines, and SSH connection tracing (understudy's agent
-  protocol runs no per-command `ssh`).
+  payloads (understudy builds no AnsiballZ payloads; their temporary
+  names are random), `Using module file` (a path in ansible-core's
+  Python installation), the variable manager's ``Read `vars_file` ``
+  lines (printed on each of its internal variable computations, from
+  whichever of ansible-core's processes makes one, so their number and
+  place among the results follow its worker scheduling), and SSH
+  connection tracing (understudy's agent protocol runs no per-command
+  `ssh`).
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
   strings; regular expressions use
   Go's RE2 (lookaround and backreferences in *patterns* are rejected with a
@@ -660,7 +678,8 @@ than silently diverging. Known boundaries:
   ansible-core's `get_vars` gives without a play (inventory, facts,
   `include_vars`, `set_fact` and registered values, extra vars and the
   run's magic variables, no play or role variables), listed in the order
-  it combines them; `ansible_playbook_python` names the first `python3`
+  it combines them; `ansible_playbook_python` (ansible-playbook's own
+  interpreter, which understudy has none of) names the first `python3`
   on `PATH`.
 - **`debug var=`**: undefined values render in place as ansible-core's
   placeholders. A method or class (`d.items`, `range`) fails as
