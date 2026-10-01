@@ -1,0 +1,67 @@
+---
+# printf-style % and str.format, and markup through them, the format
+# filter, slicing, indexing, repetition and str methods: its arguments
+# escaped, its results markup (a variable keeps its markup until a
+# template's result stores it).
+- hosts: localhost
+  gather_facts: false
+  ignore_errors: true
+  vars:
+    fmt: "%s-%s"
+    d: {k: v}
+    l: [5, 6]
+    m: "{{ '<b>' | escape }}"
+    ml: ["{{ '<i>' | escape }}"]
+  tasks:
+    - debug: msg="{{ '%s' % 'x' }}"
+    - debug: msg="{{ '%s %s' % ('a', 'b') }}"
+    - debug: msg="{{ '%05.1f|%x' % (3.14159, 255) }}"
+    - debug: msg="{{ fmt % (1, 2) }}"
+    - debug: msg="{{ '%(a)s' % {'a':1} }}"
+    - debug: msg="{{ '%s' % [1, 2] }}"
+    - debug: msg="{{ '%s %s' % [1, 2] }}"
+    - debug: msg="{{ '%d' % 'x' }}"
+    - debug: msg="{{ 'x' % 1 }}"
+    - debug: msg="{{ 7 % 3 }}"
+    - debug: msg="{{ '{}-{}'.format(1, 2) }}"
+    - debug: msg="{{ '{0:>5}|{x}'.format('a', x=3) }}"
+    - debug: msg="{{ '{:08.3f}|{:,}|{:x}|{:#o}|{:+d}|{:^7}|{:*<6}|{:.2%}'.format(3.14159, 1234567, 255, 8, 5, 'mid', 'ab', 0.256) }}"
+    - debug: msg="{{ '{0[k]} {1[1]} {0!r}'.format(d, l) }}"
+    - debug: msg="{{ '{} {}'.format(1) }}"
+    - debug: msg="{{ '{x}'.format(y=1) }}"
+    - debug: msg="{{ '{:d}'.format('s') }}"
+    - debug: msg="{{ '{} {{}}'.format(1.5) }}"
+    - debug: msg="{{ '{:e}|{:g}|{:10.3}'.format(12345.678, 0.0001, 3.14159) }}"
+    - debug: msg="{{ '{:,.2f}|{:_d}|{:=+8}'.format(1234567.891, 1000000, 42) }}"
+    - debug: msg="{{ '{}'.format(True) }}"
+    - debug: msg="{{ '{:>6}'.format(none) }}"
+    - debug: msg="{{ '{0:{1}}'.format('a', 4) }}|"
+    - debug: msg="{{ ('<b>%s</b>' | safe) | format('<i>') }}"
+    - debug: msg="{{ (('<b>%s</b>' | safe) | format('<i>')) | type_debug }}"
+    - debug: msg="{{ ('<a>' | escape)[1:3] }}"
+    - debug: msg="{{ (('<a>' | escape)[1:3]) | type_debug }}"
+    - debug: msg="{{ ('<a>' | escape)[0] | type_debug }}"
+    - debug: msg="{{ ('<b>%s</b>' | safe) % '<i>' }}"
+    - debug: msg="{{ (('<b>%s</b>' | safe) % '<i>') | type_debug }}"
+    - debug: msg="{{ ('%s|%s' | safe) % ('<i>', '&') }}"
+    - debug: msg="{{ '%s!' % ('<i>' | escape) }}"
+    - debug: msg="{{ ('%s!' % ('<i>' | escape)) | type_debug }}"
+    - debug: msg="{{ '%s' | format('<i>' | escape) | type_debug }}"
+    - debug: msg="{{ ('<b>%(x)s</b>' | safe) % {'x':'<'} }}"
+    - debug: msg="{{ ('ab' | safe) * 2 }}"
+    - debug: msg="{{ (('ab' | safe) * 2) | type_debug }}"
+    - debug: msg="{{ ('<a>' | escape)[::-1] }}"
+    - debug: msg="{{ ('%d<' | safe) % 3 }}"
+    - debug: msg="{{ ('{}<' | safe).format('<') }}"
+    - debug: msg="{{ (('{}<' | safe).format('<')) | type_debug }}"
+    - debug: msg="{{ ('a,b' | safe).split(',') | map('type_debug') | list }}"
+    - debug: msg="{{ ('<a> ' | safe).strip() | type_debug }}"
+    - debug: msg="{{ ('<a>' | safe).replace('a', '<') }}"
+    - debug: msg="{{ (('<a>' | safe).replace('a', '<')) | type_debug }}"
+    - debug: msg="{{ ('x' | safe).join(['<', '>']) }}"
+    - debug: msg="{{ m }}"
+    - debug: msg="{{ m | type_debug }}"
+    - debug: msg="{{ ml[0] | type_debug }}"
+    - debug: msg="{{ ('%s' | safe) | format(m) }}"
+    - debug: msg="{{ ml }}"
+    - debug: var=m

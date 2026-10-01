@@ -329,10 +329,12 @@ func arith(op tokKind, a, b any) (any, error) {
 			}
 		case tokMul:
 			if n, ok := asInt(b); ok {
-				return repeatString(s, n)
+				r, err := repeatString(s, n)
+				if err != nil {
+					return nil, err
+				}
+				return asMarkupOf(a, r), nil
 			}
-		case tokMod:
-			return nil, fmt.Errorf("the printf-style '%%' string operator is not supported; use the format filter")
 		}
 	}
 	if la, ok := a.([]any); ok {
@@ -359,7 +361,11 @@ func arith(op tokKind, a, b any) (any, error) {
 	}
 	if n, ok := asInt(a); ok && op == tokMul {
 		if s, ok := asString(b); ok {
-			return repeatString(s, n)
+			r, err := repeatString(s, n)
+			if err != nil {
+				return nil, err
+			}
+			return asMarkupOf(b, r), nil
 		}
 	}
 	return numArith(op, a, b)

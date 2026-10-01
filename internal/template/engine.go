@@ -301,6 +301,9 @@ type EvalCtx struct {
 	// callKwargs names the running filter's keyword arguments, in call
 	// order.
 	callKwargs []string
+	// keepMarkup: the result is a variable's value, not storage (markup
+	// stays markup).
+	keepMarkup bool
 	// replaceMarkers keeps undefined items of literals as markers (see
 	// EvalExpressionReplacing).
 	replaceMarkers bool
@@ -387,7 +390,23 @@ func (e *Engine) RenderTemplateMarking(src string, vars VarGetter, pos Position)
 	return e.renderTemplate(src, vars, pos, true)
 }
 
+// RenderTemplateVar is RenderTemplate for a variable's value, which
+// keeps markup: only a template's final result is variable storage.
+func (e *Engine) RenderTemplateVar(src string, vars VarGetter, pos Position) (any, error) {
+	return e.renderTemplateKeeping(src, vars, pos, false, true)
+}
+
+// RenderTemplateMarkingVar is RenderTemplateMarking for a variable's
+// value, which keeps markup.
+func (e *Engine) RenderTemplateMarkingVar(src string, vars VarGetter, pos Position) (any, error) {
+	return e.renderTemplateKeeping(src, vars, pos, true, true)
+}
+
 func (e *Engine) renderTemplate(src string, vars VarGetter, pos Position, mark bool) (any, error) {
+	return e.renderTemplateKeeping(src, vars, pos, mark, false)
+}
+
+func (e *Engine) renderTemplateKeeping(src string, vars VarGetter, pos Position, mark, keepMarkup bool) (any, error) {
 	if !HasTemplate(src) {
 		return src, nil
 	}
@@ -398,7 +417,7 @@ func (e *Engine) renderTemplate(src string, vars VarGetter, pos Position, mark b
 	if err != nil {
 		return nil, err
 	}
-	ec := &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: pos, src: src, own: newOwnership(src), markOutput: mark}
+	ec := &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: pos, src: src, own: newOwnership(src), markOutput: mark, keepMarkup: keepMarkup}
 
 	// Native-types rule: exactly one output expression and nothing that
 	// renders text. {% set %} nodes are allowed before it — they only bind

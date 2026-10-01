@@ -20,7 +20,29 @@ type kwOrderFunc func(ec *EvalCtx, args []any, kwargs *yaml.OMap) (any, error)
 // lookupMethod resolves builtin str/list/dict methods for getattr.
 func lookupMethod(x any, name string) (boundMethod, bool) {
 	if s, ok := asString(x); ok {
+		if name == "format" {
+			// str.format (Markup's escapes its fields).
+			return func(ec *EvalCtx, args []any, kwargs map[string]any) (any, error) {
+				out, err := pyStrFormat(s, args, kwargs, isMarkup(x))
+				if err != nil {
+					return nil, err
+				}
+				return asMarkupOf(x, out), nil
+			}, true
+		}
 		if m, ok := strMethods[name]; ok {
+			if isMarkup(x) {
+				// markupsafe wraps str's methods: text arguments are
+				// escaped, and text results are markup.
+				return func(ec *EvalCtx, args []any, kwargs map[string]any) (any, error) {
+					esc := make([]any, len(args))
+					for i, a := range args {
+						esc[i] = markupMethodArg(a)
+					}
+					out, err := m(s, esc)
+					return markupResult(out), err
+				}, true
+			}
 			return func(ec *EvalCtx, args []any, kwargs map[string]any) (any, error) {
 				return m(s, args)
 			}, true
@@ -358,3 +380,37 @@ var listMethods = map[string]func(l []any, args []any) (any, error){
 
 // Keep the yaml import referenced even as methods evolve.
 var _ = yaml.UnsafeString("")
+
+// markupMethodArg is an argument of a Markup method: text escaped, a
+// list's text items too (join).
+func markupMethodArg(v any) any {
+	switch t := Undeprecate(v).(type) {
+	case string, yaml.UnsafeString:
+		return string(markupEscape(t))
+	case Markup:
+		return string(t)
+	case []any:
+		out := make([]any, len(t))
+		for i, item := range t {
+			out[i] = markupMethodArg(item)
+		}
+		return out
+	}
+	return v
+}
+
+// markupResult is a Markup method's result: its text as markup (a list's
+// items too), anything else as is.
+func markupResult(v any) any {
+	switch t := v.(type) {
+	case string:
+		return Markup(t)
+	case []any:
+		for i, item := range t {
+			if s, ok := item.(string); ok {
+				t[i] = Markup(s)
+			}
+		}
+	}
+	return v
+}

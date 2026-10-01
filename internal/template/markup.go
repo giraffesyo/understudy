@@ -177,3 +177,68 @@ func markupConcat(a, b any) (any, bool) {
 	}
 	return Markup(string(markupEscape(a)) + string(markupEscape(b))), true
 }
+
+// percentFormat is format % args (str.__mod__, Markup.__mod__): a single
+// mapping argument supplies "%(key)s" conversions. Markup's arguments
+// are escaped and its result is markup.
+func percentFormat(format any, s string, args []any) (any, error) {
+	markup := isMarkup(format)
+	var mapping map[string]any
+	if len(args) == 1 {
+		if m, ok := anyToMap(args[0]); ok {
+			mapping = m
+		}
+	}
+	if markup {
+		if mapping != nil {
+			esc := make(map[string]any, len(mapping))
+			for k, v := range mapping {
+				esc[k] = markupArg(v)
+			}
+			mapping = esc
+		} else {
+			esc := make([]any, len(args))
+			for i, v := range args {
+				esc[i] = markupArg(v)
+			}
+			args = esc
+		}
+	}
+	var out string
+	var err error
+	if mapping != nil {
+		out, err = pyPercentFormat(s, nil, mapping)
+	} else {
+		out, err = pyPercentFormat(s, args, nil)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if markup {
+		return Markup(out), nil
+	}
+	return out, nil
+}
+
+// markupArg is an argument of a Markup operation as markupsafe passes
+// it: text (and any other object but a number) escaped.
+func markupArg(v any) any {
+	switch u := Undeprecate(v).(type) {
+	case nil, bool, int64, int, float64:
+		return v
+	case Markup:
+		return u
+	}
+	if isNumber(v) {
+		return v
+	}
+	return markupEscape(v)
+}
+
+// asMarkupOf is s as markup when the value it came from (of) is.
+func asMarkupOf(of any, s string) any {
+	if isMarkup(of) {
+		return Markup(s)
+	}
+	return s
+}
