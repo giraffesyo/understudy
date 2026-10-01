@@ -290,11 +290,9 @@ func registerExtraFilters(e *Engine) {
 			k, isText := asString(Undeprecate(elem))
 			switch t := Undeprecate(elem).(type) {
 			case []any, map[string]any, Mapping:
-				name := pyClassName(t, ec.fromVar(-1))
-				full := name
-				if strings.HasPrefix(name, "_AnsibleLazy") {
-					full = "ansible._internal._templating._lazy_containers." + name
-				}
+				// Plugins see their arguments' containers as lazy.
+				name := pyClassName(t, true)
+				full := "ansible._internal._templating._lazy_containers." + name
 				return nil, fmt.Errorf("cannot use %s as a dict key (unhashable type: %s)", pyStrRepr(full), pyStrRepr(name))
 			case nil:
 				// Variable storage keeps a None key as its str().

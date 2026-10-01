@@ -221,6 +221,7 @@ func tripMarkers(v any, pos Position) error {
 // them, so an undefined item is not an error there.
 var markerSafeFilters = map[string]bool{
 	"length": true, "count": true, "first": true, "last": true, "map": true,
+	"select": true, "reject": true, "selectattr": true, "rejectattr": true,
 	"default": true, "d": true, "ternary": true, "mandatory": true, "type_debug": true,
 	"random": true, "shuffle": true,
 }
