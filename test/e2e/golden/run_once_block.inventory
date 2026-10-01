@@ -1,0 +1,16 @@
+[nested]
+a1 ansible_connection=local
+a2 ansible_connection=local
+a3 ansible_connection=local
+
+[always_only]
+b1 ansible_connection=local
+b2 ansible_connection=local
+
+[in_rescue]
+c1 ansible_connection=local
+c2 ansible_connection=local
+
+[rescue_and_always]
+d1 ansible_connection=local
+d2 ansible_connection=local

@@ -157,6 +157,8 @@ type Runner struct {
 	fatalErr       error                              // an error raised processing results: ends the run
 	inHandlers     bool                               // a handler flush is running
 	blockFailed    map[string]map[int]bool            // host -> block ID -> failure caught by rescue
+	pendingAlways  map[string]map[int]bool            // host -> blocks inside the rescuing one whose always runs first
+	lateFailed     map[string]bool                    // hosts that run on in the play but are failed for the plays after it
 	nextBlockID    int                                // fresh IDs for blocks of included files
 	failedIn       map[string]map[int]bool            // host -> blocks it was inside when it failed hard
 	ended          map[string]bool                    // meta: end_host (per play)
@@ -467,6 +469,14 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 		}
 		r.mu.Unlock()
 		err := r.runPlayBatch(ctx, play, batch)
+		// Hosts a failed run_once task failed, but a rescue took back,
+		// stay failed for the plays after this one.
+		r.mu.Lock()
+		for h := range r.lateFailed {
+			r.failed[h] = true
+		}
+		r.lateFailed = nil
+		r.mu.Unlock()
 		// A batch that breached max_fail_percentage ends the play with
 		// every host failed: the linear strategy reports that no hosts
 		// remain (once for the breach, once for the failed hosts), and
@@ -510,6 +520,7 @@ func (r *Runner) runPlayBatch(ctx context.Context, play *playbook.Play, playHost
 	r.stepContinue = false // --step's (c)ontinue lasts for one strategy run
 	r.mu.Lock()
 	r.blockFailed = map[string]map[int]bool{}
+	r.pendingAlways = map[string]map[int]bool{}
 	if r.nextBlockID < 1<<20 {
 		r.nextBlockID = 1 << 20 // above any parse-time block ID
 	}
@@ -707,16 +718,35 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 			return nil
 		}
 		before := r.failedSet(active)
+		failuresBefore := r.failureCounts(active)
 		r.runTaskAcrossHosts(ctx, play, task, active, playHosts, false)
-		if (task.RunOnce || bypassesHostLoop(task)) && !freeStrategy(play) && !task.IgnoreErrors &&
-			len(r.failedSet(active)) > len(before) {
+		if (task.RunOnce || bypassesHostLoop(task)) && !freeStrategy(play) && !task.IgnoreErrors {
 			// A run_once task (or one bypassing the host loop) that
-			// failed fails every host left in the batch.
-			r.mu.Lock()
+			// failed, rescued or not, fails every other host left in the
+			// batch, twice over: a block's rescue does not catch it, its
+			// always still runs (the linear strategy marks them failed
+			// again after the result's own marking).
+			after := r.failureCounts(active)
+			var failedHere []string
 			for _, h := range active {
-				r.failed[h] = true
+				if after[h] > failuresBefore[h] {
+					failedHere = append(failedHere, h)
+				}
 			}
-			r.mu.Unlock()
+			if len(failedHere) > 0 {
+				for _, h := range active {
+					if !slices.Contains(failedHere, h) && len(r.failedSet([]string{h})) == 0 && r.landFailure(h, task, 2) {
+						// Rescued, it runs on in this play, but the
+						// strategy has failed it for the run.
+						r.mu.Lock()
+						if r.lateFailed == nil {
+							r.lateFailed = map[string]bool{}
+						}
+						r.lateFailed[h] = true
+						r.mu.Unlock()
+					}
+				}
+			}
 		}
 
 		// any_errors_fatal: a new hard failure ends the whole playbook once
@@ -739,6 +769,19 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 		}
 	}
 	return nil
+}
+
+// failureCounts are the hosts' failures so far, rescued ones included.
+func (r *Runner) failureCounts(hosts []string) map[string]int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]int, len(hosts))
+	for _, h := range hosts {
+		if st := r.stats[h]; st != nil {
+			out[h] = st.Failed + st.Rescued
+		}
+	}
+	return out
 }
 
 // errBatchAborted signals that max_fail_percentage was breached; it is not
@@ -935,10 +978,13 @@ func (r *Runner) blockEligible(hosts []string, task *playbook.Task) []string {
 	for _, host := range hosts {
 		hb := r.blockFailed[host]
 		ok := true
-		for _, ref := range task.Blocks {
+		for i, ref := range task.Blocks {
 			switch ref.Section {
 			case playbook.SectionBlock:
-				if hb[ref.ID] {
+				// A block whose rescue caught a failure runs no more of
+				// its tasks, but the always sections of the blocks inside
+				// it that the failure passed through run first.
+				if hb[ref.ID] && !r.alwaysPending(host, task.Blocks[i+1:]) {
 					ok = false
 				}
 			case playbook.SectionRescue:
@@ -953,6 +999,17 @@ func (r *Runner) blockEligible(hosts []string, task *playbook.Task) []string {
 		}
 	}
 	return out
+}
+
+// alwaysPending reports whether inner (the blocks of a task inside a
+// rescuing block) puts the task in an always section host still runs.
+func (r *Runner) alwaysPending(host string, inner []playbook.BlockRef) bool {
+	for _, ref := range inner {
+		if ref.Section == playbook.SectionAlways && r.pendingAlways[host][ref.ID] {
+			return true
+		}
+	}
+	return false
 }
 
 // alwaysEligible returns failed hosts that must still run this task because
@@ -985,26 +1042,92 @@ func (r *Runner) alwaysEligible(playHosts []string, task *playbook.Task) []strin
 	return out
 }
 
-// catchInRescue routes a failure to the nearest enclosing block that has a
-// rescue section and hasn't already failed. Returns true when caught.
-func (r *Runner) catchInRescue(host string, task *playbook.Task) bool {
+// blockRunState is a block's state for a host in ansible-core's
+// PlayIterator: running its tasks, rescue or always, or done with it.
+type blockRunState int
+
+const (
+	inTasks blockRunState = iota
+	inRescue
+	inAlways
+	blockDone
+)
+
+// markFailed is PlayIterator._set_failed_state for a block in state s:
+// a failure in its tasks goes to its rescue, else its always; one in its
+// rescue to its always; one in its always ends it.
+func markFailed(s blockRunState, ref playbook.BlockRef) blockRunState {
+	switch s {
+	case inTasks:
+		if ref.HasRescue {
+			return inRescue
+		}
+		if ref.HasAlways {
+			return inAlways
+		}
+	case inRescue:
+		if ref.HasAlways {
+			return inAlways
+		}
+	}
+	return blockDone
+}
+
+// failureLanding is where a host's failure at a task in blocks sends it:
+// marked failed marks times in its innermost block, then once in each
+// enclosing block as the one inside it ends failed. catch is the level
+// whose rescue runs (-1: none, the host fails), always the levels whose
+// always sections run on the way.
+func failureLanding(blocks []playbook.BlockRef, marks int) (catch int, always []int) {
+	level := len(blocks) - 1
+	if level < 0 {
+		return -1, nil
+	}
+	state := blockRunState(blocks[level].Section)
+	for range marks {
+		state = markFailed(state, blocks[level])
+	}
+	for {
+		switch state {
+		case inRescue:
+			return level, always
+		case inAlways:
+			always = append(always, level)
+		}
+		if level--; level < 0 {
+			return -1, always
+		}
+		state = markFailed(blockRunState(blocks[level].Section), blocks[level])
+	}
+}
+
+// landFailure routes host's failure at task (marked marks times) through
+// its blocks: to the rescue that catches it, with the always sections of
+// the blocks inside that one still to run (true), or out of the play,
+// running the always sections of the blocks it leaves (false).
+func (r *Runner) landFailure(host string, task *playbook.Task, marks int) bool {
+	catch, always := failureLanding(task.Blocks, marks)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for i := len(task.Blocks) - 1; i >= 0; i-- {
-		ref := task.Blocks[i]
-		// Only a failure in a block's main section is catchable by that
-		// block; rescue/always failures propagate outward.
-		if ref.Section != playbook.SectionBlock || !ref.HasRescue {
-			continue
-		}
+	if catch >= 0 {
 		if r.blockFailed[host] == nil {
 			r.blockFailed[host] = map[int]bool{}
 		}
-		if r.blockFailed[host][ref.ID] {
-			continue // this block already failed once; propagate outward
+		r.blockFailed[host][task.Blocks[catch].ID] = true
+		for _, l := range always {
+			if r.pendingAlways[host] == nil {
+				r.pendingAlways[host] = map[int]bool{}
+			}
+			r.pendingAlways[host][task.Blocks[l].ID] = true
 		}
-		r.blockFailed[host][ref.ID] = true
 		return true
+	}
+	r.failed[host] = true
+	for _, l := range always {
+		if r.failedIn[host] == nil {
+			r.failedIn[host] = map[int]bool{}
+		}
+		r.failedIn[host][task.Blocks[l].ID] = true
 	}
 	return false
 }
@@ -2695,7 +2818,7 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 			}
 		}
 	}
-	if res.Failed && !ignored && r.catchInRescue(host, task) {
+	if res.Failed && !ignored && r.landFailure(host, task, 1) {
 		// Rescued: the fatal line printed, but the host stays in the play
 		// and the failure details flow into the rescue section's vars.
 		r.Store.SetHostFact(host, "ansible_failed_result", orderedResult(task, task.Module, res.ToVars()))
@@ -2714,16 +2837,9 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	case res.Skipped:
 		st.Skipped++
 	case res.Failed && !ignored:
+		// landFailure marked the host failed, with the blocks whose
+		// always sections still run for it.
 		st.Failed++
-		r.failed[host] = true
-		// Remember the blocks this host was inside so their always
-		// sections still run for it.
-		for _, ref := range task.Blocks {
-			if r.failedIn[host] == nil {
-				r.failedIn[host] = map[int]bool{}
-			}
-			r.failedIn[host][ref.ID] = true
-		}
 	default:
 		// ok, changed, and failed-but-ignored all count toward ok, matching
 		// Ansible's recap: a changed task is also ok, and an ignored task is
@@ -3527,13 +3643,15 @@ type hostSnapshot struct {
 	failed   bool
 	failedIn map[int]bool
 	blockF   map[int]bool
+	pending  map[int]bool
 }
 
 func (r *Runner) snapshotHost(host string) hostSnapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return hostSnapshot{failed: r.failed[host],
-		failedIn: maps.Clone(r.failedIn[host]), blockF: maps.Clone(r.blockFailed[host])}
+		failedIn: maps.Clone(r.failedIn[host]), blockF: maps.Clone(r.blockFailed[host]),
+		pending: maps.Clone(r.pendingAlways[host])}
 }
 
 // restoreHost undoes a recorded result for a redo the way ansible-core's
@@ -3566,4 +3684,5 @@ func (r *Runner) restoreHost(host string, snap hostSnapshot, res *agentproto.Res
 	r.failed[host] = snap.failed
 	r.failedIn[host] = snap.failedIn
 	r.blockFailed[host] = snap.blockF
+	r.pendingAlways[host] = snap.pending
 }

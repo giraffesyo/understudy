@@ -1,0 +1,70 @@
+---
+# Where a failure in nested blocks sends a host, as ansible-core's play
+# iterator moves it: a block without a rescue runs its always before the
+# enclosing block's rescue takes the host; a failure in a rescue runs the
+# block's always, then the enclosing rescue; one in an always skips the
+# rest of it.
+- hosts: inner_always
+  gather_facts: false
+  tasks:
+    - block:
+        - block:
+            - fail:
+                msg: boom
+              when: inventory_hostname == 'x1'
+          always:
+            - debug:
+                msg: inner always
+        - debug:
+            msg: after the inner block
+      rescue:
+        - debug:
+            msg: outer rescue
+      always:
+        - debug:
+            msg: outer always
+    - debug:
+        msg: after
+
+- hosts: in_rescue
+  gather_facts: false
+  tasks:
+    - block:
+        - block:
+            - fail:
+                msg: first
+              when: inventory_hostname == 'y1'
+          rescue:
+            - fail:
+                msg: the rescue fails
+              when: inventory_hostname == 'y1'
+            - debug:
+                msg: rest of the rescue
+          always:
+            - debug:
+                msg: inner always
+        - debug:
+            msg: after the inner block
+      rescue:
+        - debug:
+            msg: "outer rescue {{ ansible_failed_result.msg }}"
+      always:
+        - debug:
+            msg: outer always
+    - debug:
+        msg: after
+
+- hosts: in_always
+  gather_facts: false
+  tasks:
+    - block:
+        - debug:
+            msg: tasks
+      always:
+        - fail:
+            msg: in the always
+          when: inventory_hostname == 'z1'
+        - debug:
+            msg: rest of the always
+    - debug:
+        msg: after

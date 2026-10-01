@@ -1,0 +1,11 @@
+[inner_always]
+x1 ansible_connection=local
+x2 ansible_connection=local
+
+[in_rescue]
+y1 ansible_connection=local
+y2 ansible_connection=local
+
+[in_always]
+z1 ansible_connection=local
+z2 ansible_connection=local

@@ -1,0 +1,73 @@
+---
+# A run_once task that fails inside a block fails the other hosts of the
+# batch as well, and the linear strategy fails them a second time: where
+# the host that ran it is rescued, they skip that rescue and run its
+# always (or, where the block has no rescue, skip its always too), then
+# go on through the enclosing blocks as a failure there would, and leave
+# the play without a failure counted unless they fail again.
+- hosts: nested
+  gather_facts: false
+  tasks:
+    - block:
+        - debug:
+            msg: before
+        - block:
+            - fail:
+                msg: boom
+              run_once: true
+            - debug:
+                msg: not reached
+          always:
+            - debug:
+                msg: inner always
+        - debug:
+            msg: not reached either
+      rescue:
+        - debug:
+            msg: "rescued {{ ansible_failed_result.msg | default('without a failed result') }}"
+      always:
+        - debug:
+            msg: outer always
+    - debug:
+        msg: after the block
+
+- hosts: rescue_and_always
+  gather_facts: false
+  tasks:
+    - block:
+        - fail:
+            msg: boom
+          run_once: true
+      rescue:
+        - debug:
+            msg: rescue
+      always:
+        - debug:
+            msg: always
+    - debug:
+        msg: after
+
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: the hosts that left their play are failed for the next one
+      debug:
+        msg: next play
+
+- hosts: in_rescue
+  gather_facts: false
+  tasks:
+    - block:
+        - fail:
+            msg: first
+      rescue:
+        - fail:
+            msg: in the rescue
+          run_once: true
+        - debug:
+            msg: rest of the rescue
+      always:
+        - debug:
+            msg: always
+    - debug:
+        msg: after
