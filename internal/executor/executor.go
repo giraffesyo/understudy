@@ -1874,9 +1874,10 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 				}
 			}
 			res, err := r.runModule(ctx, host, target, kw, inProcess, b, task, envKeys, env, req, payload)
-			if err == nil && res != nil && python && disc.report {
+			if err == nil && res != nil && python && disc.report && res.Origin != "action" {
 				// _execute_module propagates the discovery to the
-				// controller as a fact in its result.
+				// controller as a fact in its result (a result the
+				// action plugin made itself has none).
 				if res.AnsibleFacts == nil {
 					res.AnsibleFacts = map[string]any{}
 				}

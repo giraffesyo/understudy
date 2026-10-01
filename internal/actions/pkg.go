@@ -56,6 +56,11 @@ func runPkgModule(ctx context.Context, actx *Context, module string, args map[st
 	if err != nil {
 		return agentproto.Fail("module execution failed: %v", err)
 	}
+	if _, ok := res.AnsibleFacts["discovered_interpreter_python"]; ok {
+		// The action's pkg_mgr fact gives way to the module result's
+		// facts (result.update(module result)).
+		delete(res.AnsibleFacts, "pkg_mgr")
+	}
 	return res
 }
 
