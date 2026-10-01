@@ -1,0 +1,25 @@
+# --limit applies to the hosts add_host and group_by make as to the
+# others: a later play targets those the limit matches (here, group a's).
+- hosts: all
+  gather_facts: false
+  tasks:
+    - add_host:
+        name: "{{ item.name }}"
+        groups: "{{ item.groups }}"
+      loop:
+        - {name: in_a, groups: a}
+        - {name: in_b, groups: b}
+        - {name: in_none, groups: []}
+    - group_by: key=grouped
+    - debug:
+        msg: "{{ groups }} {{ ansible_play_hosts_all }} {{ ansible_play_hosts }}"
+- hosts: grouped:in_a:in_b:in_none
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "{{ inventory_hostname }} {{ group_names }}"
+- hosts: in_b
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: unreached

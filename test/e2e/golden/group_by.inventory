@@ -1,0 +1,8 @@
+[all:vars]
+ansible_connection=local
+[web]
+h1 kind=a
+h2 kind=b
+h3 kind=a
+[web:vars]
+webvar=from_web

@@ -1,0 +1,44 @@
+# meta: refresh_inventory parses the sources again, then makes the
+# add_host and group_by changes of the run again (hosts first, then
+# groups): the hosts add_host made stay (h2, dropped from the sources,
+# comes back with the variable add_host gave it) and so do their
+# group_by groups; h4, dropped, loses its group_by group.
+- hosts: web
+  gather_facts: false
+  tasks:
+    - add_host:
+        name: n1
+        groups: [dyn, web]
+        v: 1
+    - name: an inventory host's variable
+      add_host:
+        name: h2
+        v: 2
+    - group_by:
+        key: "by_{{ inventory_hostname }}"
+        parents: grouped
+    - debug:
+        msg: "{{ groups }} {{ ansible_play_hosts_all }} {{ ansible_play_hosts }} {{ ansible_play_batch }}"
+    - name: rewrite the inventory without h2 and h4
+      copy:
+        dest: "{{ inventory_file }}"
+        content: |
+          [all:vars]
+          ansible_connection=local
+          [web]
+          h1
+          h3
+      run_once: true
+    - meta: refresh_inventory
+    - debug:
+        msg: "{{ groups }} {{ ansible_play_hosts_all }} {{ ansible_play_hosts }} {{ ansible_play_batch }} {{ hostvars['n1']['v'] }} {{ hostvars['h2']['v'] }}"
+    - group_by: key=after
+    - add_host: name=n2 groups=dyn
+    - meta: refresh_inventory
+    - debug:
+        msg: "{{ groups }} {{ ansible_play_hosts_all }}"
+- hosts: dyn:grouped:after
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "{{ inventory_hostname }} {{ v | default('-') }} {{ group_names }}"

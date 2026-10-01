@@ -1,0 +1,6 @@
+[all:vars]
+ansible_connection=local
+[web]
+h1
+h2
+h4

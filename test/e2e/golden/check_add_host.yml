@@ -1,0 +1,21 @@
+# --check: add_host and group_by support check mode, so they change the
+# inventory as in a normal run.
+- hosts: all
+  gather_facts: false
+  tasks:
+    - add_host:
+        name: checked
+        groups: in_check
+        flag: "{{ ansible_check_mode }}"
+    - group_by:
+        key: "check_{{ ansible_check_mode }}"
+    - name: check_mode false on the task too
+      add_host:
+        name: checked2
+        groups: in_check
+      check_mode: false
+- hosts: in_check:check_True
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "{{ inventory_hostname }} {{ flag | default('-') }} {{ group_names }}"

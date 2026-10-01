@@ -1,0 +1,22 @@
+# The vars plugins read the group_vars/ and host_vars/ files of groups
+# and hosts add_host and group_by make (next to the inventory, then the
+# playbook), over the variables add_host gives: an existing host's file
+# value still wins, and comparing does not see it (changed).
+- hosts: web
+  gather_facts: false
+  tasks:
+    - group_by: key=kind_{{ inventory_hostname }}
+    - debug:
+        msg: "{{ from_inv_group | default('-') }} {{ from_pb_group | default('-') }} {{ both | default('-') }}"
+    - add_host:
+        name: n1
+        over: task
+    - name: an existing host's variable its host_vars file sets
+      add_host:
+        name: h2
+        over: h2's host_vars file
+- hosts: n1:h2
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "{{ inventory_hostname }} {{ from_inv_host | default('-') }} {{ over }}"
