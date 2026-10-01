@@ -34,3 +34,26 @@
     - debug:
         msg: "{{ [s] }}"
       ignore_errors: true
+    - name: in a conditional
+      debug:
+        msg: x
+      when: s
+      ignore_errors: true
+    - debug:
+        msg: x
+      when: d.a == 1
+      ignore_errors: true
+    - name: in a loop
+      debug:
+        msg: "{{ item }}"
+      loop: "{{ [s] }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ item }}"
+      loop: "{{ d.a }}"
+      ignore_errors: true
+    - name: in changed_when
+      debug:
+        msg: x
+      changed_when: s
+      ignore_errors: true
