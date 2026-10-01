@@ -40,6 +40,10 @@ type discovery struct {
 	done   bool
 	path   string // the interpreter discovered ("" = configured or known)
 	report bool   // the results carry the fact
+	// warnings are discovery's, which _execute_module adds to the
+	// result's (so a registered result holds them too).
+	warnings []any
+	help     map[string]string // the warnings' help text (see Result.WarningHelp)
 }
 
 // discoveryMode is the interpreter_python setting for a task: the
@@ -136,15 +140,18 @@ func (r *Runner) discoverInterpreter(ctx context.Context, st *discovery, host, t
 			for i, f := range fallback {
 				tried[i] = f
 			}
-			r.warn(fmt.Sprintf("No python interpreters found for host %s (tried %s).", template.PyRepr(host), template.PyRepr(tried)))
+			st.warnings = append(st.warnings, fmt.Sprintf("No python interpreters found for host %s (tried %s).", template.PyRepr(host), template.PyRepr(tried)))
 		}
 	default:
 		found = interpreters[0]
 		if !silent {
-			r.warn(fmt.Sprintf("Host %s is using the discovered Python interpreter at %s, but future installation of another "+
-				"Python interpreter could cause a different interpreter to be discovered. See "+
-				"https://docs.ansible.com/ansible-core/2.21/reference_appendices/interpreter_discovery.html for more information.",
-				template.PyRepr(host), template.PyRepr(found)))
+			msg := fmt.Sprintf("Host %s is using the discovered Python interpreter at %s, but future installation of another "+
+				"Python interpreter could cause a different interpreter to be discovered.", template.PyRepr(host), template.PyRepr(found))
+			st.warnings = append(st.warnings, msg)
+			if st.help == nil {
+				st.help = map[string]string{}
+			}
+			st.help[msg] = "See https://docs.ansible.com/ansible-core/2.21/reference_appendices/interpreter_discovery.html for more information."
 		}
 	}
 	st.path = found

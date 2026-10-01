@@ -1885,6 +1885,30 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 				}
 			}
 			res, err := r.runModule(ctx, host, target, kw, inProcess, b, task, envKeys, env, req, payload)
+			if len(disc.warnings) > 0 {
+				if err == nil && res != nil {
+					if res.Extra == nil {
+						res.Extra = map[string]any{}
+					}
+					prior, _ := res.Extra["warnings"].([]any)
+					res.Extra["warnings"] = append(append([]any{}, disc.warnings...), prior...)
+					for k, v := range disc.help {
+						if res.WarningHelp == nil {
+							res.WarningHelp = map[string]string{}
+						}
+						res.WarningHelp[k] = v
+					}
+				} else {
+					for _, w := range disc.warnings {
+						if help := disc.help[w.(string)]; help != "" {
+							r.warn(w.(string) + " " + help)
+						} else {
+							r.warn(w.(string))
+						}
+					}
+				}
+				disc.warnings = nil
+			}
 			if err == nil && res != nil && python && disc.report && res.Origin != "action" {
 				// _execute_module propagates the discovery to the
 				// controller as a fact in its result (a result the

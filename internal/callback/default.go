@@ -442,7 +442,11 @@ func (d *Default) warnings(res *agentproto.Result) {
 			continue
 		}
 		// Display.display: a message ending in a newline gets no second one.
-		fmt.Fprintf(d.Err, "%s\n", d.paint(cBrightPurp, "[WARNING]: "+strings.TrimSuffix(msg, "\n")))
+		text := strings.TrimSuffix(msg, "\n")
+		if help := res.WarningHelp[msg]; help != "" {
+			text += " " + help
+		}
+		fmt.Fprintf(d.Err, "%s\n", d.paint(cBrightPurp, "[WARNING]: "+text))
 	}
 }
 

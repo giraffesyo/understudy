@@ -111,6 +111,9 @@ type Result struct {
 	DelegatedTo   string `json:"-"` // delegate_to target, when not the host itself
 	ShowDiff      bool   `json:"-"` // diff mode is on for the task: display Diff
 	Censored      bool   `json:"-"` // no_log: display only the censored placeholder
+	// WarningHelp is the help text Display appends to a warning of the
+	// result's (its key) when showing it; the result keeps the message.
+	WarningHelp map[string]string `json:"-"`
 }
 
 // ErrorChain is a two-level exception chain for error display.
