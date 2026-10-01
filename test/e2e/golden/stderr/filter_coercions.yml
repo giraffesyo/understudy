@@ -1,0 +1,52 @@
+---
+# The bool filter's deprecation warning for a value it does not
+# recognize (coerced as ansible-core 2.21 does), from_yaml's and
+# from_yaml_all's for input that is not a str: their text, origins and
+# de-duplication.
+- hosts: localhost
+  gather_facts: false
+  ignore_errors: true
+  vars:
+    v: maybe
+    n: 5
+  tasks:
+    - debug:
+        msg: "{{ 'maybe' | bool }}"
+    - debug:
+        msg: "{{ v | bool }}"
+    - debug:
+        msg: "{{ 5 | bool }}"
+    - debug:
+        msg: "{{ n | bool }}"
+    - debug:
+        msg: "{{ 2.5 | bool }}"
+    - debug:
+        msg: "{{ none | bool }}"
+    - debug:
+        msg: "{{ [1] | bool }}"
+    - debug:
+        msg: "{{ 'yes' | bool }}"
+    - debug:
+        msg: "{{ 0 | bool }}"
+    - debug:
+        msg: "{{ 1.0 | bool }}"
+    - debug:
+        msg: "{{ '' | bool }}"
+    - debug:
+        msg: "{{ {} | bool }}"
+    - debug:
+        msg: "{{ 'maybe' | bool }}"
+    - debug:
+        msg: "{{ 5 | from_yaml }}"
+    - debug:
+        msg: "{{ n | from_yaml }}"
+    - debug:
+        msg: "{{ [1] | from_yaml }}"
+    - debug:
+        msg: "{{ none | from_yaml }}"
+    - debug:
+        msg: "{{ {'a': 1} | from_yaml }}"
+    - debug:
+        msg: "{{ 5 | from_yaml_all }}"
+    - debug:
+        msg: "{{ none | from_yaml_all }}"

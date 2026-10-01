@@ -46,22 +46,37 @@ func registerFilters(e *Engine) {
 	}
 
 	f["bool"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		switch t := in.(type) {
-		case bool:
-			return t, nil
+		// to_bool: a str (lowered) or an int's str() in the valid
+		// spellings; anything else is coerced (== 1, an unhashable value
+		// False) with a deprecation warning.
+		check, isText := "", false
+		switch t := Undeprecate(in).(type) {
 		case string:
-			switch strings.ToLower(t) {
-			case "yes", "on", "1", "true":
-				return true, nil
-			}
-			return false, nil
+			check, isText = strings.ToLower(t), true
 		case yaml.UnsafeString:
-			return f["bool"](ec, string(t), args, kwargs)
+			check, isText = strings.ToLower(string(t)), true
+		case Markup:
+			check, isText = strings.ToLower(string(t)), true
+		case bool:
+			check, isText = strings.ToLower(toStr(t)), true
+		case int64, int, *big.Int:
+			check, isText = toStr(t), true
 		}
-		if n, ok := asFloat(in); ok {
-			return n == 1, nil
+		if isText {
+			switch check {
+			case "yes", "on", "true", "1":
+				return true, nil
+			case "no", "off", "false", "0":
+				return false, nil
+			}
 		}
-		return false, nil
+		result := false // a str is never == 1, an unhashable value False
+		if n, ok := asFloat(in); ok && !isText {
+			result = n == 1
+		}
+		ec.pluginDeprecated(Deprecated{Msg: fmt.Sprintf("The `bool` filter coerced invalid value %s (%s) to %s.",
+			pyRepr(in), NativeTypeName(in), pyRepr(result)), Version: "2.23"}, Position{})
+		return result, nil
 	}
 
 	f["int"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {

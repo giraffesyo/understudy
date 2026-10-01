@@ -409,7 +409,9 @@ than silently diverging. Known boundaries:
   `timedout.frame`, `play_hosts`, `vars`, facts injected as top-level
   variables) prints its `[DEPRECATION WARNING]` on stderr with the same
   origin (a variable's definition, a list entry, `<<container>>`) and
-  de-duplication; filters warn only for the values they read.
+  de-duplication; filters warn only for the values they read, and the
+  `bool` filter (a value it coerces) and `from_yaml`/`from_yaml_all`
+  (input that is not a str) warn as ansible-core's do.
   `deprecation_warnings = False` (or `ANSIBLE_DEPRECATION_WARNINGS`)
   silences them.
 - **Inventory plugins**: ansible-core's own inventory plugins are native

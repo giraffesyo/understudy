@@ -2,6 +2,7 @@ package template
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -19,6 +20,11 @@ type Deprecated struct {
 	Msg     string // "The 'skipped_reason' value is deprecated."
 	Help    string // "Use 'skip_reason' instead."
 	Version string // the ansible-core version that removes it
+	// Obj, for a warning about a value (a plugin's obj=), is the value's
+	// text, shown when it has no origin.
+	Obj string
+	// Bare: a plugin's warning about no value, shown without an origin.
+	Bare bool
 }
 
 // MarshalJSON encodes the plain value.
@@ -51,6 +57,24 @@ func (ec *EvalCtx) deprecated(d Deprecated) {
 	if ec.engine.Deprecation != nil {
 		ec.engine.Deprecation(ec.pos, d)
 	}
+}
+
+// pluginDeprecated is a plugin's deprecation warning (Display.deprecated),
+// at pos (zero: none, or with d.Obj, the value's of unknown origin).
+func (ec *EvalCtx) pluginDeprecated(d Deprecated, pos Position) {
+	d.Bare = d.Obj == "" && pos.File == ""
+	if ec.engine.Deprecation != nil {
+		ec.engine.Deprecation(pos, d)
+	}
+}
+
+// ignoredInput is from_yaml's and from_yaml_all's deprecation warning
+// for input that is not a str, about that value: where it was written,
+// else its text.
+func (ec *EvalCtx) ignoredInput(filter string, in any) {
+	d := Deprecated{Msg: fmt.Sprintf("The %s filter ignored non-string input of type %s.", filter, pyStrRepr(NativeTypeName(in))),
+		Version: "2.23", Obj: toStr(in)}
+	ec.pluginDeprecated(d, ec.inputOrigin())
 }
 
 // finalized reports d found in a template's result: at the template's
