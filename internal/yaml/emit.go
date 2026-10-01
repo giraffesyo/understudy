@@ -20,10 +20,11 @@ type KV struct {
 // care about human-readable key ordering (playbook generation).
 type OrderedMap []KV
 
-// Marshal renders v as block-style YAML for the to_yaml/to_nice_yaml
-// filters. Mapping keys are sorted (use OrderedMap to control ordering).
-// It does not aim to round-trip styles or comments — it produces clean
-// output that this package can re-parse.
+// Marshal renders v as block-style YAML for generated playbooks
+// (Playbook.YAML). Mapping keys are sorted (use OrderedMap to control
+// ordering). It does not aim to round-trip styles or comments — it
+// produces clean output that this package can re-parse. The to_yaml
+// filters use Dump, which reproduces PyYAML's output exactly.
 func Marshal(v any, indent int) ([]byte, error) {
 	if indent <= 0 {
 		indent = 2

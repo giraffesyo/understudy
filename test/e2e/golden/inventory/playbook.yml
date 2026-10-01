@@ -1,0 +1,20 @@
+- name: inventory hosts
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: host view
+      debug:
+        msg:
+          groups: "{{ group_names }}"
+          vars: "{{ hostvars[inventory_hostname] | dict2items | rejectattr('key', 'match', '^(ansible_|inventory_|group_names|groups|omit|playbook_dir|play_hosts|role_names)') | items2dict }}"
+
+- name: implicit localhost
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: localhost view
+      debug:
+        msg:
+          groups: "{{ groups }}"
+          group_names: "{{ group_names }}"
+          connection: "{{ ansible_connection }}"

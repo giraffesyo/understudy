@@ -173,8 +173,7 @@ func (c *composer) composeNode(ev event) (*Node, error) {
 			return nil, c.composerError("", "found undefined alias", ev.start)
 		}
 		if c.filling[target] {
-			// PyYAML builds a recursive structure here; understudy's values
-			// cannot hold one, so decoding it fails.
+			// A recursive structure: the collection contains itself.
 			target.recursive = true
 		}
 		return &Node{Kind: AliasNode, Value: ev.anchor, Target: target,

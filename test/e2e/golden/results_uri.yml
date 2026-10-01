@@ -35,6 +35,11 @@
       register: r
     - debug: {var: r}
 
+    - name: GET json keeps the server's key order
+      uri: {url: "{{ u }}/ordered-json", unix_socket: "{{ sock }}"}
+      register: r
+    - debug: {msg: "{{ r.json | to_json }} {{ r.json.keys() | list }} {{ r.json.alpha.b[0].keys() | list }}"}
+
     - name: GET text with return_content
       uri: {url: "{{ u }}/text?a=1&b=2", unix_socket: "{{ sock }}", return_content: true}
       register: r

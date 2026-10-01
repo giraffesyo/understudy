@@ -165,6 +165,12 @@ func (f *filtered) PlayStart(play *playbook.Play) {
 	f.Callback.PlayStart(play)
 }
 
+func (f *filtered) PlaybookStart(path string) { executor.ForwardPlaybookStart(f.Callback, path) }
+
+func (f *filtered) HandlerNotified(handler *playbook.Task, host string) {
+	executor.ForwardHandlerNotified(f.Callback, handler, host)
+}
+
 // fanout sends every event to the stdout callback, then to each enabled
 // aggregate callback in order.
 type fanout struct {
@@ -212,6 +218,18 @@ func (m *fanout) Included(t *playbook.Task, target string, hosts []string, item 
 	m.primary.Included(t, target, hosts, item, hasItem)
 	for _, c := range m.extras {
 		c.Included(t, target, hosts, item, hasItem)
+	}
+}
+func (m *fanout) PlaybookStart(path string) {
+	executor.ForwardPlaybookStart(m.primary, path)
+	for _, c := range m.extras {
+		executor.ForwardPlaybookStart(c, path)
+	}
+}
+func (m *fanout) HandlerNotified(handler *playbook.Task, host string) {
+	executor.ForwardHandlerNotified(m.primary, handler, host)
+	for _, c := range m.extras {
+		executor.ForwardHandlerNotified(c, handler, host)
 	}
 }
 func (m *fanout) Recap(stats map[string]*executor.HostStats, order []string) {

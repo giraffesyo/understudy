@@ -88,6 +88,8 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=shutdown, daemon=True).start()
         elif path == '/json':
             self._json(200, {'name': 'fixture', 'items': [1, 2, 3], 'nested': {'ok': True}})
+        elif path == '/ordered-json':
+            self._send(200, b'{"zeta": 1, "alpha": {"y": 2.0, "b": [{"k2": 1, "k1": null}]}, "mid": 1.5}', 'application/json')
         elif path == '/vnd-json':
             self._send(200, b'{"kind": "vnd"}', 'application/vnd.api+json')
         elif path == '/bad-json':

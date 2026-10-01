@@ -1,0 +1,64 @@
+# The lines ansible-playbook adds at -vv (TestGoldenOutputVV): handler
+# notifications (saved per result, NOTIFIED HANDLER at flush and from a
+# running handler), META results of explicit meta tasks (and their false
+# conditions), plugin redirects at load (tasks, static imports, dynamic
+# includes, with_<lookup>) and at run (three per module execution, one per
+# lookup call), and the password hashing backend.
+- name: verbose lines
+  hosts: nodes
+  gather_facts: false
+  handlers:
+    - name: first
+      debug: msg=first
+      changed_when: true
+      notify: third
+    - name: second
+      debug: msg=second
+    - name: third
+      debug: msg=third
+  tasks:
+    - name: notify two handlers
+      command: "true"
+      notify: [second, first]
+    - name: a loop notifies once per item that ran
+      debug: msg="{{ item }}"
+      loop: [1, 2, 3]
+      when: item != 2
+      changed_when: item == 1
+      notify: second
+    - name: unchanged results notify nothing
+      debug: msg=quiet
+      notify: first
+    - meta: flush_handlers
+    - meta: flush_handlers
+      when: false
+    - meta: noop
+    - meta: clear_facts
+    - meta: end_host
+      when: false
+    - meta: end_play
+      when: false
+    - meta: refresh_inventory
+    - name: a redirected module
+      ini_file: {path: "{{ workdir }}/vv.ini", section: s, option: o, value: v}
+    - name: a redirected module in a loop
+      ansible.builtin.ini_file: {path: "{{ workdir }}/vv.ini", section: s, option: "{{ item }}", value: v}
+      loop: [a, b]
+    - name: a collection name resolves directly
+      community.general.ini_file: {path: "{{ workdir }}/vv.ini", section: s, option: o, value: v}
+    - name: skipped hosts resolve nothing
+      ini_file: {path: "{{ workdir }}/vv.ini", section: s, option: o, value: v}
+      when: inventory_hostname == 'v1'
+    - import_tasks: includes/vv_import.yml
+    - include_tasks: includes/vv_include.yml
+    - name: redirected lookups
+      debug: msg="{{ lookup('flattened', [1, [2]]) }} {{ query('cartesian', [1], [2]) }}"
+    - name: a redirected with_ lookup
+      debug: msg="{{ item }}"
+      with_flattened: [[1, [2]]]
+    - name: password hashing announces its backend
+      debug: msg="{{ 'secret' | password_hash('sha512', 'abcdefghijklmnop') }}"
+      run_once: true
+    - name: notify at the end of the play
+      command: "true"
+      notify: second

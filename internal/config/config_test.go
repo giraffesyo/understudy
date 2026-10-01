@@ -34,7 +34,8 @@ pipelining = True
 		cfg.Timeout != 30*time.Second || cfg.RemoteTmp != "/opt/tmp" {
 		t.Errorf("cfg = %+v", cfg)
 	}
-	if len(cfg.Inventory) != 2 || cfg.Inventory[0] != "./hosts" {
+	// Relative inventory paths resolve against the config file's directory.
+	if len(cfg.Inventory) != 2 || cfg.Inventory[0] != filepath.Join(dir, "hosts") {
 		t.Errorf("inventory = %v", cfg.Inventory)
 	}
 	if cfg.Source != cfgFile {

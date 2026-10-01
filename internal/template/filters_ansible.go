@@ -455,6 +455,15 @@ func registerAnsibleFilters(e *Engine) {
 		} else if n, ok := asInt(args1(args, 2)); ok {
 			rounds = int(n)
 		}
+		if ec.engine.Verbose != nil {
+			// BaseHash announces the backend do_encrypt picked: libxcrypt
+			// where ansible-core finds it, else passlib.
+			backend := "PasslibHash"
+			if cryptGensalt() {
+				backend = "CryptHash"
+			}
+			ec.engine.Verbose(2, fmt.Sprintf("Using %s to hash input with '%s_crypt'", backend, scheme))
+		}
 		salt, err = cryptSalt(salt)
 		if err != nil {
 			return nil, fmt.Errorf("password_hash: %v", err)
@@ -534,15 +543,12 @@ func registerAnsibleFilters(e *Engine) {
 		if !ok {
 			return nil, fmt.Errorf("from_json requires a string")
 		}
-		// Objects keep their key order, as Python's json.loads builds dicts.
-		out, err := omap.UnmarshalJSON([]byte(s))
-		if err != nil {
-			return nil, err
-		}
-		return normalizeJSON(out), nil
+		// Objects keep their key order and numbers their type, as
+		// Python's json.loads builds them.
+		return omap.UnmarshalJSON([]byte(s))
 	}
-	f["to_yaml"] = mkToYAML(2)
-	f["to_nice_yaml"] = mkToYAML(4)
+	f["to_yaml"] = mkToYAML(false)
+	f["to_nice_yaml"] = mkToYAML(true)
 	f["from_yaml"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
 		if !ok {
@@ -1310,21 +1316,138 @@ func listContains(list []any, v any) bool {
 	return false
 }
 
-func mkToYAML(indent int) FilterFunc {
+// mkToYAML builds to_yaml (nice=false) and to_nice_yaml (nice=true):
+// ansible-core's yaml.dump(a, Dumper=AnsibleDumper, allow_unicode=True,
+// default_flow_style=...) with the caller's yaml.dump keyword arguments.
+// to_yaml leaves default_flow_style None (collections of scalars go
+// inline); to_nice_yaml defaults to indent=4 (its first positional
+// argument) and block style.
+func mkToYAML(nice bool) FilterFunc {
 	return func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		n := int64(indent)
-		if v, ok := kwargs["indent"]; ok {
-			if i, ok := asInt(v); ok {
-				n = i
+		opts := yaml.DumpOptions{SortKeys: true, AllowUnicode: true, Normalize: yamlDumpValue}
+		if nice {
+			opts.Indent = 4
+			block := false
+			opts.DefaultFlowStyle = &block
+			if len(args) > 0 {
+				kwargs = withKwarg(kwargs, "indent", args[0])
 			}
 		}
-		data, err := yaml.Marshal(jsonSanitize(in), int(n))
-		if err != nil {
-			return nil, err
+		for _, k := range sortedKeys(kwargs) {
+			v := Undeprecate(kwargs[k])
+			var err error
+			switch k {
+			case "indent":
+				err = yamlIntArg(v, &opts.Indent)
+			case "width":
+				err = yamlIntArg(v, &opts.Width)
+			case "default_flow_style":
+				if v == nil {
+					opts.DefaultFlowStyle = nil
+				} else {
+					b := truthy(v)
+					opts.DefaultFlowStyle = &b
+				}
+			case "sort_keys":
+				opts.SortKeys = truthy(v)
+			case "canonical":
+				opts.Canonical = v != nil && truthy(v)
+			case "explicit_start":
+				opts.ExplicitStart = v != nil && truthy(v)
+			case "explicit_end":
+				opts.ExplicitEnd = v != nil && truthy(v)
+			case "default_style":
+				opts.DefaultStyle = 0
+				if s, ok := asString(v); ok && len(s) == 1 && strings.Contains(`'"|>`, s) {
+					opts.DefaultStyle = s[0]
+				} else if v != nil && truthy(v) {
+					opts.DefaultStyle = 'p' // a style PyYAML emits as plain, but not "no style"
+				}
+			case "line_break":
+				opts.LineBreak = ""
+				if s, ok := asString(v); ok && (s == "\r" || s == "\n" || s == "\r\n") {
+					opts.LineBreak = s
+				}
+			case "encoding":
+				// The dump comes back as bytes, which render as the same text.
+			case "vault_behavior":
+				// Vaulted values arrive decrypted, as the default "decrypt" leaves them.
+				if s, _ := asString(v); v != nil && truthy(v) &&
+					s != "decrypt" && s != "keep_encrypted" && s != "redact" && s != "fail" {
+					return nil, fmt.Errorf("The vault parameter must be one of decrypt, keep_encrypted, redact, fail")
+				}
+			case "allow_unicode":
+				return nil, fmt.Errorf("yaml.dump() got multiple values for keyword argument 'allow_unicode'")
+			default:
+				return nil, fmt.Errorf("dump_all() got an unexpected keyword argument '%s'", k)
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
-		return string(data), nil
+		return yaml.Dump(in, opts)
 	}
 }
+
+// withKwarg returns kwargs with key set (a copy; the caller's map is left
+// alone).
+func withKwarg(kwargs map[string]any, key string, v any) map[string]any {
+	out := make(map[string]any, len(kwargs)+1)
+	for k, val := range kwargs {
+		out[k] = val
+	}
+	out[key] = v
+	return out
+}
+
+// yamlIntArg converts an indent/width argument as the C emitter's int
+// parameters do: None leaves the default, bools and floats truncate to
+// ints, anything else is a TypeError.
+func yamlIntArg(v any, dst *int) error {
+	switch t := v.(type) {
+	case nil:
+		return nil
+	case float64:
+		*dst = int(t)
+		return nil
+	}
+	if n, ok := asInt(v); ok {
+		*dst = int(n)
+		return nil
+	}
+	return fmt.Errorf("an integer is required")
+}
+
+// yamlDumpValue unwraps engine values for yaml.Dump, leaving containers
+// that are shared by reference as they are so the dump aliases them as
+// PyYAML does.
+func yamlDumpValue(v any) any {
+	switch t := v.(type) {
+	case Deprecated:
+		return yamlDumpValue(t.Value)
+	case *yaml.OMap:
+		return t
+	case Mapping:
+		m := yaml.NewOMap()
+		for _, k := range t.Keys() {
+			val, _ := t.GetItem(k)
+			m.Set(k, val)
+		}
+		return m
+	case *rangeValue:
+		repr := fmt.Sprintf("range(%d, %d)", t.start, t.stop)
+		if t.step != 1 {
+			repr = fmt.Sprintf("range(%d, %d, %d)", t.start, t.stop, t.step)
+		}
+		return yamlUnrepresentable{repr}
+	}
+	return v
+}
+
+// yamlUnrepresentable is a value PyYAML's representer rejects.
+type yamlUnrepresentable struct{ repr string }
+
+func (u yamlUnrepresentable) PyRepr() string { return u.repr }
 
 func pathFilter(fn func(string) string) FilterFunc {
 	return func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
@@ -1545,34 +1668,6 @@ func jsonSanitize(v any) any {
 			out[k] = jsonSanitize(val)
 		}
 		return out
-	}
-	return v
-}
-
-// normalizeJSON converts json.Unmarshal output (float64 numbers) to the
-// engine's int64-preferring value model.
-func normalizeJSON(v any) any {
-	switch t := v.(type) {
-	case float64:
-		if t == float64(int64(t)) {
-			return int64(t)
-		}
-		return t
-	case []any:
-		for i, item := range t {
-			t[i] = normalizeJSON(item)
-		}
-		return t
-	case map[string]any:
-		for k, val := range t {
-			t[k] = normalizeJSON(val)
-		}
-		return t
-	case *yaml.OMap:
-		for _, k := range t.Keys() {
-			t.Set(k, normalizeJSON(t.Get(k)))
-		}
-		return t
 	}
 	return v
 }

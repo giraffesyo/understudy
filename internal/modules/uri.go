@@ -15,6 +15,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
 	"github.com/giraffesyo/understudy/internal/modules/fsutil"
+	"github.com/giraffesyo/understudy/internal/omap"
 )
 
 func init() {
@@ -304,7 +305,8 @@ func uriModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		s := uriDecode(content, charset)
 		text = &s
 		if maybeJSON {
-			if js, ok := decodeJSONStrict([]byte(s)); ok {
+			// json.loads: objects keep the server's key order.
+			if js, err := omap.UnmarshalJSON([]byte(s)); err == nil {
 				uresp["json"] = js
 			}
 		}
@@ -376,6 +378,12 @@ func uriNoLog(res *agentproto.Result, secret string) *agentproto.Result {
 			out := make(map[string]any, len(t))
 			for k, e := range t {
 				out[strings.ReplaceAll(k, secret, mask)] = scrub(e)
+			}
+			return out
+		case *omap.OMap:
+			out := omap.NewOMap()
+			for _, k := range t.Keys() {
+				out.Set(strings.ReplaceAll(k, secret, mask), scrub(t.Get(k)))
 			}
 			return out
 		}

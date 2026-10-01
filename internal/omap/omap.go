@@ -10,6 +10,7 @@ import (
 	"io"
 	"maps"
 	"sort"
+	"strings"
 )
 
 // OMap is an insertion-ordered string-keyed map. YAML mappings decode to
@@ -156,11 +157,12 @@ func PlainMap(v any) (map[string]any, bool) {
 	return nil, false
 }
 
-// UnmarshalJSON decodes JSON as encoding/json does into any, except that
-// objects become *OMap in document order (as Python's json.loads builds
-// dicts). A repeated key keeps its first position and last value.
+// UnmarshalJSON decodes JSON as Python's json.loads does: objects become
+// *OMap in document order (a repeated key keeps its first position and
+// last value), integer literals int64 and other numbers float64.
 func UnmarshalJSON(data []byte) (any, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
 	v, err := decodeValue(dec)
 	if err != nil {
 		return nil, err
@@ -204,5 +206,21 @@ func decodeValue(dec *json.Decoder) (any, error) {
 		_, err := dec.Token() // ']'
 		return out, err
 	}
+	if n, ok := tok.(json.Number); ok {
+		return pyNumber(n), nil
+	}
 	return tok, nil
+}
+
+// pyNumber is a JSON number as Python reads it: an integer literal is an
+// int (float64 beyond int64), anything with a fraction or exponent a
+// float.
+func pyNumber(n json.Number) any {
+	if !strings.ContainsAny(string(n), ".eE") {
+		if i, err := n.Int64(); err == nil {
+			return i
+		}
+	}
+	f, _ := n.Float64()
+	return f
 }

@@ -1,0 +1,5 @@
+-i
+solo,
+--list-hosts
+@INV@/playbook.yml
+@INV@/patterns.yml

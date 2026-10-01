@@ -156,6 +156,11 @@ func IntPtr(n int) *int { return &n }
 
 // MarshalJSON flattens Extra alongside the typed fields.
 func (r *Result) MarshalJSON() ([]byte, error) {
+	return json.Marshal(wireFloats(r.fields()))
+}
+
+// fields is the result as one dict: Extra with the typed fields.
+func (r *Result) fields() map[string]any {
 	m := make(map[string]any, len(r.Extra)+8)
 	for k, v := range r.Extra {
 		m[k] = v
@@ -195,7 +200,7 @@ func (r *Result) MarshalJSON() ([]byte, error) {
 	if len(r.AnsibleFacts) > 0 {
 		m["ansible_facts"] = r.AnsibleFacts
 	}
-	return json.Marshal(wireFloats(m))
+	return m
 }
 
 // UnmarshalJSON collects typed fields and stashes the rest in Extra.
@@ -208,7 +213,13 @@ func (r *Result) UnmarshalJSON(data []byte) error {
 	}
 	// Keep integers integers (as the in-process path does): JSON has one
 	// number type, but templates distinguish 8 from 8.0.
-	m = numbers(m).(map[string]any)
+	r.fromFields(numbers(m).(map[string]any))
+	return nil
+}
+
+// fromFields collects typed fields from a result dict and stashes the rest
+// in Extra.
+func (r *Result) fromFields(m map[string]any) {
 	take := func(key string) (any, bool) {
 		v, ok := m[key]
 		if ok {
@@ -286,7 +297,6 @@ func (r *Result) UnmarshalJSON(data []byte) error {
 	if len(m) > 0 {
 		r.Extra = m
 	}
-	return nil
 }
 
 // ToVars converts a result to the map shape a registered variable exposes,

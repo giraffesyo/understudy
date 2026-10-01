@@ -129,10 +129,26 @@ func hasDeprecated(v any) bool {
 // strip, it returns v without the wrappers (copying only the containers
 // that held one); changed reports whether it did.
 func walkDeprecated(v any, visit func(Deprecated), strip bool) (out any, changed bool) {
+	return walkDeprecatedIn(v, visit, strip, nil)
+}
+
+// walkDeprecatedIn is walkDeprecated inside the containers of active (a
+// container met again, in a recursive value, is not walked twice).
+func walkDeprecatedIn(v any, visit func(Deprecated), strip bool, active map[cycleID]bool) (out any, changed bool) {
+	if id, ok := containerOf(v); ok {
+		if active[id] {
+			return v, false
+		}
+		if active == nil {
+			active = map[cycleID]bool{}
+		}
+		active[id] = true
+		defer delete(active, id)
+	}
 	switch t := v.(type) {
 	case Deprecated:
 		visit(t)
-		inner, _ := walkDeprecated(t.Value, visit, strip)
+		inner, _ := walkDeprecatedIn(t.Value, visit, strip, active)
 		if strip {
 			return inner, true
 		}
@@ -140,7 +156,7 @@ func walkDeprecated(v any, visit func(Deprecated), strip bool) (out any, changed
 	case []any:
 		var cp []any
 		for i, item := range t {
-			r, ch := walkDeprecated(item, visit, strip)
+			r, ch := walkDeprecatedIn(item, visit, strip, active)
 			if ch && cp == nil {
 				cp = append([]any(nil), t...)
 			}
@@ -154,7 +170,7 @@ func walkDeprecated(v any, visit func(Deprecated), strip bool) (out any, changed
 	case map[string]any:
 		var cp map[string]any
 		for _, k := range sortedKeys(t) { // sorted: warnings in a stable order
-			r, ch := walkDeprecated(t[k], visit, strip)
+			r, ch := walkDeprecatedIn(t[k], visit, strip, active)
 			if ch && cp == nil {
 				cp = make(map[string]any, len(t))
 				for k2, v2 := range t {
@@ -171,7 +187,7 @@ func walkDeprecated(v any, visit func(Deprecated), strip bool) (out any, changed
 	case *yaml.OMap:
 		var cp *yaml.OMap
 		for _, k := range t.Keys() {
-			r, ch := walkDeprecated(t.Get(k), visit, strip)
+			r, ch := walkDeprecatedIn(t.Get(k), visit, strip, active)
 			if ch && cp == nil {
 				cp = yaml.NewOMap()
 				for _, k2 := range t.Keys() {

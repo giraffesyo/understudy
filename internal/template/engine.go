@@ -82,6 +82,9 @@ type Engine struct {
 	// Deprecation receives each deprecated value a template reads, with
 	// the template's position (nil: no warnings).
 	Deprecation func(pos Position, d Deprecated)
+	// Verbose receives Display.verbose messages plugins print at a given
+	// verbosity (nil: none).
+	Verbose func(verbosity int, msg string)
 }
 
 // New returns an Engine with the built-in filters, tests, and globals.
@@ -99,6 +102,7 @@ func New() *Engine {
 	registerTests(e)
 	registerAnsibleTests(e)
 	registerGlobals(e)
+	guardRecursion(e)
 	return e
 }
 
@@ -133,6 +137,10 @@ func Cause(err error) (msg string, ok bool) {
 			return "Syntax error in template: " + te.Msg, true
 		}
 		return "Error rendering template: " + te.Msg, true
+	}
+	var re *RecursionError
+	if errors.As(err, &re) {
+		return re.Error(), true
 	}
 	return "", false
 }
@@ -277,7 +285,11 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 		if u, ok := v.(Undefined); ok {
 			return nil, u.useError(pos)
 		}
-		return ec.finalize(ec.own.settle(v)), nil
+		v = ec.own.settle(v)
+		if HasCycle(v) {
+			return nil, &RecursionError{In: "template"}
+		}
+		return ec.finalize(v), nil
 	}
 
 	// Otherwise native Jinja concatenates the output chunks: none is
@@ -358,6 +370,9 @@ func (e *Engine) EvalExpression(src string, vars VarGetter, pos Position) (any, 
 	v, ec, err := e.evalExpression(src, vars, pos)
 	if err != nil {
 		return nil, err
+	}
+	if HasCycle(v) {
+		return nil, &RecursionError{In: "expression"}
 	}
 	return ec.finalize(v), nil
 }

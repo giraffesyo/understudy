@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -22,6 +23,17 @@ func TestGoldenOutput(t *testing.T) { testGoldenOutput(t) }
 // result is printed, including values the corpus keeps out of its debug
 // output because they differ on every run (see normalizeVerbose).
 func TestGoldenOutputVerbose(t *testing.T) { testGoldenOutput(t, "-v") }
+
+// TestGoldenOutputVV is TestGoldenOutput at -vv: the version banner, the
+// PLAYBOOK banner and play count, task paths, handler notification and
+// META lines, and skipped stdout callbacks (see normalizeVerbose).
+func TestGoldenOutputVV(t *testing.T) { testGoldenOutput(t, "-vv") }
+
+// TestGoldenOutputVVV is TestGoldenOutput at -vvv, where results dump
+// indented and the local connection announces itself, less the lines that
+// trace ansible-core's own machinery rather than the run (see
+// vvvUnmodeled).
+func TestGoldenOutputVVV(t *testing.T) { testGoldenOutput(t, "-vvv") }
 
 func testGoldenOutput(t *testing.T, flags ...string) {
 	verbose := len(flags) > 0
@@ -44,6 +56,9 @@ func testGoldenOutput(t *testing.T, flags ...string) {
 
 	for _, pb := range corpus {
 		t.Run(filepath.Base(pb), func(t *testing.T) {
+			if reason, ok := vvvSkip[filepath.Base(pb)]; ok && slices.Contains(flags, "-vvv") {
+				t.Skip(reason)
+			}
 			abs, _ := filepath.Abs(pb)
 			base := filepath.Base(pb)
 			var extra []string
@@ -66,6 +81,9 @@ func testGoldenOutput(t *testing.T, flags ...string) {
 				s := normalizeOutput(string(out), work)
 				if verbose {
 					s = normalizeVerbose(s)
+				}
+				if slices.Contains(flags, "-vvv") {
+					s = vvvUnmodeled.ReplaceAllString(s, "")
 				}
 				return s
 			}
@@ -107,6 +125,9 @@ var verboseMasks = []struct {
 	re   *regexp.Regexp
 	repl string
 }{
+	// -vv's version banner describes the installation (ansible-core's
+	// Python, module paths; understudy's build) rather than the run.
+	{regexp.MustCompile(`(?m)^ansible-playbook \[.*\]\n(?:  .*\n)*`), "VERSION\n"},
 	// A transfer's staging dir: <remote_tmp>/ansible-tmp-<time>-<pid>-<random>/.
 	{regexp.MustCompile(`/ansible-tmp-[0-9.]+-[0-9]+-[0-9]+/`), "/ansible-tmp-X/"},
 	// The controller's per-run temp dir, ~/.ansible/tmp/ansible-local-<pid><random>,
@@ -121,6 +142,26 @@ var verboseMasks = []struct {
 	// stat/find timestamps (positional Python floats) and inode numbers.
 	{regexp.MustCompile(`"(atime|mtime|ctime|birthtime)": [0-9]+\.[0-9]+([,}])`), `"$1": T$2`},
 	{regexp.MustCompile(`"inode": [0-9]+`), `"inode": N`},
+}
+
+// vvvUnmodeled are -vvv lines that trace how ansible-core executes rather
+// than what the run does, which understudy does not reproduce: the shell
+// commands and file transfers that build and run AnsiballZ Python payloads
+// (EXEC/PUT, "Using module file"), the variable manager re-reading
+// vars_files on each variable lookup, and the inventory plugins' parse
+// attempts.
+var vvvUnmodeled = regexp.MustCompile("(?m)^(?:<[^>\n]*> (?:EXEC|PUT) .*|Using module file .*|Read `vars_file` .*|" +
+	".* declined parsing .* as it did not pass its verify_file\\(\\) method|Parsed .* inventory source with .* plugin|" +
+	"Skipping due to inventory source not existing or not being readable by the current user)\n")
+
+// vvvSkip are corpus cases whose ansible-playbook run itself changes at
+// -vvv (the default and -v/-vv harnesses still cover them).
+var vvvSkip = map[string]string{
+	// A one-second task timeout races the extra connection work -vvv adds.
+	"task_timeout.yml": "timing-sensitive under -vvv",
+	// At -vvv the module's unknown-state failure surfaces as a result
+	// deserialization error instead of its message.
+	"results_wait_for.yml": "ansible-core's result changes at -vvv",
 }
 
 func normalizeVerbose(s string) string {
