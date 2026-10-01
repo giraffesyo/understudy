@@ -1687,12 +1687,16 @@ func playPos(play *playbook.Play) template.Position {
 // runTaskOnHost is the per-host task pipeline: when -> loop -> template args
 // -> retries -> changed_when/failed_when -> register -> stats.
 func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, playHosts []string) {
-	var override map[string]any
+	// override is the debugger's task_vars (its assignments last across
+	// sessions, as the task_vars dict does); applied is what the task
+	// was last templated with (update_task).
+	var override, applied map[string]any
+	orig := task
 	for {
 		if r.quitRequested() {
 			return
 		}
-		res, items, resolved := r.execTaskOnHost(ctx, play, task, host, playHosts, override)
+		res, items, resolved := r.execTaskOnHost(ctx, play, task, host, playHosts, applied)
 		if !r.needsDebugger(play, resolved, res) {
 			r.record(host, resolved, res, items)
 			return
@@ -1711,7 +1715,7 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 		if len(task.Vars) > 0 {
 			vctx = vctx.WithOverlay(task.Vars)
 		}
-		s := &debugSession{r: r, task: &copied, host: host, vctx: vctx.WithOverlay(override), res: res, play: play, override: override}
+		s := &debugSession{r: r, task: &copied, orig: orig, host: host, vctx: vctx.WithOverlay(override), res: res, play: play, override: override}
 		switch r.runDebugger(s) {
 		case debugContinue:
 			return
@@ -1719,8 +1723,19 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 			r.requestQuit()
 			return
 		case debugRedo:
+			if s.updated != nil && orig.Register != "" {
+				// ansible-core 2.21's update_task loads register as
+				// written, not as the projections the worker expects:
+				// the redo's worker crashes (with a Python traceback)
+				// and the run ends.
+				r.fatal(errors.New("A worker was found in a dead state"))
+				return
+			}
 			r.restoreHost(host, snap, res)
 			task = s.task
+			if s.updated != nil {
+				applied = s.updated
+			}
 			if raw, ok := task.Args["_raw_params"]; ok {
 				// task.args['_raw_params'] is the free-form command.
 				task.FreeForm = template.PyStr(raw)

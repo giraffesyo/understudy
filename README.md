@@ -465,10 +465,15 @@ than silently diverging. Known boundaries:
   `/bin/sh` (`shell`), the shell reorders them as it does under
   ansible-core.
 - **Task debugger**: the `debug` strategy and `debugger` keyword follow
-  ansible-core's debugger session (`p`, `c`, `r`, `q`, `help`); `p`
-  evaluates Jinja expressions rather than Python. Edits to `task_vars` or
-  `task.args` apply to a redo (ansible-core 2.21 ignores them, and its
-  `update_task` crashes); `u` is accepted as a no-op.
+  ansible-core's debugger session (`p`, `c`, `r`, `u`, `q`, `help`):
+  `task.args` edits apply to a redo, `task_vars` edits through
+  `update_task`, which loads the task again templated with them (losing
+  `task.args` edits), as in ansible-core. With no Python, `p` evaluates
+  Jinja expressions and a statement can only be an assignment to (or
+  `del` of) `task.args[...]` or `task_vars[...]`, not arbitrary Python.
+  A redo after `update_task` on a task with `register` ends the run as
+  ansible-core 2.21's crashing worker does (`A worker was found in a dead
+  state`, exit 1), without the Python traceback it prints.
 - **`dig` lookup**: covers A, AAAA, CNAME, MX, NS, TXT, PTR and SRV (not
   yet byte-compared: Ansible's needs dnspython).
 - **Output that depends on the target's Python**: understudy never runs
