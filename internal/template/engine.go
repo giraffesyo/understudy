@@ -347,7 +347,7 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 	if err := e.syntaxError(src, pos, false, true); err != nil {
 		return nil, err
 	}
-	nodes, err := e.parseTemplate(src, pos)
+	nodes, err := e.parseTemplateEscaping(src, pos, true)
 	if err != nil {
 		return nil, err
 	}
@@ -560,7 +560,14 @@ func singleOutput(nodes []tmplNode) (*outputNode, []*setNode) {
 // parseTemplate lexes and parses a template into its node list, including
 // {% if %}, {% for %}, and {% set %} statements.
 func (e *Engine) parseTemplate(src string, pos Position) ([]tmplNode, error) {
-	toks, err := lex(src, e.Opts, pos)
+	return e.parseTemplateEscaping(src, pos, false)
+}
+
+// parseTemplateEscaping is parseTemplate with ansible-core's
+// escape_backslashes when set (a template string: a task argument, a
+// variable's value).
+func (e *Engine) parseTemplateEscaping(src string, pos Position, escapeBackslashes bool) ([]tmplNode, error) {
+	toks, err := lexEscaping(src, e.Opts, pos, escapeBackslashes)
 	if err != nil {
 		return nil, err
 	}

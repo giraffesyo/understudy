@@ -1,6 +1,7 @@
 package template
 
 import (
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -18,10 +19,20 @@ type lexer struct {
 	tplPos Position // document position of the template, for errors
 
 	blockStart, blockEnd, varStart, varEnd, commentStart, commentEnd string
+
+	// escapeBackslashes is ansible-core's escape_backslashes: string
+	// literals in {{ }} keep their backslashes (it doubles them before
+	// Jinja unescapes them); inVar marks the lexer inside {{ }}.
+	escapeBackslashes, inVar bool
 }
 
 func lex(src string, opts Options, tplPos Position) ([]token, error) {
-	l := &lexer{src: src, opts: opts, tplPos: tplPos}
+	return lexEscaping(src, opts, tplPos, false)
+}
+
+// lexEscaping is lex with ansible-core's escape_backslashes when set.
+func lexEscaping(src string, opts Options, tplPos Position, escapeBackslashes bool) ([]token, error) {
+	l := &lexer{src: src, opts: opts, tplPos: tplPos, escapeBackslashes: escapeBackslashes}
 	l.blockStart, l.blockEnd, l.varStart, l.varEnd, l.commentStart, l.commentEnd = opts.delims()
 	if err := l.run(); err != nil {
 		return nil, err
@@ -289,6 +300,8 @@ func (l *lexer) lexTag(closer tokKind) error {
 		closeStr, openStr = l.blockEnd, l.blockStart
 	}
 	depth := 0 // bracket depth: a '}' at depth 0 may be part of '}}'
+	l.inVar = closer == tokVarEnd
+	defer func() { l.inVar = false }()
 	for {
 		l.skipTagWhitespace()
 		if l.pos >= len(l.src) {
@@ -427,39 +440,76 @@ func (l *lexer) lexNumber() {
 
 func (l *lexer) lexString(quote byte) (string, error) {
 	l.pos++ // opening quote
-	var b strings.Builder
+	start := l.pos
 	for l.pos < len(l.src) {
 		c := l.src[l.pos]
 		if c == quote {
+			s := l.src[start:l.pos]
 			l.pos++
-			return b.String(), nil
+			if l.escapeBackslashes && l.inVar {
+				// Doubled, every backslash unescapes to itself: the
+				// literal's text is its value.
+				return s, nil
+			}
+			return pyUnicodeEscape(s), nil
 		}
 		if c == '\\' && l.pos+1 < len(l.src) {
-			// Python-style escapes in both quote styles.
-			switch e := l.src[l.pos+1]; e {
-			case 'n':
-				b.WriteByte('\n')
-			case 't':
-				b.WriteByte('\t')
-			case 'r':
-				b.WriteByte('\r')
-			case '\\':
-				b.WriteByte('\\')
-			case '\'':
-				b.WriteByte('\'')
-			case '"':
-				b.WriteByte('"')
-			default:
-				b.WriteByte('\\')
-				b.WriteByte(e)
-			}
-			l.pos += 2
+			l.pos += 2 // an escaped character never ends the literal
 			continue
 		}
-		b.WriteByte(c)
 		l.pos++
 	}
 	return "", l.errf("unclosed string literal")
+}
+
+// pySimpleEscapes are unicode-escape's one-character escapes.
+var pySimpleEscapes = map[byte]string{'\\': "\\", '\'': "'", '"': "\"", 'a': "\a", 'b': "\b", 'f': "\f",
+	'n': "\n", 'r': "\r", 't': "\t", 'v': "\v", '\n': ""}
+
+// pyUnicodeEscape is a Jinja string literal's value: its text decoded
+// with Python's unicode-escape (an escape it does not know kept as is).
+func pyUnicodeEscape(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != '\\' || i+1 >= len(s) {
+			b.WriteByte(c)
+			continue
+		}
+		e := s[i+1]
+		if r, ok := pySimpleEscapes[e]; ok {
+			b.WriteString(r)
+			i++
+			continue
+		}
+		if n, ok := map[byte]int{'x': 2, 'u': 4, 'U': 8}[e]; ok {
+			if i+2+n <= len(s) {
+				if v, err := strconv.ParseUint(s[i+2:i+2+n], 16, 32); err == nil && v <= unicode.MaxRune {
+					b.WriteRune(rune(v))
+					i += 1 + n
+					continue
+				}
+			}
+			b.WriteByte(c)
+			continue
+		}
+		if e >= '0' && e <= '7' {
+			j := i + 1
+			v := 0
+			for j < len(s) && j < i+4 && s[j] >= '0' && s[j] <= '7' {
+				v = v*8 + int(s[j]-'0')
+				j++
+			}
+			b.WriteRune(rune(v))
+			i = j - 1
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 // lexOperator matches the longest operator at the cursor.
