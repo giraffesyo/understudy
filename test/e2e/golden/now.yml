@@ -1,0 +1,22 @@
+---
+# now(utc=False, fmt=None): a naive datetime of the local or UTC wall
+# clock, or that time formatted with strftime when fmt is set. Only
+# time-independent properties are shown.
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg:
+          - "{{ now() | type_debug }}"
+          - "{{ now(true) | type_debug }}"
+          - "{{ now(utc=true).tzinfo }}"
+          - "{{ now(fmt='%Y') | length }}"
+          - "{{ now(true, '%Y-%m-%d') is match('^\\d{4}-\\d{2}-\\d{2}$') }}"
+          - "{{ now(fmt='') | type_debug }}"
+          - "{{ now().year >= 2026 }}"
+    - debug:
+        msg: "{{ now(1, 2, 3) }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ now(zone='UTC') }}"
+      ignore_errors: true

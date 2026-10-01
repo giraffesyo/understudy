@@ -3,6 +3,7 @@ package template
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -144,7 +145,45 @@ func registerGlobals(e *Engine) {
 	e.Globals["query"] = mkLookup(true)
 	e.Globals["q"] = mkLookup(true)
 
+	e.Globals["now"] = globalFunc(globalNow)
 	// The omit sentinel is exposed as a global so it works even before the
 	// vars layer injects it per-run.
 	e.Globals["omit"] = Omit{}
+}
+
+// globalNow is ansible-core's now(utc=False, fmt=None): a naive datetime
+// of the local (or UTC) wall clock, or that time formatted when fmt is set.
+func globalNow(ec *EvalCtx, args []any, kwargs map[string]any) (any, error) {
+	params := []string{"utc", "fmt"}
+	if len(args) > len(params) {
+		return nil, fmt.Errorf("_now() takes from 0 to 2 positional arguments but %d were given", len(args))
+	}
+	vals := map[string]any{}
+	for i, a := range args {
+		vals[params[i]] = a
+	}
+	for k, v := range kwargs {
+		if k != "utc" && k != "fmt" {
+			return nil, fmt.Errorf("_now() got an unexpected keyword argument '%s'", k)
+		}
+		if _, dup := vals[k]; dup {
+			return nil, fmt.Errorf("_now() got multiple values for argument '%s'", k)
+		}
+		vals[k] = v
+	}
+	now := time.Now()
+	if truthy(vals["utc"]) {
+		now = now.UTC()
+	}
+	// A naive datetime keeps its wall clock, to the microsecond.
+	wall := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(),
+		now.Second(), now.Nanosecond()/1000*1000, time.UTC)
+	if f := vals["fmt"]; f != nil && truthy(f) {
+		s, ok := asString(Undeprecate(f))
+		if !ok {
+			return nil, fmt.Errorf("strftime() argument 1 must be str, not %s", pyClassName(f, false))
+		}
+		return strftimeTime(s, wall, nil, true), nil
+	}
+	return pyDatetime{t: wall}, nil
 }
