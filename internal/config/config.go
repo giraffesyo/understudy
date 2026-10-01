@@ -320,7 +320,29 @@ func splitPathspec(s string) []string {
 	return out
 }
 
+// applyEnvOverrides applies the environment variables understudy knows.
+// A variable that is set wins over the file even when empty, as
+// ConfigManager takes it: an empty one is False for a boolean setting,
+// the empty string for remote_user, and the default (not the file's
+// value) for an integer setting, whose type rejects it.
 func applyEnvOverrides(cfg *Config) {
+	def := Defaults()
+	envBool := func(name string, dst *bool) {
+		if v, ok := os.LookupEnv(name); ok {
+			*dst = pyBoolean(v)
+		}
+	}
+	envInt := func(name string, set func(int), dflt int) {
+		v, ok := os.LookupEnv(name)
+		if !ok {
+			return
+		}
+		if n, ok := pyDecimalInt(v); ok {
+			set(n)
+		} else if v == "" {
+			set(dflt)
+		}
+	}
 	if v := os.Getenv("ANSIBLE_ROLES_PATH"); v != "" {
 		cfg.RolesPath = nil
 		for _, p := range splitPathspec(v) {
@@ -333,7 +355,7 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ANSIBLE_INVENTORY"); v != "" {
 		cfg.Inventory = splitPathList(v)
 	}
-	if v := os.Getenv("ANSIBLE_REMOTE_USER"); v != "" {
+	if v, ok := os.LookupEnv("ANSIBLE_REMOTE_USER"); ok {
 		cfg.RemoteUser = v
 	}
 	for env, dst := range map[string]*string{
@@ -343,32 +365,18 @@ func applyEnvOverrides(cfg *Config) {
 			*dst = v
 		}
 	}
-	if v := os.Getenv("ANSIBLE_VERBOSITY"); v != "" {
-		if n, ok := pyDecimalInt(v); ok {
-			cfg.Verbosity = n
-		}
-	}
-	if v := os.Getenv("ANSIBLE_POLL_INTERVAL"); v != "" {
-		if n, ok := pyDecimalInt(v); ok {
-			cfg.PollInterval = n
-		}
-	}
-	if v := os.Getenv("ANSIBLE_FORKS"); v != "" {
-		if n, ok := pyDecimalInt(v); ok { // the command line rejects one below 1
-			cfg.Forks = n
-		}
-	}
-	if v := os.Getenv("ANSIBLE_HOST_KEY_CHECKING"); v != "" {
-		cfg.HostKeyChecking = pyBoolean(v)
-	}
+	envInt("ANSIBLE_VERBOSITY", func(n int) { cfg.Verbosity = n }, def.Verbosity)
+	envInt("ANSIBLE_POLL_INTERVAL", func(n int) { cfg.PollInterval = n }, def.PollInterval)
+	envInt("ANSIBLE_FORKS", func(n int) { cfg.Forks = n }, def.Forks) // the command line rejects one below 1
+	envBool("ANSIBLE_HOST_KEY_CHECKING", &cfg.HostKeyChecking)
 	if v := os.Getenv("ANSIBLE_PRIVATE_KEY_FILE"); v != "" {
 		cfg.PrivateKeyFile = expandUser(v)
 	}
-	if v := os.Getenv("ANSIBLE_TIMEOUT"); v != "" {
-		if n, ok := pyDecimalInt(v); ok && n > 0 {
+	envInt("ANSIBLE_TIMEOUT", func(n int) {
+		if n > 0 {
 			cfg.Timeout = time.Duration(n) * time.Second
 		}
-	}
+	}, int(def.Timeout/time.Second))
 	if v := os.Getenv("ANSIBLE_REMOTE_TMP"); v != "" {
 		cfg.RemoteTmp = v
 	}
@@ -381,9 +389,7 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ANSIBLE_COMMON_REMOTE_GROUP"); v != "" {
 		cfg.CommonRemoteGroup = v
 	}
-	if v := os.Getenv("ANSIBLE_SHELL_ALLOW_WORLD_READABLE_TEMP"); v != "" {
-		cfg.WorldReadableTemp = pyBoolean(v)
-	}
+	envBool("ANSIBLE_SHELL_ALLOW_WORLD_READABLE_TEMP", &cfg.WorldReadableTemp)
 	if v := os.Getenv("ANSIBLE_CALLBACK_PLUGINS"); v != "" {
 		cfg.CallbackPlugins = splitColonList(v)
 	}
@@ -395,44 +401,25 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.CallbacksEnabled = splitList(v)
 		}
 	}
-	if v := os.Getenv("ANSIBLE_DISPLAY_OK_HOSTS"); v != "" {
-		cfg.DisplayOkHosts = pyBoolean(v)
-	}
+	envBool("ANSIBLE_DISPLAY_OK_HOSTS", &cfg.DisplayOkHosts)
 	if v := os.Getenv("ANSIBLE_DUPLICATE_YAML_DICT_KEY"); v != "" {
 		cfg.DuplicateDictKey = strings.ToLower(strings.TrimSpace(v))
 	}
-	if v := os.Getenv("ANSIBLE_DEPRECATION_WARNINGS"); v != "" {
-		cfg.DeprecationWarnings = pyBoolean(v)
-	}
-	if os.Getenv("ANSIBLE_INJECT_FACT_VARS") != "" {
+	envBool("ANSIBLE_DEPRECATION_WARNINGS", &cfg.DeprecationWarnings)
+	if _, ok := os.LookupEnv("ANSIBLE_INJECT_FACT_VARS"); ok {
 		cfg.InjectFactsSet = true
 	}
-	if v := os.Getenv("ANSIBLE_ALLOW_BROKEN_CONDITIONALS"); v != "" {
-		cfg.AllowBrokenConditionals = pyBoolean(v)
-	}
-	if v := os.Getenv("ANSIBLE_TASK_TIMEOUT"); v != "" {
-		if n, ok := pyDecimalInt(v); ok {
-			cfg.TaskTimeout = n
-		}
-	}
-	if v := os.Getenv("ANSIBLE_DISPLAY_SKIPPED_HOSTS"); v != "" {
-		cfg.DisplaySkippedHosts = pyBoolean(v)
-	}
-	if v := os.Getenv("ANSIBLE_SHOW_CUSTOM_STATS"); v != "" {
-		cfg.ShowCustomStats = pyBoolean(v)
-	}
-	if v := os.Getenv("ANSIBLE_DEPRECATION_WARNINGS"); v != "" {
-		cfg.DeprecationWarnings = pyBoolean(v)
-	}
+	envBool("ANSIBLE_ALLOW_BROKEN_CONDITIONALS", &cfg.AllowBrokenConditionals)
+	envInt("ANSIBLE_TASK_TIMEOUT", func(n int) { cfg.TaskTimeout = n }, def.TaskTimeout)
+	envBool("ANSIBLE_DISPLAY_SKIPPED_HOSTS", &cfg.DisplaySkippedHosts)
+	envBool("ANSIBLE_SHOW_CUSTOM_STATS", &cfg.ShowCustomStats)
 	for env, dst := range map[string]*bool{
 		"ANSIBLE_LOCALHOST_WARNING":                &cfg.LocalhostWarning,
 		"ANSIBLE_INVENTORY_UNPARSED_WARNING":       &cfg.InventoryUnparsedWarning,
 		"ANSIBLE_INVENTORY_UNPARSED_FAILED":        &cfg.InventoryUnparsedIsFailed,
 		"ANSIBLE_INVENTORY_ANY_UNPARSED_IS_FAILED": &cfg.InventoryAnyUnparsedIsFailed,
 	} {
-		if v := os.Getenv(env); v != "" {
-			*dst = pyBoolean(v)
-		}
+		envBool(env, dst)
 	}
 	if v := os.Getenv("ANSIBLE_INVENTORY_ENABLED"); v != "" {
 		cfg.InventoryEnabled = splitList(v)

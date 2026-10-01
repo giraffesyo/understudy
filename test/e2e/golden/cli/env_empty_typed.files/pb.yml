@@ -1,0 +1,10 @@
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: settings an empty environment variable resets
+      debug:
+        msg: "forks={{ ansible_forks }} timeout={{ ansible_timeout }}"
+    - name: hidden, display_skipped_hosts is False
+      debug:
+        msg: never
+      when: false

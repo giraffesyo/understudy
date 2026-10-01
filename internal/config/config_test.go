@@ -26,6 +26,7 @@ pipelining = True
 
 	t.Setenv("ANSIBLE_CONFIG", cfgFile)
 	t.Setenv("ANSIBLE_FORKS", "")
+	os.Unsetenv("ANSIBLE_FORKS")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +35,20 @@ pipelining = True
 		cfg.Timeout != 30*time.Second || cfg.RemoteTmp != "/opt/tmp" {
 		t.Errorf("cfg = %+v", cfg)
 	}
+	// A set but empty variable wins over the file: an integer setting
+	// takes its default, a boolean is False.
+	t.Setenv("ANSIBLE_FORKS", "")
+	t.Setenv("ANSIBLE_TIMEOUT", "")
+	t.Setenv("ANSIBLE_DISPLAY_OK_HOSTS", "")
+	if cfg, err = Load(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Forks != 5 || cfg.Timeout != 10*time.Second || cfg.DisplayOkHosts {
+		t.Errorf("empty environment: forks %d, timeout %v, display_ok_hosts %v", cfg.Forks, cfg.Timeout, cfg.DisplayOkHosts)
+	}
+	os.Unsetenv("ANSIBLE_FORKS")
+	os.Unsetenv("ANSIBLE_TIMEOUT")
+	os.Unsetenv("ANSIBLE_DISPLAY_OK_HOSTS")
 	// Relative inventory paths resolve against the config file's directory.
 	if len(cfg.Inventory) != 2 || cfg.Inventory[0] != filepath.Join(dir, "hosts") {
 		t.Errorf("inventory = %v", cfg.Inventory)
