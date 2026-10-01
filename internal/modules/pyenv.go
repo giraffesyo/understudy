@@ -192,33 +192,50 @@ func pySitePackages(env *RunEnv) []string {
 		return []string{"/usr/local/lib/python3/dist-packages", "/usr/lib/python3/dist-packages"}
 	}
 	lib := "python" + v
+	// site.py: a virtual environment (pyvenv.cfg beside the interpreter
+	// as named, or in its parent) has only its own site-packages unless
+	// it includes the system's (and then the user site too).
 	var dirs []string
-	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(home, ".local", "lib", lib, "site-packages"))
+	system := func(prefixes ...string) {
+		if home, err := os.UserHomeDir(); err == nil {
+			dirs = append(dirs, filepath.Join(home, ".local", "lib", lib, "site-packages"))
+		}
+		for _, prefix := range prefixes {
+			dirs = append(dirs, filepath.Join(prefix, "lib", lib, "site-packages"))
+		}
+		for _, prefix := range []string{"/usr/local/lib", "/usr/local/lib64", "/usr/lib", "/usr/lib64"} {
+			dirs = append(dirs, prefix+"/"+lib+"/site-packages", prefix+"/"+lib+"/dist-packages")
+		}
+		dirs = append(dirs, "/usr/local/lib/python3/dist-packages", "/usr/lib/python3/dist-packages")
 	}
-	for _, p := range t.paths {
-		prefix := filepath.Dir(filepath.Dir(p))
-		dirs = append(dirs, filepath.Join(prefix, "lib", lib, "site-packages"))
-		if cfg, err := os.ReadFile(filepath.Join(prefix, "pyvenv.cfg")); err == nil {
-			home, system := "", false
-			for _, line := range strings.Split(string(cfg), "\n") {
-				k, val, _ := strings.Cut(line, "=")
-				switch strings.TrimSpace(k) {
-				case "home":
-					home = strings.TrimSpace(val)
-				case "include-system-site-packages":
-					system = strings.EqualFold(strings.TrimSpace(val), "true")
-				}
-			}
-			if system && home != "" {
-				dirs = append(dirs, filepath.Join(filepath.Dir(home), "lib", lib, "site-packages"))
+	named := t.paths[0]
+	venv := filepath.Dir(filepath.Dir(named))
+	cfg, err := os.ReadFile(filepath.Join(filepath.Dir(named), "pyvenv.cfg"))
+	if err != nil {
+		cfg, err = os.ReadFile(filepath.Join(venv, "pyvenv.cfg"))
+	}
+	if err == nil {
+		dirs = append(dirs, filepath.Join(venv, "lib", lib, "site-packages"))
+		home, includeSystem := "", false
+		for _, line := range strings.Split(string(cfg), "\n") {
+			k, val, _ := strings.Cut(line, "=")
+			switch strings.TrimSpace(k) {
+			case "home":
+				home = strings.TrimSpace(val)
+			case "include-system-site-packages":
+				includeSystem = strings.EqualFold(strings.TrimSpace(val), "true")
 			}
 		}
+		if includeSystem && home != "" {
+			system(filepath.Dir(home))
+		}
+	} else {
+		var prefixes []string
+		for _, p := range t.paths {
+			prefixes = append(prefixes, filepath.Dir(filepath.Dir(p)))
+		}
+		system(prefixes...)
 	}
-	for _, prefix := range []string{"/usr/local/lib", "/usr/local/lib64", "/usr/lib", "/usr/lib64"} {
-		dirs = append(dirs, prefix+"/"+lib+"/site-packages", prefix+"/"+lib+"/dist-packages")
-	}
-	dirs = append(dirs, "/usr/local/lib/python3/dist-packages", "/usr/lib/python3/dist-packages")
 
 	var out []string
 	seen := map[string]bool{}
