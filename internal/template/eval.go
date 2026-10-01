@@ -179,6 +179,11 @@ func (ec *EvalCtx) getAttr(x any, name string, off int) (any, error) {
 			return ec.ownedChild(x, name, ec.access(v)), nil
 		}
 	}
+	if o, ok := x.(pyObject); ok {
+		if v, ok := o.PyAttr(name); ok {
+			return v, nil
+		}
+	}
 	if m, ok := lookupMethod(x, name); ok {
 		return m, nil
 	}
@@ -602,8 +607,15 @@ func (ec *EvalCtx) pluginError(kind, name string, err error) error {
 	}
 	te := &TemplateError{Pos: ec.pos, Msg: msg, Src: ec.src, Plugin: true}
 	var he *handlingError
+	var oe *objError
 	if errors.As(err, &he) {
 		te.pluginHead, te.pluginDetail = head, detail
+	} else if errors.As(err, &oe) {
+		h := head
+		for _, p := range oe.pre {
+			h = strings.TrimRight(h, ". ") + ": " + p
+		}
+		te.pluginHead, te.pluginDetail, te.pluginValue = h, oe.msg, oe.value
 	}
 	return te
 }
@@ -614,6 +626,15 @@ var undefinedTolerantTests = map[string]bool{
 }
 
 func (ec *EvalCtx) evalTest(t *testExpr) (any, error) {
+	if t.name == "vault_encrypted" && builtinPlugin(t.full) && len(t.args) == 0 && len(t.kwargs) == 0 {
+		// A !vault variable is vault-encrypted, whether or not it would
+		// decrypt.
+		if raw, ok := ec.rawValue(t.x); ok {
+			if _, vaulted := raw.(yaml.VaultedString); vaulted {
+				return !t.negated, nil
+			}
+		}
+	}
 	in, err := ec.eval(t.x)
 	if err != nil {
 		return nil, err

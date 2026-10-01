@@ -508,6 +508,22 @@ func (c *Context) GetTagged(name string) (any, bool) {
 	return v, true
 }
 
+// RawVar implements template.RawVarGetter: a variable's value as
+// defined, before templating (a !vault value still encrypted).
+func (c *Context) RawVar(name string) (any, bool) {
+	if v, ok := c.magic[name]; ok {
+		return v, true
+	}
+	raw, ok := c.store.extraVar(name)
+	if !ok {
+		raw, ok = c.overlay[name]
+	}
+	if !ok {
+		raw, ok = c.flat[name]
+	}
+	return raw, ok
+}
+
 // CycleError reports a self-referencing variable.
 type CycleError struct{ Name string }
 

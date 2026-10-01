@@ -161,35 +161,35 @@ func registerFilters(e *Engine) {
 		if err != nil {
 			return nil, err
 		}
-		return strings.ToUpper(s), nil
+		return markupKeeping(in, strings.ToUpper(s)), nil
 	}
 	f["lower"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, err := softStr(in)
 		if err != nil {
 			return nil, err
 		}
-		return strings.ToLower(s), nil
+		return markupKeeping(in, strings.ToLower(s)), nil
 	}
 	f["capitalize"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, err := softStr(in)
 		if err != nil {
 			return nil, err
 		}
-		return pyCapitalize(s), nil
+		return markupKeeping(in, pyCapitalize(s)), nil
 	}
 	f["title"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, err := softStr(in)
 		if err != nil {
 			return nil, err
 		}
-		return pyTitle(s), nil
+		return markupKeeping(in, pyTitle(s)), nil
 	}
 	f["trim"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, err := softStr(in)
 		if err != nil {
 			return nil, err
 		}
-		return strings.TrimSpace(s), nil
+		return markupKeeping(in, strings.TrimSpace(s)), nil
 	}
 
 	f["replace"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
@@ -589,6 +589,12 @@ func pyTypeName(v any) string {
 		return "str"
 	case yaml.UnsafeString:
 		return "AnsibleUnsafeText"
+	case Markup:
+		return "Markup"
+	case pyDatetime:
+		return "datetime"
+	case pyTimedelta:
+		return "timedelta"
 	case []any:
 		return "list"
 	case map[string]any, Mapping:

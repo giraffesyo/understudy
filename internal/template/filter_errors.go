@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"strings"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -87,6 +88,12 @@ func pyClassName(v any, fromVar bool) string {
 		return "list"
 	case Undefined:
 		return "AnsibleUndefined"
+	case Markup:
+		return "Markup"
+	case pyDatetime:
+		return "datetime.datetime"
+	case pyTimedelta:
+		return "datetime.timedelta"
 	}
 	if _, ok := v.(Mapping); ok || isMap(v) {
 		if fromVar {
@@ -219,18 +226,84 @@ func whileHandling(format string, args ...any) error {
 }
 
 // SplitCause reports a plugin failure whose exception was raised while
-// handling another: the plugin's own message ("The filter plugin
-// 'ansible.builtin.items2dict' failed.") and its cause's, which
-// ansible-core's error display shows as separate events.
-func SplitCause(err error) (head, detail string, ok bool) {
+// handling another, or is about a value: the plugin's own message ("The
+// filter plugin 'ansible.builtin.items2dict' failed.") and its cause's,
+// which ansible-core's error display shows as separate events, the cause
+// with the value it is about when it has one.
+func SplitCause(err error) (head, detail, value string, ok bool) {
 	var te *TemplateError
 	if errors.As(err, &te) && te.Plugin && te.pluginHead != "" {
-		return te.pluginHead, te.pluginDetail, true
+		return te.pluginHead, te.pluginDetail, te.pluginValue, true
 	}
-	return "", "", false
+	return "", "", "", false
 }
 
 // errNotIterable is Python's TypeError iterating a non-iterable.
 func errNotIterable(v any, fromVar bool) error {
 	return fmt.Errorf("'%s' object is not iterable", pyClassName(v, fromVar))
+}
+
+// pyRaiseFrom is `raise Error(msg) from cause` for a cause that is a plain
+// Python exception: ansible-core words the two as one message.
+func pyRaiseFrom(msg, cause string) error {
+	return errors.New(strings.TrimRight(msg, ". ") + ": " + cause)
+}
+
+// objError is an AnsibleError raised about a value (obj=): ansible-core
+// shows it apart from the plugin's failure, at the value's origin
+// (unknown here) with the value itself. pre are the messages of the
+// errors raised from it, outermost first, which it collapses into.
+type objError struct {
+	pre        []string
+	msg, value string
+}
+
+func (e *objError) Error() string {
+	out := ""
+	for _, p := range append(append([]string{}, e.pre...), e.msg) {
+		if out != "" {
+			out = strings.TrimRight(out, ". ") + ": "
+		}
+		out += p
+	}
+	return out
+}
+
+// pyShorten is textwrap.shorten(s, width): whitespace collapsed, and
+// when still too wide, the words that fit followed by " [...]".
+func pyShorten(s string, width int) string {
+	words := strings.Fields(s)
+	text := strings.Join(words, " ")
+	if len([]rune(text)) <= width {
+		return text
+	}
+	const placeholder = " [...]"
+	var line []string
+	n := 0
+	for _, w := range words {
+		l := len([]rune(w))
+		if len(line) > 0 {
+			l++
+		}
+		if n+l > width {
+			if len(line) == 0 {
+				line = append(line, string([]rune(w)[:width]))
+				n = width
+			}
+			break
+		}
+		line = append(line, w)
+		n += l
+	}
+	for len(line) > 0 {
+		if n+len(placeholder) <= width {
+			return strings.Join(line, " ") + placeholder
+		}
+		n -= len([]rune(line[len(line)-1]))
+		if len(line) > 1 {
+			n--
+		}
+		line = line[:len(line)-1]
+	}
+	return strings.TrimLeft(placeholder, " ")
 }

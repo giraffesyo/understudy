@@ -176,3 +176,41 @@ func trimAll(lines []string) []string {
 	}
 	return out
 }
+
+// EncryptWith is VaultLib.encrypt with a given salt (a random 32 bytes
+// when empty) and vault id: the 1.2 format names the id, unless it is
+// empty or "default".
+func EncryptWith(plaintext []byte, password string, salt []byte, vaultID string) (string, error) {
+	if len(salt) == 0 {
+		salt = make([]byte, saltLen)
+		if _, err := rand.Read(salt); err != nil {
+			return "", err
+		}
+	}
+	cipherKey, hmacKey, iv, err := deriveKeys([]byte(password), salt)
+	if err != nil {
+		return "", err
+	}
+	padded := pkcs7Pad(append([]byte(nil), plaintext...), aes.BlockSize)
+	block, err := aes.NewCipher(cipherKey)
+	if err != nil {
+		return "", err
+	}
+	ciphertext := make([]byte, len(padded))
+	cipher.NewCTR(block, iv).XORKeyStream(ciphertext, padded)
+	mac := hmac.New(sha256.New, hmacKey)
+	mac.Write(ciphertext)
+	body := hex.EncodeToString(salt) + "\n" + hex.EncodeToString(mac.Sum(nil)) + "\n" + hex.EncodeToString(ciphertext)
+	bodyHex := hex.EncodeToString([]byte(body))
+	var b strings.Builder
+	if vaultID != "" && vaultID != "default" {
+		fmt.Fprintf(&b, "%s;1.2;%s;%s\n", header, cipherName, vaultID)
+	} else {
+		fmt.Fprintf(&b, "%s;1.1;%s\n", header, cipherName)
+	}
+	for i := 0; i < len(bodyHex); i += 80 {
+		b.WriteString(bodyHex[i:min(i+80, len(bodyHex))])
+		b.WriteByte('\n')
+	}
+	return b.String(), nil
+}
