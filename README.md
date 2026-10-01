@@ -256,7 +256,14 @@ loops and `namespace()`, in-place list/dict methods (`append`, `update`, ...), ~
 filters (`default`, `combine`, `selectattr`, `regex_replace`, `to_json`,
 `map`, `ternary`, `hash`, …), ~50 tests (`version`, `match`, task-result
 tests, …), chainable strict `Undefined`, and the native-types rule for
-`when:`/`loop:`.
+`when:`/`loop:`. Templates compile through a port of Jinja2's lexer and
+parser, so a broken template fails with Jinja's own `TemplateSyntaxError`
+(`expected token 'end of print statement', got 'integer'`, `Encountered
+unknown tag 'do'.`, line numbers in template files); filter and test
+failures read as ansible-core reports the Python exception its plugin
+raised (`The filter plugin 'ansible.builtin.combine' failed: ...`), and
+conditionals, loops and template files fail with ansible-core's error
+chains. Ints are arbitrary precision, as Python's are.
 
 **Modules** — ~48 target-side plus control-side actions, covering the common
 system-administration surface:
@@ -464,6 +471,17 @@ than silently diverging. Known boundaries:
   its `timeout` has the process its module started killed (ansible-core
   leaves it running, even after the playbook exits) — output is identical,
   only the orphaned work is stopped.
+- **Template error details**: filter errors name the Python class of
+  their values as ansible-core's plugins see them — lazy containers and
+  tagged scalars for variables, plain types for values computed in the
+  template — judged from the filter's argument expressions (a registered
+  result's scalars are named as tagged too). `to_json` of a value that
+  contains itself fails in CPython with a C-stack message that depends on
+  the platform (`Stack overflow (used 16354 kB)`); understudy reports
+  `maximum recursion depth exceeded`. A filter called with too many
+  positional arguments is not rejected with Python's `takes N positional
+  arguments` error, and a `when:` whose result is not a boolean is taken
+  for its truthiness rather than failing as a broken conditional.
 
 ## Building & testing
 
