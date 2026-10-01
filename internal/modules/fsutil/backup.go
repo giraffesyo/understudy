@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/giraffesyo/understudy/internal/agentproto"
 )
 
 // Backup copies path to Ansible's backup name — "<path>.<pid>.<YYYY-mm-dd@
@@ -67,7 +69,7 @@ func Validate(cmd, dest string, content []byte) error {
 	if err := c.Run(); err != nil {
 		rc := -1
 		if ee, ok := err.(*exec.ExitError); ok {
-			rc = ee.ExitCode()
+			rc = agentproto.ExitCode(ee)
 		}
 		return &ValidateError{Cmd: full, RC: rc, Stdout: stdout.String(), Stderr: stderr.String()}
 	}

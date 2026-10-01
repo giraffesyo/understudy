@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/giraffesyo/understudy/internal/agentproto"
 )
 
 // BecomeError is a privilege escalation failure on the local connection,
@@ -240,7 +242,7 @@ func execLocalSudo(ctx context.Context, cmd string, opts ExecOptions) (ExecResul
 		if !ok {
 			return res, fmt.Errorf("local exec: %w", werr)
 		}
-		res.RC = ee.ExitCode()
+		res.RC = agentproto.ExitCode(ee)
 	}
 	return res, ctx.Err()
 }

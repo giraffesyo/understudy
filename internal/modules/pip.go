@@ -367,7 +367,7 @@ func runCapture(env *RunEnv, dir string, argv ...string) (string, string, int) {
 	c.Stdout, c.Stderr = &stdout, &stderr
 	if err := c.Run(); err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
-			return stdout.String(), stderr.String(), ee.ExitCode()
+			return stdout.String(), stderr.String(), agentproto.ExitCode(ee)
 		}
 		return stdout.String(), err.Error(), 1
 	}
