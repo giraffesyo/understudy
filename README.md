@@ -592,24 +592,42 @@ than silently diverging. Known boundaries:
   through passlib (no libxcrypt: the salt's unused bits repaired,
   passlib's validation and errors) or libxcrypt's `crypt_gensalt` (the
   salt's first 16 bytes encoded). `escape`, `safe`, `forceescape` and
-  `tojson` return markup, which stays markup through the case filters and
-  `+` (escaping the other operand) and becomes a str, with ansible-core's
-  warning, in a template's result; `to_datetime` returns a datetime
+  `tojson` return markup, which stays markup through the case filters,
+  `+`, `%`, `format`, `str.format`, slicing, indexing, repetition and
+  str's methods (escaping their text arguments), and in a variable's
+  value, and becomes a str, with ansible-core's warning, in a template's
+  result; `%` and `str.format` format as Python's printf-style and
+  format-spec mini-language do. `to_datetime` returns a datetime
   (attributes, `strftime`/`isoformat`/`timestamp`/`weekday`, subtraction
-  to a timedelta, comparison; stored as itself, shown as its
-  `isoformat()`), and a timedelta in a template's result fails as
-  unsupported for variable storage. String literals in `{{ }}` keep their
-  backslashes, as ansible-core's `escape_backslashes` has them. Not
-  modeled: markup through `format`, slicing and `%`; `rekey_on_member` on
-  a member that is not a string keys by its str() (dict keys are
-  strings); `fileglob` lists a directory in its own order, as Python's
-  `os.scandir` does; a plugin error about a value (`rekey_on_member`'s
-  missing key) shows the value with an unknown origin where ansible-core
-  knows a variable's; comparing or subtracting a variable's datetime
-  names `datetime.datetime` where ansible-core names
-  `_AnsibleTaggedDateTime`; `attr` of a method and a bare method in a
-  template's result render (an address) rather than failing as
-  unsupported for variable storage.
+  to a timedelta, comparison; stored as itself, as
+  `_AnsibleTaggedDateTime`, shown as its `isoformat()`), and a timedelta
+  in a template's result fails as unsupported for variable storage.
+  `rekey_on_member` keys by the member's value (an int or bool key stays
+  itself through `keys()`, indexing, `dict2items`, repr, YAML and
+  `set_fact`); a plugin error about a value shows where the value was
+  written, through the variables passing it along. String literals in
+  `{{ }}` keep their backslashes, as ansible-core's `escape_backslashes`
+  has them. Not modeled: `fileglob` lists a directory in its own order,
+  as Python's `os.scandir` does.
+- **Lazy containers**: a variable's list or dict templates its items
+  when the variable is read, but an item that fails (an undefined value,
+  a filter's or Jinja's error) is kept as ansible-core's marker, raising
+  only where the item is used: compared with a value (item by item, as
+  Python compares), read by a plugin (which then gives the marker as its
+  result) or rendered; its length, keys, other items and comparisons that
+  never reach it work. Not modeled: an item that reads its own container
+  (`d: {a: "{{ d.b }}", b: 1}`) fails as a recursive variable, where
+  ansible-core templates only the item read.
+- **Template trust**: text a template computes is not trusted as a
+  template or expression; text passed through variables unchanged keeps
+  the trust of where it was written (a playbook, role, inventory or vars
+  file, a `set_fact` argument, a loop's list, the `vars` lookup), and a
+  gathered fact is untrusted. A conditional whose template yields
+  untrusted text, `assert`'s `that` and `debug`'s `var` fail as
+  ansible-core's trust check does, where that text came from. A
+  registered result is taken as trusted (ansible-core trusts the
+  playbook text an action such as `debug` passes back, not a module's
+  output).
 - **Broken conditionals**: a conditional whose result is not a boolean
   fails as ansible-core's broken conditional (or, with
   `ALLOW_BROKEN_CONDITIONALS`, warns), naming where the result's value
@@ -622,7 +640,12 @@ than silently diverging. Known boundaries:
   `include_vars`, `set_fact` and registered values, extra vars and the
   run's magic variables, no play or role variables), listed in the order
   it combines them; `ansible_playbook_python` names the first `python3`
-  on `PATH`.
+  on `PATH`. The `vars` variable lists a task's variables in the order
+  `get_vars` combines them (role defaults, inventory, facts, play, role,
+  block and task variables, `include_vars`, `set_fact` and registered
+  values, include parameters, extra vars, the magic variables), then
+  `environment` (the task's environment entries, also a variable) and
+  itself.
 - **`debug var=`**: undefined values render in place as ansible-core's
   placeholders. A method or class (`d.items`, `range`) fails as
   "unsupported for variable storage" there and in any template's result,
