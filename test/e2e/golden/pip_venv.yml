@@ -142,9 +142,9 @@
           echo "virtualenv $*"
           mkdir -p "$dest/bin" && touch "$dest/bin/activate" && ln -s "$(dirname "$dest")/venv/bin/pip3" "$dest/bin/pip3"
     - name: virtualenv_command gets -p with the module's Python
-      pip: {name: golddep, virtualenv: "{{ workdir }}/venv4", virtualenv_command: "{{ workdir }}/fakevirtualenv --quiet"}
+      pip: {name: golddep, virtualenv: "{{ workdir }}/venv4", virtualenv_command: "{{ workdir }}/fakevirtualenv --quiet", chdir: "{{ workdir }}"}
     - name: and virtualenv_python when given
-      pip: {name: golddep, virtualenv: "{{ workdir }}/venv5", virtualenv_command: "{{ workdir }}/fakevirtualenv", virtualenv_python: python3.99}
+      pip: {name: golddep, virtualenv: "{{ workdir }}/venv5", virtualenv_command: "{{ workdir }}/fakevirtualenv", virtualenv_python: python3.99, chdir: "{{ workdir }}"}
     - name: a bad umask
       pip: {name: goldpkg, virtualenv: "{{ venv }}", umask: "0o8"}
       ignore_errors: true
