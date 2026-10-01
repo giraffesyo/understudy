@@ -29,8 +29,14 @@ var packageFactsSpec = args.Spec{
 	"strategy": {Default: "first", Choices: []string{"first", "all"}},
 }
 
-// packageFactsManagers is PKG_MANAGER_NAMES (sorted) plus aliases.
-var packageFactsManagers = []string{"apk", "apt", "openbsd_pkg", "pacman", "pkg", "pkg5", "pkg_info", "portage", "rpm", "pkg_ng", "pkgng"}
+// packageFactsManagers is PKG_MANAGER_NAMES: the managers (sorted), then
+// the aliases.
+var packageFactsManagers = []string{"apk", "apt", "pacman", "pkg", "pkg_info", "portage", "rpm",
+	"dnf", "dnf5", "yum", "zypper", "pkg5", "pkgng", "openbsd_pkg"}
+
+// packageFactsAliases is ALIASES: an alias stands for its manager.
+var packageFactsAliases = map[string]string{"dnf": "rpm", "dnf5": "rpm", "yum": "rpm", "zypper": "rpm",
+	"pkg5": "pkg", "pkgng": "pkg", "openbsd_pkg": "pkg_info"}
 
 func packageFactsModule(env *RunEnv, raw map[string]any) *agentproto.Result {
 	p, err := packageFactsSpec.Parse(raw)
@@ -70,8 +76,8 @@ func packageFactsModule(env *RunEnv, raw map[string]any) *agentproto.Result {
 		if p.Str("strategy") == "first" && found > 0 {
 			break
 		}
-		if m == "pkg_ng" || m == "pkgng" {
-			m = "pkg"
+		if a, ok := packageFactsAliases[m]; ok {
+			m = a
 		}
 		if seen[m] {
 			continue
@@ -85,6 +91,25 @@ func packageFactsModule(env *RunEnv, raw map[string]any) *agentproto.Result {
 			}
 			list = rpmPackages(env, &warnings)
 		case "apt":
+			if aptBindingsMissing(env) {
+				// The apt backend needs python3-apt; without it the
+				// manager is unusable (a warning when it was asked for
+				// by name).
+				msg := missingRequiredLib(env, "apt", "", "")
+				for _, bin := range []string{"apt", "apt-get", "aptitude"} {
+					if path, err := getBinPath(bin); err == nil {
+						msg = "Found executable at " + path + ". " + msg
+						break
+					}
+				}
+				for _, req := range p.List("manager") {
+					if anyToString(req) == "apt" {
+						warnings = append(warnings, "Requested package manager apt was not usable by this module: "+msg)
+						break
+					}
+				}
+				continue
+			}
 			if _, err := lookPath("dpkg-query"); err != nil {
 				continue
 			}
