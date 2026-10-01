@@ -1,0 +1,38 @@
+# meta: refresh_inventory parses the inventory sources again: the
+# refreshed hosts, groups and variables are what templates see from then
+# on; a play host the refreshed inventory dropped runs nothing more in
+# the play, and one it added runs from the next play on.
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "{{ groups }} {{ x | default('unset') }} {{ ansible_play_hosts_all }}"
+    - name: rewrite the inventory
+      copy:
+        dest: "{{ inventory_file }}"
+        content: |
+          [all:vars]
+          ansible_connection=local
+          [web]
+          h1 x=2
+          h3 x=3
+          [db]
+          h4
+      run_once: true
+    - meta: refresh_inventory
+    - debug:
+        msg: "{{ groups }} {{ x | default('unset') }} {{ ansible_play_hosts_all }} {{ ansible_play_hosts }} {{ ansible_play_batch }}"
+    - debug:
+        msg: "{{ hostvars['h3']['x'] }} {{ hostvars | list }} {{ group_names }}"
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "{{ inventory_hostname }} {{ x | default('unset') }} {{ group_names }}"
+- hosts: web
+  gather_facts: false
+  tasks:
+    - meta: refresh_inventory
+      when: false  # not supported: it refreshes anyway
+    - debug:
+        msg: "{{ inventory_hostname }} unchanged"
