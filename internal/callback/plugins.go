@@ -170,6 +170,8 @@ func (f *filtered) PlayStart(play *playbook.Play) {
 
 func (f *filtered) PlaybookStart(path string) { executor.ForwardPlaybookStart(f.Callback, path) }
 
+func (f *filtered) NoHostsMatched() { executor.ForwardNoHostsMatched(f.Callback) }
+
 func (f *filtered) CustomStats(custom map[string]*yaml.OMap) {
 	executor.ForwardCustomStats(f.Callback, custom)
 }
@@ -239,6 +241,13 @@ func (m *fanout) HandlerNotified(handler *playbook.Task, host string) {
 		executor.ForwardHandlerNotified(c, handler, host)
 	}
 }
+func (m *fanout) NoHostsMatched() {
+	executor.ForwardNoHostsMatched(m.primary)
+	for _, c := range m.extras {
+		executor.ForwardNoHostsMatched(c)
+	}
+}
+
 func (m *fanout) CustomStats(custom map[string]*yaml.OMap) {
 	executor.ForwardCustomStats(m.primary, custom)
 	for _, c := range m.extras {

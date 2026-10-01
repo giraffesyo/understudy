@@ -1,0 +1,11 @@
+ansible
+localhost
+-i
+localhost,
+-c
+local
+-o
+-m
+shell
+-a
+echo out; echo err >&2

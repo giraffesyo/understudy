@@ -83,10 +83,7 @@ func RoutingDeprecationWarnings(plays []*playbook.Play) []string {
 					continue
 				}
 				seen[msg] = true
-				if len(out) == 0 {
-					out = append(out, "[WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.\n")
-				}
-				out = append(out, msg)
+				out = append(out, DeprecationHint()+msg)
 			}
 		}
 	}

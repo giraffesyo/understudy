@@ -331,6 +331,13 @@ func (d *Default) Recap(stats map[string]*executor.HostStats, order []string) {
 	fmt.Fprintln(d.Out)
 }
 
+// NoHostsMatched is v2_playbook_on_no_hosts_matched.
+func (d *Default) NoHostsMatched() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.display(cCyan, "skipping: no hosts matched")
+}
+
 // CustomStats keeps the run's custom stats for the recap.
 func (d *Default) CustomStats(custom map[string]*yaml.OMap) {
 	d.mu.Lock()

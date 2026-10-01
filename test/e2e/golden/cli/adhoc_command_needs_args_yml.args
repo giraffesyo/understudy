@@ -1,0 +1,8 @@
+ansible
+site.yml
+-i
+site.yml,
+-m
+shell
+-a
+@EMPTY@

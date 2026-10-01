@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -54,9 +53,9 @@ func Main() int {
 	args := os.Args[1:]
 	switch filepath.Base(os.Args[0]) {
 	case "ansible-playbook":
-		return playbookCmd(args)
+		return withConfig(playbookCmd, args)
 	case "ansible":
-		return adhocCmd(args)
+		return withConfig(adhocCmd, args)
 	}
 	if len(args) == 0 {
 		usage()
@@ -64,11 +63,11 @@ func Main() int {
 	}
 	switch args[0] {
 	case "playbook":
-		return playbookCmd(args[1:])
+		return withConfig(playbookCmd, args[1:])
 	case "adhoc":
-		return adhocCmd(args[1:])
+		return withConfig(adhocCmd, args[1:])
 	case "vault":
-		return vaultCmd(args[1:])
+		return withConfig(vaultCmd, args[1:])
 	case "version", "--version":
 		fmt.Printf("understudy %s\n", version)
 		return 0
@@ -79,6 +78,27 @@ func Main() int {
 	fmt.Fprintf(os.Stderr, "understudy: unknown command %q\n\n", args[0])
 	usage()
 	return 1
+}
+
+// withConfig runs a command once the configuration loads, as ansible's
+// commands load their constants first: a configuration error ends the
+// command (exit 5) before its command line is even parsed, and the
+// configuration's warnings come first.
+func withConfig(cmd func([]string) int, args []string) int {
+	cfg, err := config.Load()
+	if err != nil {
+		// ansible-core prints the exception's traceback after the message.
+		fmt.Fprintf(os.Stderr, "ERROR: %s\n\n", err)
+		var ce interface{ ExitCode() int }
+		if errors.As(err, &ce) {
+			return ce.ExitCode()
+		}
+		return 5
+	}
+	for _, w := range cfg.Warnings {
+		warnOnce(w + "\n")
+	}
+	return cmd(args)
 }
 
 func usage() {
@@ -144,6 +164,17 @@ type parsedArgs struct {
 	listTags       bool
 	sshArgs        []string // --ssh-common-args & co: not applicable to the native client
 	prog           string   // the command ansible-core's parser names (-vv version banner)
+	forksSet       bool     // -f given (0 is then an error)
+
+	// ad-hoc only: -P, -B, --playbook-dir, --task-timeout.
+	poll           int
+	pollSet        bool
+	background     int
+	playbookDir    string
+	taskTimeout    int
+	taskTimeoutSet bool
+	oneLine        bool   // -o: the oneline callback
+	tree           string // -t: the tree callback's directory
 }
 
 // cliFlag is one ansible-playbook/ansible option: its spellings, whether it
@@ -173,7 +204,7 @@ var cliFlags = []cliFlag{
 		}
 		return parseExtraVars(v, p.extraVars, &p.extraVarOrigins)
 	}},
-	{[]string{"-f", "--forks"}, true, func(p *parsedArgs, v string) (err error) { p.forks, err = strconv.Atoi(v); return }},
+	{[]string{"-f", "--forks"}, true, func(p *parsedArgs, v string) error { p.forks, _ = pyInt(v); p.forksSet = true; return nil }},
 	{[]string{"-t", "--tags"}, true, func(p *parsedArgs, v string) error { p.tags = joinCSV(p.tags, v); return nil }},
 	{[]string{"--skip-tags"}, true, func(p *parsedArgs, v string) error { p.skipTags = joinCSV(p.skipTags, v); return nil }},
 	{[]string{"-C", "--check"}, false, boolFlag(func(p *parsedArgs) { p.check = true })},
@@ -202,7 +233,7 @@ var cliFlags = []cliFlag{
 	{[]string{"-u", "--user"}, true, func(p *parsedArgs, v string) error { p.remoteUser = v; return nil }},
 	{[]string{"--private-key", "--key-file"}, true, func(p *parsedArgs, v string) error { p.privateKey = v; return nil }},
 	{[]string{"-c", "--connection"}, true, func(p *parsedArgs, v string) error { p.connection = v; return nil }},
-	{[]string{"-T", "--timeout"}, true, func(p *parsedArgs, v string) (err error) { p.timeout, err = strconv.Atoi(v); return }},
+	{[]string{"-T", "--timeout"}, true, func(p *parsedArgs, v string) error { p.timeout, _ = pyInt(v); return nil }},
 	{[]string{"--ssh-common-args", "--ssh-extra-args", "--sftp-extra-args", "--scp-extra-args"}, true, func(p *parsedArgs, v string) error {
 		p.sshArgs = append(p.sshArgs, v)
 		return nil
@@ -219,8 +250,6 @@ var cliFlags = []cliFlag{
 	{[]string{"-M", "--module-path"}, true, func(*parsedArgs, string) error { return nil }},
 	{[]string{"-m", "--module-name"}, true, func(p *parsedArgs, v string) error { p.module = v; return nil }},
 	{[]string{"-a", "--args"}, true, func(p *parsedArgs, v string) error { p.moduleArgs = v; return nil }},
-	{[]string{"--version"}, false, boolFlag(func(*parsedArgs) { fmt.Printf("understudy %s\n", version); os.Exit(0) })},
-	{[]string{"-h", "--help"}, false, boolFlag(func(*parsedArgs) { usage(); os.Exit(0) })},
 }
 
 func joinCSV(prev, v string) string {
@@ -228,90 +257,6 @@ func joinCSV(prev, v string) string {
 		return v
 	}
 	return prev + "," + v
-}
-
-// parseArgs parses argparse-style options: "--long value", "--long=value",
-// "-x value", "-xvalue", combined short switches ("-bK", "-vvv"), and "--"
-// ending option parsing.
-func parseArgs(args []string) (*parsedArgs, error) {
-	p := &parsedArgs{extraVars: map[string]any{}} // forks 0 = unset (cfg default applies)
-	byName := map[string]*cliFlag{}
-	for i := range cliFlags {
-		for _, n := range cliFlags[i].names {
-			byName[n] = &cliFlags[i]
-		}
-	}
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		value := func(flag string, attached string, hasAttached bool) (string, error) {
-			if hasAttached {
-				return attached, nil
-			}
-			i++
-			if i >= len(args) {
-				return "", fmt.Errorf("argument %s: expected one argument", flag)
-			}
-			return args[i], nil
-		}
-		switch {
-		case a == "--":
-			p.positional = append(p.positional, args[i+1:]...)
-			return p, nil
-		case strings.HasPrefix(a, "--"):
-			name, attached, hasAttached := strings.Cut(a, "=")
-			f := byName[name]
-			if f == nil {
-				return nil, fmt.Errorf("unrecognized arguments: %s", a)
-			}
-			if !f.value {
-				if hasAttached {
-					return nil, fmt.Errorf("argument %s: ignored explicit argument %q", name, attached)
-				}
-				if err := f.apply(p, ""); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			v, err := value(name, attached, hasAttached)
-			if err != nil {
-				return nil, err
-			}
-			if err := f.apply(p, v); err != nil {
-				return nil, err
-			}
-		case strings.HasPrefix(a, "-") && len(a) > 1:
-			// Short options, possibly combined: -bK, -vvv, -e@file, -ihosts.
-			for j := 1; j < len(a); j++ {
-				c := a[j]
-				if c == 'v' {
-					p.verbosity++
-					continue
-				}
-				f := byName["-"+string(c)]
-				if f == nil {
-					return nil, fmt.Errorf("unrecognized arguments: %s", a)
-				}
-				if !f.value {
-					if err := f.apply(p, ""); err != nil {
-						return nil, err
-					}
-					continue
-				}
-				rest := a[j+1:]
-				v, err := value("-"+string(c), rest, rest != "")
-				if err != nil {
-					return nil, err
-				}
-				if err := f.apply(p, v); err != nil {
-					return nil, err
-				}
-				break
-			}
-		default:
-			p.positional = append(p.positional, a)
-		}
-	}
-	return p, nil
 }
 
 // setupVault builds the vault secrets and installs them as the inventory
@@ -698,17 +643,15 @@ func warnOnce(msg string) {
 }
 
 func playbookCmd(args []string) int {
-	p, err := parseArgs(args)
+	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "understudy: %v\n", err)
-		return 1
+		cfg = config.Defaults()
 	}
-	p.prog = "ansible-playbook"
+	p, code, done := parseCommand(playbookParser(cfg), cfg, args)
+	if done {
+		return code
+	}
 	announceConfig(p)
-	if len(p.positional) == 0 {
-		fmt.Fprintln(os.Stderr, "understudy playbook: at least one playbook file is required")
-		return 1
-	}
 
 	// All playbooks load first and then run as one run with a single
 	// recap, like ansible-playbook a.yml b.yml.
@@ -861,7 +804,7 @@ func playbookCmd(args []string) int {
 	runner.Limit = p.limit
 	runner.BookPaths = paths
 	runner.CallbackNotes = cbNotes
-	code, err := runner.RunPlaybooks(context.Background(), all)
+	code, err = runner.RunPlaybooks(context.Background(), all)
 	if err != nil {
 		printError(err)
 		var ye *yaml.Error
@@ -984,23 +927,19 @@ func tagSelected(tags, want, skip []string) bool {
 
 // adhocCmd synthesizes a one-task play: `understudy adhoc all -m ping`.
 func adhocCmd(args []string) int {
-	p, err := parseArgs(args)
+	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "understudy: %v\n", err)
-		return 1
+		cfg = config.Defaults()
 	}
-	p.prog = "ansible"
+	p, code, done := parseCommand(adhocParser(cfg), cfg, args)
+	if done {
+		return code
+	}
 	announceConfig(p)
-	if len(p.positional) != 1 {
-		fmt.Fprintln(os.Stderr, "understudy adhoc: a host pattern is required")
-		return 1
-	}
-	if cfg, err := config.Load(); err == nil {
-		configureYAML(cfg)
-	}
+	configureYAML(cfg)
 	module := p.module
 	if module == "" {
-		module = "command"
+		module = cfg.ModuleName
 	}
 	task := &playbook.Task{
 		Name:    module,
@@ -1009,19 +948,29 @@ func adhocCmd(args []string) int {
 		Poll:    -1,
 		Src:     playbook.Pos{File: "<adhoc>", Line: 1},
 	}
-	if p.moduleArgs != "" {
-		tmp := &playbook.Task{Module: module, LoopVar: "item"}
-		if err := adhocArgs(tmp, module, p.moduleArgs); err != nil {
-			printError(err)
-			return 1
-		}
-		task.Args = tmp.Args
-		task.FreeForm = tmp.FreeForm
+	poll := cfg.PollInterval
+	if p.pollSet {
+		poll = p.poll
 	}
+	if p.background > 0 {
+		task.Async, task.Poll = p.background, poll
+	}
+	taskTimeout := cfg.TaskTimeout
+	if p.taskTimeoutSet {
+		taskTimeout = p.taskTimeout
+	}
+	if taskTimeout != 0 {
+		task.Timeout = taskTimeout
+	}
+	baseDir := "."
+	if p.playbookDir != "" {
+		baseDir = p.playbookDir
+	}
+	pattern := p.positional[0]
 	gather := false
 	play := &playbook.Play{
 		Name:        "understudy Ad-Hoc",
-		HostPattern: p.positional[0],
+		HostPattern: pattern,
 		GatherFacts: &gather,
 		// Unset, as the playbook parser leaves it (0 would mean "abort on
 		// any failure").
@@ -1035,12 +984,54 @@ func adhocCmd(args []string) int {
 		printError(err)
 		return 1
 	}
-	inv, err := loadInventory(p, "")
+	inv, err := loadInventory(p, p.playbookDir)
 	if err != nil {
 		printError(err)
 		return 1
 	}
-	opts, err := buildOptions(p, ".", secrets)
+	// AdHocCLI.run: the hosts (none matching is a warning, unless --limit
+	// left none), --list-hosts, then the checks of the module.
+	var hosts []*inventory.Host
+	if err := checkHostList(inv, p.limit, pattern); err != nil {
+		if p.limit != "" {
+			printError(err)
+			return 1
+		}
+		warnOnce("No hosts matched, nothing to do\n")
+	} else if hosts, err = limitedHosts(inv, pattern, p.limit); err != nil {
+		printError(err)
+		return 1
+	}
+	if p.listHosts {
+		fmt.Printf("  hosts (%d):\n", len(hosts))
+		for _, h := range hosts {
+			fmt.Printf("    %s\n", h.Name)
+		}
+		return 0
+	}
+	if requireArgsModules[module] && p.moduleArgs == "" {
+		msg := fmt.Sprintf("No argument passed to %s module", module)
+		if strings.HasSuffix(pattern, ".yml") {
+			msg += " (did you mean to run ansible-playbook?)"
+		}
+		printError(errors.New(msg))
+		return 5
+	}
+	switch module {
+	case "import_playbook", "ansible.builtin.import_playbook", "ansible.legacy.import_playbook":
+		printError(fmt.Errorf("'%s' is not a valid action for ad-hoc commands", module))
+		return 5
+	}
+	if p.moduleArgs != "" {
+		tmp := &playbook.Task{Module: module, LoopVar: "item"}
+		if err := adhocArgs(tmp, module, p.moduleArgs); err != nil {
+			printError(err)
+			return 1
+		}
+		task.Args = tmp.Args
+		task.FreeForm = tmp.FreeForm
+	}
+	opts, err := buildOptions(p, baseDir, secrets)
 	if err != nil {
 		printError(err)
 		return 1
@@ -1052,16 +1043,65 @@ func adhocCmd(args []string) int {
 	}
 	if m, ok := cb.(*callback.Minimal); ok {
 		m.ArgOrder = argKeyOrder(p.moduleArgs)
+		m.TaskTimeout, m.Async, m.Poll = taskTimeout, p.background, poll
+		if p.oneLine {
+			m.OneLine = true
+			if cfg.DeprecationWarnings {
+				showDeprecation(callbackDeprecation("oneline"))
+			}
+		}
+	}
+	if p.tree != "" {
+		if cfg.DeprecationWarnings {
+			showDeprecation(callbackDeprecation("tree"))
+		}
+		cb = callback.WithExtras(cb, callback.NewTree(unfrackPath(p.tree), p.verbosity, func(msg string) {
+			fmt.Fprintf(os.Stderr, "[WARNING]: %s\n", msg)
+		}))
 	}
 	runner := executor.NewRunner(inv, cb, opts)
 	runner.Limit = p.limit
 	runner.CallbackNotes = cbNotes
-	code, err := runner.Run(context.Background(), []*playbook.Play{play})
+	code, err = runner.Run(context.Background(), []*playbook.Play{play})
 	if err != nil {
 		printError(err)
 		return 1
 	}
 	return code
+}
+
+// requireArgsModules are C.MODULE_REQUIRE_ARGS: the modules ad-hoc runs
+// only with -a.
+var requireArgsModules = map[string]bool{
+	"command": true, "raw": true, "script": true, "shell": true, "win_command": true, "win_shell": true,
+	"ansible.builtin.command": true, "ansible.builtin.raw": true, "ansible.builtin.script": true,
+	"ansible.builtin.shell": true, "ansible.builtin.win_command": true, "ansible.builtin.win_shell": true,
+	"ansible.legacy.command": true, "ansible.legacy.raw": true, "ansible.legacy.script": true,
+	"ansible.legacy.shell": true, "ansible.legacy.win_command": true, "ansible.legacy.win_shell": true,
+	"ansible.windows.win_command": true, "ansible.windows.win_shell": true,
+}
+
+// limitedHosts is inventory.list_hosts(pattern) under --limit.
+func limitedHosts(inv *inventory.Inventory, pattern, limit string) ([]*inventory.Host, error) {
+	hosts, err := inv.Match(pattern)
+	if err != nil || limit == "" {
+		return hosts, err
+	}
+	limited, err := inv.Match(limit)
+	if err != nil {
+		return nil, err
+	}
+	keep := map[string]bool{}
+	for _, h := range limited {
+		keep[h.Name] = true
+	}
+	var out []*inventory.Host
+	for _, h := range hosts {
+		if keep[h.Name] {
+			out = append(out, h)
+		}
+	}
+	return out, nil
 }
 
 // argKeyOrder lists the keys of a k=v argument string in the order given.

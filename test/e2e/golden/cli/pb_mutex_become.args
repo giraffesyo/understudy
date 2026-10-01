@@ -1,0 +1,5 @@
+ansible-playbook
+-K
+--become-password-file
+x
+p.yml

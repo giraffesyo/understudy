@@ -1,0 +1,18 @@
+- hosts: all
+  gather_facts: false
+  tasks:
+    - set_stats:
+        data:
+          total: 1
+          names: ["{{ inventory_hostname }}"]
+    - set_stats:
+        data:
+          seen: "{{ inventory_hostname }}"
+        per_host: true
+- hosts: h1
+  gather_facts: false
+  tasks:
+    - set_stats:
+        data:
+          total: 5
+          extra: {k: v}
