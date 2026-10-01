@@ -110,6 +110,11 @@ func argTemplateError(task *playbook.Task, key string, pos template.Position, er
 		// cause keeps the file's origin.
 		chain.Inner = fmt.Sprintf("Error while resolving value for '%s'.", key)
 		chain.Root = &agentproto.ErrorChain{Inner: cause, InnerFile: file, InnerLine: line, InnerCol: col, InnerPathOnly: line == 0}
+	} else if re := (*template.RecursionError)(nil); errors.As(err, &re) && re.Pos.File != "" {
+		// A lazy container's item or a variable that recursed: raised
+		// where its template is.
+		chain.Inner = fmt.Sprintf("Error while resolving value for '%s'.", key)
+		chain.Root = &agentproto.ErrorChain{Inner: cause, InnerFile: re.Pos.File, InnerLine: re.Pos.Line, InnerCol: re.Pos.Col}
 	} else if at, ok := template.UndefinedElsewhere(err, pos); ok {
 		// An undefined value a variable's own template used: raised
 		// where that template is.

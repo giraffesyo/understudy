@@ -701,9 +701,17 @@ than silently diverging. Known boundaries:
   only where the item is used: compared with a value (item by item, as
   Python compares), read by a plugin (which then gives the marker as its
   result) or rendered; its length, keys, other items and comparisons that
-  never reach it work. Not modeled: an item that reads its own container
-  (`d: {a: "{{ d.b }}", b: 1}`) fails as a recursive variable, where
-  ansible-core templates only the item read.
+  never reach it work. A variable's template that yields a container
+  keeps the container's markers too. An item may read its own container
+  or other items of it (`d: {a: "{{ d.b }}", b: 1}`), directly or through
+  other variables, as ansible-core templates only the items read; only a
+  template that reads itself again recurses ("Recursive loop detected in
+  template: maximum recursion depth exceeded"), as a marker raising where
+  that item is used. ansible-core has no recursion check: the error is
+  Python's recursion limit, and the template its origin names is
+  wherever the stack ran out, which understudy approximates with the
+  template met again (another one of the loop when the steps take
+  differing numbers of Python frames).
 - **Template trust**: text a template computes is not trusted as a
   template or expression; text passed through variables unchanged keeps
   the trust of where it was written (a playbook, role, inventory or vars

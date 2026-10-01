@@ -113,6 +113,11 @@ func runDebug(_ context.Context, actx *Context, args map[string]any, _ string) *
 				if p, has := actx.ArgPos["var"]; has {
 					res.ErrorChain.InnerFile, res.ErrorChain.InnerLine, res.ErrorChain.InnerCol = p.File, p.Line, p.Col
 				}
+				if re.Pos.File != "" {
+					// Raised where the template that recursed is.
+					res.ErrorChain.Inner = "Error while resolving `var` expression."
+					res.ErrorChain.Root = &agentproto.ErrorChain{Inner: re.Error(), InnerFile: re.Pos.File, InnerLine: re.Pos.Line, InnerCol: re.Pos.Col}
+				}
 				return res
 			} else if cause, ok := template.Cause(err); ok {
 				rootMsg, rootPos, rootValue, rendering := template.RenderingCause(err)

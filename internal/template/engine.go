@@ -446,7 +446,13 @@ func (e *Engine) renderTemplateKeeping(src string, vars VarGetter, pos Position,
 		if err != nil {
 			return nil, err
 		}
-		if err := tripMarkers(v, pos); err != nil {
+		if keepMarkup {
+			// A variable's value is not finalized: a container keeps its
+			// undefined items, raising only where they are used.
+			if u, ok := Undeprecate(v).(Undefined); ok {
+				return nil, u.useError(pos)
+			}
+		} else if err := tripMarkers(v, pos); err != nil {
 			return nil, err
 		}
 		v = ec.own.settle(v)

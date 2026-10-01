@@ -60,6 +60,9 @@ func testGoldenOutput(t *testing.T, flags ...string) {
 			if reason, ok := vvvSkip[filepath.Base(pb)]; ok && slices.Contains(flags, "-vvv") {
 				t.Skip(reason)
 			}
+			if reason, ok := outputSkip[filepath.Base(pb)]; ok {
+				t.Skip(reason)
+			}
 			abs, _ := filepath.Abs(pb)
 			base := filepath.Base(pb)
 			var extra []string
@@ -163,6 +166,15 @@ var vvvSkip = map[string]string{
 	// At -vvv the module's unknown-state failure surfaces as a result
 	// deserialization error instead of its message.
 	"results_wait_for.yml": "ansible-core's result changes at -vvv",
+}
+
+// outputSkip are corpus cases whose failures' origins, which the error
+// messages show, cannot be reproduced (TestGoldenDifferential still
+// compares their outcomes).
+var outputSkip = map[string]string{
+	// The template a recursion error names is wherever Python's stack
+	// ran out.
+	"lazy_recursion_paths.yml": "a recursion error's origin is where Python's stack ran out",
 }
 
 func normalizeVerbose(s string) string {
