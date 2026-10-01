@@ -1,0 +1,9 @@
+ansible-playbook
+--flush-cache
+-f
+1
+-i
+hosts
+--limit
+h2
+pb.yml

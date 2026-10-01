@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/giraffesyo/understudy/internal/modules/resolv"
 )
 
 // urllib also opens file:// and ftp:// URLs (FileHandler, FTPHandler).
@@ -288,7 +290,7 @@ func (f *ftpConn) transfercmd(cmd, host string) (net.Conn, error) {
 	lo, _ := strconv.Atoi(m[6])
 	// ftplib does not trust the PASV address: it reuses the control host.
 	d := &net.Dialer{Timeout: f.timeout}
-	data, err := d.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(hi<<8|lo)))
+	data, err := d.Dial("tcp", resolv.Addr(net.JoinHostPort(host, strconv.Itoa(hi<<8|lo))))
 	if err != nil {
 		return nil, err
 	}
@@ -362,7 +364,7 @@ func (c *uriClient) openFTPURL(u *url.URL) error {
 	}
 
 	d := &net.Dialer{Timeout: c.timeout}
-	conn, err := d.Dial("tcp", net.JoinHostPort(addr, strconv.Itoa(port)))
+	conn, err := d.Dial("tcp", resolv.Addr(net.JoinHostPort(addr, strconv.Itoa(port))))
 	if err != nil {
 		return wrap(err)
 	}

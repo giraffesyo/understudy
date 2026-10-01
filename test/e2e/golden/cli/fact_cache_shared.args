@@ -1,0 +1,8 @@
+ansible-playbook
+-f
+1
+-i
+inv
+-e
+xv=from_extra
+pb.yml

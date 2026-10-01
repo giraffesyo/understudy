@@ -429,9 +429,11 @@ func (d *Default) dumpRaw(task *playbook.Task, res *agentproto.Result, clean boo
 	m := res.ToVars()
 	delete(m, "failed")
 	delete(m, "skipped")
-	for k := range m {
+	for k, v := range m {
 		if strings.HasPrefix(k, "_ansible_") {
 			delete(m, k)
+		} else {
+			m[k] = stripInternalKeys(v)
 		}
 	}
 	if d.Verbosity < 3 {
@@ -461,6 +463,90 @@ func (d *Default) dumpRaw(task *playbook.Task, res *agentproto.Result, clean boo
 		}
 	}
 	return template.PyJSON(m, d.indent(res.VerboseAlways), true, false)
+}
+
+// stripInternalKeys is strip_internal_keys below a result's top level:
+// mappings lose their _ansible_ keys, at any depth (a copy is made where
+// one is dropped).
+func stripInternalKeys(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		var out map[string]any
+		for k, item := range t {
+			s := stripInternalKeys(item)
+			internal := strings.HasPrefix(k, "_ansible_")
+			if out == nil && (internal || !sameValue(s, item)) {
+				out = make(map[string]any, len(t))
+				for k2, v2 := range t {
+					out[k2] = v2
+				}
+			}
+			if out != nil {
+				if internal {
+					delete(out, k)
+				} else {
+					out[k] = s
+				}
+			}
+		}
+		if out == nil {
+			return t
+		}
+		return out
+	case *yaml.OMap:
+		var out *yaml.OMap
+		for _, k := range t.Keys() {
+			item := t.Get(k)
+			s := stripInternalKeys(item)
+			if out == nil && (strings.HasPrefix(k, "_ansible_") || !sameValue(s, item)) {
+				out = t.Clone()
+			}
+			if out != nil {
+				if strings.HasPrefix(k, "_ansible_") {
+					out.Delete(k)
+				} else {
+					out.Set(k, s)
+				}
+			}
+		}
+		if out == nil {
+			return t
+		}
+		return out
+	case []any:
+		var out []any
+		for i, item := range t {
+			s := stripInternalKeys(item)
+			if out == nil && !sameValue(s, item) {
+				out = append([]any(nil), t...)
+			}
+			if out != nil {
+				out[i] = s
+			}
+		}
+		if out == nil {
+			return t
+		}
+		return out
+	}
+	return v
+}
+
+// sameValue reports whether stripInternalKeys returned its argument
+// unchanged (the same container).
+func sameValue(a, b any) bool {
+	switch x := a.(type) {
+	case map[string]any:
+		y, ok := b.(map[string]any)
+		return ok && len(x) == len(y) && (len(x) == 0 || fmt.Sprintf("%p", x) == fmt.Sprintf("%p", y))
+	case *yaml.OMap:
+		y, ok := b.(*yaml.OMap)
+		return ok && x == y
+	case []any:
+		y, ok := b.([]any)
+		return ok && len(x) == len(y) && (len(x) == 0 || &x[0] == &y[0])
+	}
+	return true
 }
 
 const censoredMsg = "the output has been hidden due to the fact that 'no_log: true' was specified for this result"

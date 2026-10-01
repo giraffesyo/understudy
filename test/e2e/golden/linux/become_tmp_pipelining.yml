@@ -1,0 +1,57 @@
+# distros: ubuntu rocky
+---
+# become_tmp.yml's temporary files with pipelining: a pipelined module
+# gets no temporary directory, so an unprivileged become user needs no
+# files made readable to it (where Ubuntu, with no setfacl, fails without
+# pipelining), a become user wrongly listed in admin_users runs its
+# module, and a module that needs a temp file makes remote_tmp itself
+# (with a warning). An action that transfers files still makes its
+# temporary directory, and _fixup_perms2 still runs for the files it
+# transfers; su does not pipeline.
+- hosts: target
+  gather_facts: false
+  vars:
+    ansible_pipelining: true
+  tasks:
+    - name: a second unprivileged user
+      shell: useradd -m tester2
+      become: true
+      changed_when: false
+
+    - name: a module as an unprivileged user
+      command: id -un
+      become: true
+      become_user: tester2
+    - name: copy to an unprivileged user
+      copy: {content: "hi\n", dest: /home/tester2/x.txt}
+      become: true
+      become_user: tester2
+      ignore_errors: true
+    - name: a become user wrongly listed in admin_users
+      command: id -un
+      become: true
+      become_user: tester2
+      vars:
+        ansible_admin_users: [root, tester2]
+    - name: lineinfile as an unprivileged user makes its remote_tmp
+      lineinfile: {path: /home/tester2/lines.txt, line: one, create: true}
+      become: true
+      become_user: tester2
+      register: r
+    - debug: {msg: "{{ r.warnings | default([]) }}"}
+    - name: lineinfile as root makes root's remote_tmp
+      lineinfile: {path: /root/lines.txt, line: one, create: true}
+      become: true
+      register: r
+    - debug: {msg: "{{ r.warnings | default([]) }}"}
+    - name: lineinfile as the login user, its remote_tmp there
+      lineinfile: {path: /tmp/lines.txt, line: one, create: true}
+      register: r
+    - debug: {msg: "{{ r.warnings | default([]) }}"}
+    - name: pipelining off for one task
+      command: id -un
+      become: true
+      become_user: tester2
+      ignore_errors: true
+      vars:
+        ansible_pipelining: false

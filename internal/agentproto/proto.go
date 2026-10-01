@@ -62,6 +62,16 @@ type TaskRequest struct {
 	// directory from the action (an unprivileged become user): the module
 	// makes its own there on first use, as AnsibleModule.tmpdir does.
 	ModuleRemoteTmp string `json:"module_remote_tmp,omitempty"`
+	// PkgShim: package managers the module's commands run take the
+	// host-wide package lock (a command in a parallel block).
+	PkgShim bool `json:"pkg_shim,omitempty"`
+
+	// Pipelined (control plane only): the module is pipelined, with no
+	// temporary directory made for it (ModuleRemoteTmp is set).
+	Pipelined bool `json:"-"`
+	// RemoteTmp (control plane only) is the login user's remote_tmp,
+	// which running a module that is not pipelined makes.
+	RemoteTmp string `json:"-"`
 }
 
 // StagedPayload is the name the login user stages an unprivileged become
@@ -112,6 +122,9 @@ type Result struct {
 	DelegatedAddr string `json:"-"` // its address, when its connection names one other than its name
 	ShowDiff      bool   `json:"-"` // diff mode is on for the task: display Diff
 	Censored      bool   `json:"-"` // no_log: display only the censored placeholder
+	// FactsCacheable: set_fact's cacheable facts, already saved to the
+	// fact cache.
+	FactsCacheable bool `json:"-"`
 	// WarningHelp is the help text Display appends to a warning of the
 	// result's (its key) when showing it; the result keeps the message.
 	WarningHelp map[string]string `json:"-"`

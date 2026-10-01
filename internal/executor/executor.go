@@ -27,6 +27,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/actions"
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/connection"
+	"github.com/giraffesyo/understudy/internal/factcache"
 	"github.com/giraffesyo/understudy/internal/inventory"
 	"github.com/giraffesyo/understudy/internal/modules"
 	"github.com/giraffesyo/understudy/internal/playbook"
@@ -103,6 +104,7 @@ type Options struct {
 	ConnOpts       connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
 
 	ForceHandlers bool           // --force-handlers: notified handlers run on failed hosts too
+	FlushCache    bool           // --flush-cache: the fact cache is cleared for every host first
 	StartAtTask   string         // --start-at-task: skip tasks until one matches
 	Step          bool           // --step: confirm each task interactively
 	Vault         *vault.Secrets // vault passwords for !vault values and encrypted files
@@ -124,6 +126,15 @@ type Options struct {
 	// plugins' output and warnings included), returning the inventory
 	// that replaces the run's. nil: nothing to re-read.
 	RefreshInventory func() (*inventory.Inventory, error)
+	// FactCache configures the fact cache (CACHE_PLUGIN and its
+	// options); the zero value is the memory plugin.
+	FactCache factcache.Settings
+	// Gathering is DEFAULT_GATHERING ("" = implicit).
+	Gathering string
+	// PluginOption reads a plugin option from the environment and
+	// ansible.cfg (env names, then "section.key" ini entries; nil: the
+	// environment only).
+	PluginOption func(env, ini []string) (value, origin string, ok bool)
 }
 
 // Runner executes playbooks.
@@ -186,7 +197,8 @@ type Runner struct {
 	batchEnded     bool                  // meta: end_batch
 	mu             sync.Mutex
 	implicitMu     sync.Mutex
-	implicitSet    bool // the implicit localhost's inventory vars are set
+	implicitSet    bool            // the implicit localhost's inventory vars are set
+	facts          factcache.Cache // the fact cache (VariableManager's)
 }
 
 // NewRunner builds a runner over a loaded inventory.
@@ -221,6 +233,7 @@ func NewRunner(inv *inventory.Inventory, cb Callback, opts Options) *Runner {
 			return string(out), err
 		}
 	}
+	r.openFactCache()
 	r.installLookups()
 	r.Engine.Deprecation = r.deprecation
 	r.Engine.Verbose = r.displayVerbose
@@ -529,15 +542,22 @@ func (r *Runner) runPlayBatch(ctx context.Context, play *playbook.Play, playHost
 	r.failedIn = map[string]map[int]bool{}
 	r.dynPlayHosts = nil
 	r.mu.Unlock()
-	if play.GatherFacts == nil || *play.GatherFacts {
-		gather := &playbook.Task{
-			Name:    "Gathering Facts",
-			Module:  "setup",
-			Args:    play.GatherArgs,
-			LoopVar: "item",
-			Src:     play.Src,
+	var gatherHosts []string
+	for _, h := range r.activeOf(playHosts) {
+		if r.gathers(play, h) {
+			gatherHosts = append(gatherHosts, h)
 		}
-		r.runTaskAcrossHosts(ctx, play, gather, r.activeOf(playHosts), playHosts, false)
+	}
+	if len(gatherHosts) > 0 {
+		gather := &playbook.Task{
+			Name:           "Gathering Facts",
+			Module:         "setup",
+			Args:           play.GatherArgs,
+			LoopVar:        "item",
+			Src:            play.Src,
+			ImplicitGather: true,
+		}
+		r.runTaskAcrossHosts(ctx, play, gather, gatherHosts, playHosts, false)
 	}
 	for _, section := range [][]*playbook.Task{play.PreTasks, play.Tasks, play.PostTasks} {
 		if err := r.runSection(ctx, play, section, playHosts); err != nil {
@@ -906,6 +926,18 @@ func (r *Runner) runTaskAcrossHosts(ctx context.Context, play *playbook.Play, ta
 		// The action bypasses the host loop: only the first host runs
 		// it, and the result stays that host's.
 		active = active[:1]
+	}
+	// The strategy reads each host's variables (its cached facts
+	// included) as it queues the task: a cache file that cannot be read
+	// ends the run before any result shows.
+	for _, h := range active {
+		r.Store.EnsureFacts(h)
+		r.mu.Lock()
+		stopped := r.fatalErr != nil
+		r.mu.Unlock()
+		if stopped {
+			return
+		}
 	}
 	g, gctx := errgroup.WithContext(ctx)
 	if r.freeSem == nil {
@@ -1711,12 +1743,16 @@ func playPos(play *playbook.Play) template.Position {
 // runTaskOnHost is the per-host task pipeline: when -> loop -> template args
 // -> retries -> changed_when/failed_when -> register -> stats.
 func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, playHosts []string) {
-	var override map[string]any
+	// override is the debugger's task_vars (its assignments last across
+	// sessions, as the task_vars dict does); applied is what the task
+	// was last templated with (update_task).
+	var override, applied map[string]any
+	orig := task
 	for {
 		if r.quitRequested() {
 			return
 		}
-		res, items, resolved := r.execTaskOnHost(ctx, play, task, host, playHosts, override)
+		res, items, resolved := r.execTaskOnHost(ctx, play, task, host, playHosts, applied)
 		if !r.needsDebugger(play, resolved, res) {
 			r.record(host, resolved, res, items)
 			return
@@ -1735,7 +1771,7 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 		if len(task.Vars) > 0 {
 			vctx = vctx.WithOverlay(task.Vars)
 		}
-		s := &debugSession{r: r, task: &copied, host: host, vctx: vctx.WithOverlay(override), res: res, play: play, override: override}
+		s := &debugSession{r: r, task: &copied, orig: orig, host: host, vctx: vctx.WithOverlay(override), res: res, play: play, override: override}
 		switch r.runDebugger(s) {
 		case debugContinue:
 			return
@@ -1743,8 +1779,19 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 			r.requestQuit()
 			return
 		case debugRedo:
+			if s.updated != nil && orig.Register != "" {
+				// ansible-core 2.21's update_task loads register as
+				// written, not as the projections the worker expects:
+				// the redo's worker crashes (with a Python traceback)
+				// and the run ends.
+				r.fatal(errors.New("A worker was found in a dead state"))
+				return
+			}
 			r.restoreHost(host, snap, res)
 			task = s.task
+			if s.updated != nil {
+				applied = s.updated
+			}
 			if raw, ok := task.Args["_raw_params"]; ok {
 				// task.args['_raw_params'] is the free-form command.
 				task.FreeForm = template.PyStr(raw)
@@ -2306,6 +2353,7 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		Diff:          r.effectiveDiff(play, task),
 		Background:    task.Async > 0,
 		AsyncTimeout:  task.Async,
+		InParallel:    r.inParallel(task),
 		BaseDir:       r.Opts.BaseDir,
 		SrcDir:        task.SrcDir,
 		TaskDir:       taskDir(task),
@@ -2340,6 +2388,15 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 				r.discoverInterpreter(ctx, disc, host, target, task, vctx, conn)
 				if req.PythonInterpreter == "" {
 					req.PythonInterpreter = disc.path
+				}
+			}
+			req.RemoteTmp = r.remoteTmp(vctx)
+			if r.pipelined(vctx, task, inProcess, b, req.Background) {
+				// No temporary directory: the module makes its own under
+				// remote_tmp when it needs one.
+				req.Pipelined = true
+				if req.ModuleRemoteTmp == "" {
+					req.ModuleRemoteTmp = req.RemoteTmp
 				}
 			}
 			res, err := r.runModule(ctx, host, target, kw, inProcess, b, task, envKeys, env, req, payload)
@@ -2393,6 +2450,25 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 				} else {
 					r.Store.SetHostFact(h, name, value)
 				}
+			}
+		},
+		CacheFacts: func(names []string, values map[string]any) {
+			// Each value is saved with the tags ansible-core's would
+			// carry: where it, or the template that made it, came from.
+			f := factcache.NewFacts()
+			for _, name := range names {
+				v := values[name]
+				raw, written := task.Args[name]
+				tagged := v
+				if written {
+					ref := vctx.ValueOrigin(raw, argPos(task, name))
+					tagged = factcache.Tag(v, ref.Raw, ref.HasRaw,
+						factcache.Origin{File: ref.Pos.File, Line: ref.Pos.Line, Col: ref.Pos.Col})
+				}
+				f.Set(name, v, tagged)
+			}
+			for _, h := range r.factHosts(host, target, task) {
+				r.setHostFacts(h, f.Clone())
 			}
 		},
 		SetIncludeVars: func(vars map[string]any) {
@@ -2796,6 +2872,9 @@ func (r *Runner) runModule(ctx context.Context, host, target string, kw connecti
 			req.Args = m
 		}
 		if become == nil {
+			if !req.Pipelined {
+				ensureLocalRemoteTmp(req.RemoteTmp)
+			}
 			res := modules.RunContext(ctx, req, payload)
 			res.Origin = moduleOrigin(res)
 			return res, nil
@@ -2956,10 +3035,20 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	// writes its own layer via the SetFact hook.
 	// Only a successful result's facts are kept (a failed task's are
 	// reported but not applied).
-	if len(res.AnsibleFacts) > 0 && task.Module != "set_fact" && !res.Failed {
+	if len(res.AnsibleFacts) > 0 && task.Module != "set_fact" && !registersEmptyFacts(task.Module) && !res.Failed {
 		r.applyFacts(host, res.DelegatedTo, task, res.AnsibleFacts)
+	} else if registersEmptyFacts(task.Module) && !res.Failed && !res.Skipped && !res.FactsCacheable {
+		// An empty cacheable layer: the host's facts are saved as they
+		// are.
+		target := host
+		if res.DelegatedTo != "" {
+			target = res.DelegatedTo
+		}
+		for _, h := range r.factHosts(host, target, task) {
+			r.setHostFacts(h, factcache.NewFacts())
+		}
 	}
-	if loopItems != nil && task.Module != "set_fact" {
+	if loopItems != nil && task.Module != "set_fact" && !registersEmptyFacts(task.Module) {
 		// A loop's facts are its items' (each item that did not fail).
 		for _, it := range loopItems {
 			m, ok := asStringMap(it)
@@ -3469,32 +3558,18 @@ func setFactOrigins(task *playbook.Task) []template.KeyOrigin {
 	return out
 }
 
-// applyFacts records a result's facts for the hosts they belong to, both
-// prefixed at top level (inject_facts_as_vars) and under ansible_facts,
-// updating the facts already cached (host_cache |= facts).
+// applyFacts records a result's facts for the hosts they belong to
+// (set_host_facts): the fact cache and the hosts' variables. The
+// gather_facts action (the play's implicit fact gathering included)
+// marks them gathered.
 func (r *Runner) applyFacts(host, delegatedTo string, task *playbook.Task, facts map[string]any) {
 	target := host
 	if delegatedTo != "" {
 		target = delegatedTo
 	}
-	stripped := make(map[string]any, len(facts))
-	for k, v := range facts {
-		if k == "ansible_local" {
-			stripped[k] = v // namespace_facts keeps ansible_local as-is
-			continue
-		}
-		stripped[strings.TrimPrefix(k, "ansible_")] = v
-	}
+	gathered := task.ImplicitGather || task.Module == "gather_facts"
 	for _, h := range r.factHosts(host, target, task) {
-		r.Store.SetFacts(h, r.deprecatedFacts(facts))
-		merged := stripped
-		if old, ok := r.Store.Fact(h, "ansible_facts"); ok {
-			if m, ok := asStringMap(old); ok {
-				merged = maps.Clone(m)
-				maps.Copy(merged, stripped)
-			}
-		}
-		r.Store.SetFacts(h, map[string]any{"ansible_facts": merged})
+		r.setHostFacts(h, moduleFacts(facts, gathered))
 	}
 }
 
@@ -3750,6 +3825,18 @@ func (r *Runner) parallelBlock(task *playbook.Task) (playbook.BlockRef, int, boo
 		}
 	}
 	return playbook.BlockRef{}, 0, false
+}
+
+// inParallel reports whether task runs inside a running parallel block.
+func (r *Runner) inParallel(task *playbook.Task) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ref := range task.Blocks {
+		if ref.Parallel && r.parallelActive[ref.ID] {
+			return true
+		}
+	}
+	return false
 }
 
 func hasBlockRef(t *playbook.Task, id, level int) bool {

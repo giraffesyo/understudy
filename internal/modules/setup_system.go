@@ -131,6 +131,7 @@ type pyInfo struct {
 	major, minor, micro, serial int
 	level                       string
 	full                        string
+	impl                        string // sys.implementation.name
 }
 
 // pythonInfo probes python3 on the host: understudy runs without Python,
@@ -163,7 +164,10 @@ func probePython(e *factEnv) *pyInfo {
 	if m == nil {
 		return nil
 	}
-	pi := &pyInfo{exe: reported, level: "final"}
+	pi := &pyInfo{exe: reported, level: "final", impl: "cpython"}
+	if strings.Contains(out+errOut, "[PyPy ") {
+		pi.impl = "pypy" // sys.implementation.name
+	}
 	pi.major, _ = strconv.Atoi(m[1])
 	pi.minor, _ = strconv.Atoi(m[2])
 	pi.micro, _ = strconv.Atoi(m[3])
@@ -202,7 +206,7 @@ func collectPython(e *factEnv, _ map[string]any) map[string]any {
 		"version_info":   []any{pi.major, pi.minor, pi.micro, pi.level, pi.serial},
 		"executable":     pi.exe,
 		"has_sslcontext": true,
-		"type":           "cpython",
+		"type":           pi.impl,
 	}}
 }
 

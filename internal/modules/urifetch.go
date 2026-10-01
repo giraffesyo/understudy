@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/giraffesyo/understudy/internal/modules/args"
+	"github.com/giraffesyo/understudy/internal/modules/resolv"
 )
 
 // This file ports module_utils.urls' fetch_url/open_url on net/http:
@@ -894,7 +895,7 @@ func (c *uriClient) dial(ctx context.Context, network, addr string) (net.Conn, e
 		}
 		return &deadlineConn{conn, c.timeout}, nil
 	}
-	conn, err := d.DialContext(ctx, network, addr)
+	conn, err := d.DialContext(ctx, network, resolv.Addr(addr))
 	if err != nil {
 		return nil, &uriDialError{pyNetErr(err)}
 	}

@@ -192,10 +192,14 @@ runs its direct tasks at the same time (a nested block is one unit and runs
 in order). Execution continues once all of them finish. Use it only for
 independent work, because siblings keep running when one fails; the block's
 `rescue`/`always` still see the failure afterwards.
-Package tasks understudy runs are serialized host-wide (dnf and apt only
-lock the final transaction, not their download cache), but a shell script
-that calls `dnf`/`apt` itself is not covered: don't run two such things in
-the same parallel block.
+Package managers never run at the same time on a host (dnf and apt only
+lock the final transaction, not their download cache): package tasks take
+a host-wide lock, and so does a package manager (`apt`, `apt-get`, `dnf`,
+`yum`, `rpm`, `apk`, ...) that a `command`, `shell` or `script` in a
+parallel block runs by name, scripts it calls included: the command's
+`PATH` leads with a directory of shims that take the lock and run the
+real program. One run by its full path (`/usr/bin/dnf`), or through
+`sudo` (whose `secure_path` drops the shims), is not covered.
 
 ```yaml
 - name: build and install independently
@@ -240,6 +244,25 @@ handlers with `notify`/`listen`, `block`/`rescue`/`always`, tags, `vars_prompt`,
 rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 `end_play`, `end_host`, `end_batch`, `clear_host_errors`, `clear_facts`,
 `reset_connection`, `refresh_inventory`, `noop`).
+
+**Fact caching** — ansible-core's builtin cache plugins, `memory` and
+`jsonfile` (`fact_caching`, `fact_caching_connection`,
+`fact_caching_prefix`, `fact_caching_timeout` and their
+`ANSIBLE_CACHE_PLUGIN*` variables), with the `gathering` policy
+(`implicit`, `explicit`, `smart`), `set_fact`'s `cacheable`, `meta:
+clear_facts`, `--flush-cache` and `constructed` reading the cache. `jsonfile` writes the
+files ansible-core does — the schema-qualified name (`<prefix>s1_<host>`),
+the payload with each value's tags (where a `set_fact` value or the
+template that made it came from) and dates, datetimes and times in
+ansible-core's serializable wrappers, mode 0644 — so `ansible-playbook` and
+understudy can share a cache directory, and reads theirs back, origins
+included. Two orders cannot be ansible-core's: a gathered fact set's (its
+collectors resolve through Python sets of names, whose string hashes
+are randomized per process, so ansible-core's own order varies between
+runs; understudy writes them by name), and a mapping's keys within a
+module's facts (by name). A cache plugin from a collection (`redis`,
+`yaml`, ...) is Python and cannot load: it warns as ansible-core does
+and the memory cache stands in.
 
 **Task keywords** — `when`, `loop` / `with_*` (`items`, `nested`, `together`, `subelements`,
 `sequence`, `dict`, `indexed_items`, `flattened`, `lines`, `fileglob` (in the
@@ -320,9 +343,17 @@ module gets no temporary directory of its own: it makes one under
 with ansible's "Module remote_tmp ... did not exist" warning. A become
 user wrongly listed in `admin_users` cannot read the module staged in
 the login user's `remote_tmp`, and the task fails with ansible's
-"Module result deserialization failed" and Python's output. Pipelining
-is not modeled: temporary files behave as with ansible's default
-(`pipelining = False`).
+"Module result deserialization failed" and Python's output. A module
+that is not pipelined makes `remote_tmp` (as the login user) as
+ansible's temporary directory for it would. With pipelining
+(`pipelining` in `[defaults]`, `[connection]` or `[ssh_connection]`,
+`ANSIBLE_PIPELINING`, `ansible_pipelining`; not for async tasks, through
+`su`, or with `-t` among the ssh arguments) a module gets no temporary
+directory: one that needs a temp file makes `remote_tmp` itself (with
+the warning above), and an unprivileged become user needs no files made
+readable to it (nor fails when they cannot be), while an action that
+transfers files (`copy`, `template`, `unarchive`, `script`, `uri`) still
+stages them as without pipelining.
 
 ## Architecture
 
@@ -359,11 +390,14 @@ idempotence re-runs.
 understudy aims to run real playbooks faithfully, and fails loudly rather
 than silently diverging. Known boundaries:
 
-- **Targets**: the agent supports `linux/amd64` and `linux/arm64`. Other
-  platforms fall back to the `raw` module.
+- **Targets**: the agent is built for `linux/amd64` and `linux/arm64`,
+  the platforms its modules are written and tested for (each embedded
+  agent adds to the binary's size); on other platforms only `raw` runs,
+  as it needs no agent. The local connection runs modules in-process on
+  Linux and macOS controllers.
 - **Python plugins**: there is no Python anywhere, so plugins that exist
-  only as Python code (custom modules, filters, lookups, callbacks) cannot
-  be loaded. The common ones are implemented natively — including the
+  only as Python code (custom modules, filters, lookups, callbacks, cache
+  plugins) cannot be loaded: running them needs a Python interpreter. The common ones are implemented natively — including the
   `timer` and `profile_tasks` callbacks and the `minimal` stdout callback —
   and anything else is reported (`Skipping callback plugin ..., unable to
   load`, `couldn't resolve module/action ...`), never silently skipped.
@@ -386,13 +420,17 @@ than silently diverging. Known boundaries:
   is skipped as ansible-core skips one it cannot parse. TOML dates and
   times load as `datetime` dates, datetimes and times, as `tomllib` builds
   them. ansible-core orders a group's hosts two or more levels of
-  child groups down by Python set iteration (object addresses); understudy
-  takes them level by level in the order the groups were added, so such
-  hosts can list in another order in `groups`. `constructed`'s
+  child groups down by iterating a Python set of groups, which hash by
+  their object addresses in the ansible-core process (so the order can
+  change with memory layout, not with the inventory); understudy takes
+  them level by level in the order the groups were added, so such hosts
+  can list in another order in `groups`. `constructed`'s
   `use_vars_plugins` reads `group_vars/` and `host_vars/` next to the
-  sources parsed before it; `use_extra_vars` is read from the config file
-  or the `ANSIBLE_INVENTORY_USE_EXTRA_VARS` environment variable (not
-  `ansible.cfg`), and the fact cache is not consulted. `meta:
+  sources parsed before it, its options are read from the plugin's
+  config, the environment and `ansible.cfg` (`[inventory_plugins]
+  use_extra_vars`) as ansible-core reads them, and hosts' cached facts
+  join their variables (a persistent cache's, as ansible-core opens a
+  new cache plugin for it). `meta:
   refresh_inventory` parses the sources again and replaces the hosts,
   groups and variables, then makes the run's `add_host` and `group_by`
   changes again (hosts first, then groups; a host the refresh dropped
@@ -435,8 +473,9 @@ than silently diverging. Known boundaries:
   Python's `configparser` reads it and its typed settings are checked as
   ansible-core's constants load; a bad file or value ends the command
   with `ERROR: <message>` and exit code 5, but without the Python
-  traceback ansible-core prints after the message. `--version` names
-  understudy in place of ansible-core's Python details.
+  traceback ansible-core prints after the message (its frames name
+  ansible-core's source files and lines, which have no counterpart here).
+  `--version` names understudy in place of ansible-core's Python details.
 - **Exit codes**: as ansible-playbook, the result of the last play run
   (failed and unreachable hosts carry over between plays until
   `clear_host_errors`); several playbooks each end with a recap, and one
@@ -446,12 +485,20 @@ than silently diverging. Known boundaries:
   `/bin/sh` (`shell`), the shell reorders them as it does under
   ansible-core.
 - **Task debugger**: the `debug` strategy and `debugger` keyword follow
-  ansible-core's debugger session (`p`, `c`, `r`, `q`, `help`); `p`
-  evaluates Jinja expressions rather than Python. Edits to `task_vars` or
-  `task.args` apply to a redo (ansible-core 2.21 ignores them, and its
-  `update_task` crashes); `u` is accepted as a no-op.
-- **`dig` lookup**: covers A, AAAA, CNAME, MX, NS, TXT, PTR and SRV (not
-  yet byte-compared: Ansible's needs dnspython).
+  ansible-core's debugger session (`p`, `c`, `r`, `u`, `q`, `help`):
+  `task.args` edits apply to a redo, `task_vars` edits through
+  `update_task`, which loads the task again templated with them (losing
+  `task.args` edits), as in ansible-core. With no Python, `p` evaluates
+  Jinja expressions and a statement can only be an assignment to (or
+  `del` of) `task.args[...]` or `task_vars[...]`, not arbitrary Python.
+  A redo after `update_task` on a task with `register` ends the run as
+  ansible-core 2.21's crashing worker does (`A worker was found in a dead
+  state`, exit 1), without the Python traceback it prints.
+- **`dig` lookup**: community.general's `dig` is built on dnspython's
+  resolver and record presentation; understudy's covers A, AAAA, CNAME,
+  MX, NS, TXT, PTR and SRV on Go's resolver and is not yet byte-compared
+  with it (its options, dict results and other record types are not
+  ported).
 - **Output that depends on the target's Python**: understudy never runs
   Python, but some of ansible's output comes from the Python that runs its
   modules. understudy identifies that interpreter as ansible would (the
@@ -512,24 +559,28 @@ than silently diverging. Known boundaries:
     24.1 or later, as the module does. A virtual environment's Python
     sees only its own site-packages unless it includes the system's.
     The module's crashes on a non-PEP 440 installed version (packaging
-    22-25) and on a pip it cannot ask its version are reproduced. Not
-    modeled: packaging 22.x's short-lived quirks, and the SyntaxError a
-    marker string Python cannot unescape raises before 26.3 (treated as
-    an invalid requirement).
+    22-25) and on a pip it cannot ask its version are reproduced. A
+    marker string Python cannot unescape crashes the module before
+    packaging 26.3 with a Python `SyntaxError` traceback, whose text is
+    CPython's compiler's; understudy reports an invalid requirement
+    there, as 26.3 does.
   - Errors that quote `sys.version` (`apt` and `dnf5` without their
     bindings): CPython assembles it from strings compiled into the
     interpreter or its libpython (`PY_VERSION`, the build date and time,
     the compiler banner, with its newline on older builds), which
     understudy reads off the ELF or Mach-O binary. Where they cannot be
-    found unambiguously (a stripped or non-CPython build) only the
-    `major.minor` version is shown.
+    found unambiguously (a stripped or non-CPython build, whose version
+    string only running it would tell) only the `major.minor` version is
+    shown.
   - `setup`'s `ansible_python` facts describe the interpreter running
-    the module, named by its `sys.executable`; the type is always
-    `cpython` (a PyPy target would say `PyPy`).
+    the module, named by its `sys.executable`, its type
+    (`sys.implementation.name`: `cpython`, or `pypy`) read from its
+    `--version`.
   - Name lookup failures (`uri`, `get_url`, `mysql_*`) read as Python's
     `socket.gaierror`, worded by the target's C library (glibc, musl on
-    Alpine, macOS). The lookup itself is Go's resolver, which applies a
-    `resolv.conf` search list as glibc does, not as musl does.
+    Alpine, macOS). The lookup itself is Go's resolver, with the search
+    list applied as the C library applies it: on musl, a name with at
+    least `ndots` dots is looked up as given only.
   - Missing package-manager bindings: without python3-apt, `apt` and
     `apt_repository` fail as ansible's do where they cannot install it
     (check mode, `install_python_apt: false`, `auto_install_module_deps:
@@ -543,9 +594,11 @@ than silently diverging. Known boundaries:
     `sys.version`), as ansible's modules do.
 - **`dnf` results**: the transaction runs through the dnf CLI, and
   `results` lists it as the modules do (`Installed: <nevra>`,
-  `Removed: <nevra>`). dnf4's module iterates a set, so for multi-package
-  transactions understudy lists the requested packages first and their
-  dependencies after, by name.
+  `Removed: <nevra>`). dnf4's module iterates a Python set of package
+  strings, whose order follows string hashes that Python randomizes per
+  process, so ansible-core's own order changes from run to run; for
+  multi-package transactions understudy lists the requested packages
+  first and their dependencies after, by name.
 - **Verbose output**: `-vv` prints what ansible-core does: the `PLAYBOOK:`
   banner and play count, task paths, handler notifications, `META:` lines,
   skipped stdout callbacks, static imports, plugin redirects
@@ -558,9 +611,14 @@ than silently diverging. Known boundaries:
   connection announces itself (`<host> ESTABLISH LOCAL CONNECTION FOR USER:
   ...`); the lines that trace ansible-core's Python machinery are not
   reproduced: the `EXEC`/`PUT` commands that stage and run AnsiballZ
-  payloads, `Using module file`, the variable manager's repeated ``Read
-  `vars_file` `` lines, and SSH connection tracing (understudy's agent
-  protocol runs no per-command `ssh`).
+  payloads (understudy builds no AnsiballZ payloads; their temporary
+  names are random), `Using module file` (a path in ansible-core's
+  Python installation), the variable manager's ``Read `vars_file` ``
+  lines (printed on each of its internal variable computations, from
+  whichever of ansible-core's processes makes one, so their number and
+  place among the results follow its worker scheduling), and SSH
+  connection tracing (understudy's agent protocol runs no per-command
+  `ssh`).
 - **Regular expressions**: every pattern a playbook gives (the regex
   filters and tests, `lineinfile`, `replace`, `blockinfile`, `find`,
   `wait_for`, the `varnames` and `ini` lookups, `include_vars`, `~` host
@@ -659,7 +717,8 @@ than silently diverging. Known boundaries:
   ansible-core's `get_vars` gives without a play (inventory, facts,
   `include_vars`, `set_fact` and registered values, extra vars and the
   run's magic variables, no play or role variables), listed in the order
-  it combines them; `ansible_playbook_python` names the first `python3`
+  it combines them; `ansible_playbook_python` (ansible-playbook's own
+  interpreter, which understudy has none of) names the first `python3`
   on `PATH`. The `vars` variable lists a task's variables in the order
   `get_vars` combines them (role defaults, inventory, facts, play, role,
   block and task variables, `include_vars`, `set_fact` and registered

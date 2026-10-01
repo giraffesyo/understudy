@@ -142,6 +142,9 @@ type Task struct {
 	// Implicit marks a task ansible-core adds itself (a role's
 	// role_complete marker): never displayed or listed.
 	Implicit bool
+	// ImplicitGather marks the play's implicit fact gathering (the
+	// gather_facts action, whose facts count as gathered).
+	ImplicitGather bool
 	// roleParams are the role params already set on the task (a
 	// dependency's own win over its parents').
 	roleParams     map[string]bool

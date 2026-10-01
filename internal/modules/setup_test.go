@@ -829,3 +829,16 @@ func TestReverseAddrName(t *testing.T) {
 		}
 	}
 }
+
+// A PyPy interpreter's facts name its implementation (sys.implementation.name).
+func TestSetupPythonPyPy(t *testing.T) {
+	f := newFixture(t)
+	e := f.env(map[string]string{
+		"/usr/bin/python3 --version": "Python 3.10.14 (39dc8d3c85a7, Aug 27 2024, 14:33:33)\n[PyPy 7.3.17 with GCC 10.2.1 20210130]\n",
+	}, "python3")
+	facts := mustGather(t, e, []string{"!all", "python"}, nil)
+	py, _ := facts["ansible_python"].(map[string]any)
+	if py["type"] != "pypy" {
+		t.Errorf("type = %#v", py["type"])
+	}
+}

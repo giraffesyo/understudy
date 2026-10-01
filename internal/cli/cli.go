@@ -24,6 +24,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/config"
 	"github.com/giraffesyo/understudy/internal/connection"
 	"github.com/giraffesyo/understudy/internal/executor"
+	"github.com/giraffesyo/understudy/internal/factcache"
 	"github.com/giraffesyo/understudy/internal/inventory"
 	"github.com/giraffesyo/understudy/internal/omap"
 	"github.com/giraffesyo/understudy/internal/playbook"
@@ -162,6 +163,7 @@ type parsedArgs struct {
 	connPassFile   string
 	timeout        int
 	forceHandlers  bool
+	flushCache     bool
 	startAtTask    string
 	step           bool
 	listTags       bool
@@ -251,8 +253,8 @@ var cliFlags = []cliFlag{
 	{[]string{"--force-handlers"}, false, boolFlag(func(p *parsedArgs) { p.forceHandlers = true })},
 	{[]string{"--start-at-task"}, true, func(p *parsedArgs, v string) error { p.startAtTask = v; return nil }},
 	{[]string{"--step"}, false, boolFlag(func(p *parsedArgs) { p.step = true })},
-	// No fact cache and no Python module path: accepted, nothing to do.
-	{[]string{"--flush-cache"}, false, boolFlag(func(*parsedArgs) {})},
+	{[]string{"--flush-cache"}, false, boolFlag(func(p *parsedArgs) { p.flushCache = true })},
+	// No Python module path: accepted, nothing to do.
 	{[]string{"-M", "--module-path"}, true, func(*parsedArgs, string) error { return nil }},
 	{[]string{"-m", "--module-name"}, true, func(p *parsedArgs, v string) error { p.module = v; return nil }},
 	{[]string{"-a", "--args"}, true, func(p *parsedArgs, v string) error { p.moduleArgs = v; return nil }},
@@ -340,6 +342,7 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 	}
 	opts := executor.Options{
 		ForceHandlers:   p.forceHandlers,
+		FlushCache:      p.flushCache,
 		StartAtTask:     p.startAtTask,
 		Step:            p.step,
 		Forks:           forks,
@@ -367,6 +370,9 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		InjectFactsSet:          cfg.InjectFactsSet,
 		AllowBrokenConditionals: cfg.AllowBrokenConditionals,
 		TaskTimeout:             cfg.TaskTimeout,
+		FactCache:               factCacheSettings(cfg),
+		Gathering:               cfg.Gathering,
+		PluginOption:            cfg.PluginOption,
 	}
 	if cfg.Source != "" {
 		if abs, err := filepath.Abs(cfg.Source); err == nil {
@@ -379,6 +385,7 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		HostKeyChecking: cfg.HostKeyChecking,
 		Timeout:         timeout,
 		RemoteTmp:       cfg.RemoteTmp,
+		Pipelining:      configPipelining(cfg),
 		Shell: connection.ShellOptions{
 			AdminUsers: cfg.AdminUsers, SystemTmpdirs: cfg.SystemTmpdirs,
 			CommonRemoteGroup: cfg.CommonRemoteGroup, WorldReadableTemp: cfg.WorldReadableTemp,
@@ -600,7 +607,9 @@ func loadInventory(p *parsedArgs, playbookDir string) (*inventory.Inventory, err
 				displayVerbose(msg)
 			}
 		},
-		ExtraVars: p.extraVars,
+		ExtraVars:    p.extraVars,
+		FactCache:    factCacheSettings(cfg),
+		PluginOption: cfg.PluginOption,
 	})
 	if err != nil {
 		return nil, err
@@ -612,6 +621,28 @@ func loadInventory(p *parsedArgs, playbookDir string) (*inventory.Inventory, err
 	inv.PatternMismatch = cfg.HostPatternMismatch
 	inv.TransformGroupChars = cfg.TransformInvalidGroupChars
 	return inv, nil
+}
+
+// configPipelining is the pipelining the configuration and environment
+// set (ANSIBLE_PIPELINING, ANSIBLE_SSH_PIPELINING, the defaults,
+// connection and ssh_connection sections).
+func configPipelining(cfg *config.Config) bool {
+	v, _, ok := cfg.PluginOption([]string{"ANSIBLE_PIPELINING", "ANSIBLE_SSH_PIPELINING"},
+		[]string{"defaults.pipelining", "connection.pipelining", "ssh_connection.pipelining"})
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "y", "yes", "on", "1", "true", "t", "1.0":
+		return true
+	}
+	return false
+}
+
+// factCacheSettings is the fact cache's configuration.
+func factCacheSettings(cfg *config.Config) factcache.Settings {
+	return factcache.Settings{Plugin: cfg.FactCaching, URI: cfg.FactCachingConnection,
+		Prefix: cfg.FactCachingPrefix, Timeout: cfg.FactCachingTimeout}
 }
 
 // checkHostList is CLI.get_host_list: an inventory with no hosts warns

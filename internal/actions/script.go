@@ -52,6 +52,7 @@ func runScript(ctx context.Context, actx *Context, args map[string]any, freeForm
 		CheckMode:  actx.CheckMode,
 		Diff:       actx.Diff,
 		PayloadLen: int64(len(content)),
+		PkgShim:    actx.InParallel,
 	}
 	res, err := actx.RunModule(ctx, req, bytes.NewReader(content))
 	if err != nil {

@@ -43,6 +43,11 @@ type Context struct {
 	Connecting func()
 	// SetFact persists a fact for this host (set_fact, setup).
 	SetFact func(name string, value any)
+	// InParallel: the task runs in a parallel block (understudy_parallel).
+	InParallel bool
+	// CacheFacts saves set_fact's cacheable facts (named in order) to
+	// the fact cache too; nil = not cached.
+	CacheFacts func(names []string, values map[string]any)
 	// SetIncludeVars stores include_vars results at their precedence layer
 	// for this host (or its delegate / run_once batch).
 	SetIncludeVars func(vars map[string]any)
@@ -86,6 +91,7 @@ func (n *Normal) Run(ctx context.Context, actx *Context, args map[string]any, fr
 		Diff:         actx.Diff,
 		Background:   actx.Background,
 		AsyncTimeout: actx.AsyncTimeout,
+		PkgShim:      actx.InParallel && (n.Module == "command" || n.Module == "shell"),
 	}
 	res, err := actx.RunModule(ctx, req, nil)
 	if err != nil {
