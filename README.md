@@ -284,7 +284,7 @@ system-administration surface:
 | Config      | `sudoers`, `openssh_keypair`, `timezone`, `hostname`, `alternatives`, `getent`, `cron` |
 | Web & VCS   | `uri`, `git` |
 | Databases   | `mysql_db`, `mysql_user`, `mysql_query`, `mysql_variables`, `mysql_info` (native MySQL/MariaDB protocol client, no Python driver) |
-| Facts/util  | `setup`, `ping`, `debug`, `set_fact`, `assert`, `fail`, `meta`, `include_vars`, `validate_argument_spec` |
+| Facts/util  | `setup`, `ping`, `debug`, `set_fact`, `set_stats`, `assert`, `fail`, `meta`, `include_vars`, `validate_argument_spec` |
 
 All modules are idempotent (query-before-mutate) and honor `--check` and,
 where meaningful, `--diff`.
@@ -388,8 +388,18 @@ than silently diverging. Known boundaries:
   sources parsed before it; `use_extra_vars` is read from the config file
   or the `ANSIBLE_INVENTORY_USE_EXTRA_VARS` environment variable (not
   `ansible.cfg`), and the fact cache is not consulted. `meta:
-  refresh_inventory` parses the sources again (their output and warnings
-  included) but keeps the hosts and groups loaded at the start.
+  refresh_inventory` parses the sources again and replaces the hosts,
+  groups and variables: a play host the refreshed inventory dropped runs
+  nothing more in the play, and a new one runs from the next play.
+- **Command line and configuration**: `ansible-playbook` and `ansible`
+  parse their options as ansible-core's argparse does (abbreviations,
+  combined short options, mutually exclusive options), with the same
+  usage, errors, help text and exit code 2. `ansible.cfg` is read as
+  Python's `configparser` reads it and its typed settings are checked as
+  ansible-core's constants load; a bad file or value ends the command
+  with `ERROR: <message>` and exit code 5, but without the Python
+  traceback ansible-core prints after the message. `--version` names
+  understudy in place of ansible-core's Python details.
 - **Exit codes**: as ansible-playbook, the result of the last play run
   (failed and unreachable hosts carry over between plays until
   `clear_host_errors`); several playbooks each end with a recap, and one
@@ -574,6 +584,12 @@ against each distribution's Python and packaging, and on a
 booted systemd Rocky container `systemd`, `firewalld` and `selinux`) also
 run at `-v` against fresh Ubuntu, Alpine and Rocky Linux containers, one
 per tool, discovering each target's Python, and must match byte for byte.
+`test/e2e/golden/cli` runs `ansible-playbook` and `ansible` command lines
+(through understudy's symlinks) in a fresh directory with the files,
+environment and modes each case names, comparing stdout, stderr and the
+exit code byte for byte: argparse's usage, errors and help, `ansible.cfg`
+discovery and errors (the Python traceback after a configuration error
+is left out), and settings only a command line or config reaches.
 
 CI (`.github/workflows/ci.yml`) runs gofmt, `go vet`, `make depcheck`, the
 unit suite on Linux and macOS, the cross-compile check, the golden suite
