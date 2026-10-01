@@ -926,10 +926,6 @@ func (n *jnode) setCtx(ctx string) {
 	}
 }
 
-var jStatementKeywords = map[string]bool{"for": true, "if": true, "block": true, "extends": true,
-	"print": true, "macro": true, "include": true, "from": true, "import": true, "set": true,
-	"with": true, "autoescape": true}
-
 var jCompareOps = map[string]bool{"eq": true, "ne": true, "lt": true, "lteq": true, "gt": true, "gteq": true}
 
 var jMathNodes = map[string]string{"add": "Add", "sub": "Sub", "mul": "Mul", "div": "Div", "floordiv": "FloorDiv", "mod": "Mod"}

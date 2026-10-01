@@ -209,18 +209,6 @@ func (e *factEnv) p(abs string) string {
 	return filepath.Join(e.root, abs)
 }
 
-// unroot strips the fixture root from a resolved path.
-func (e *factEnv) unroot(p string) string {
-	if e.root == "" || e.root == "/" {
-		return p
-	}
-	rel, err := filepath.Rel(e.root, p)
-	if err != nil {
-		return p
-	}
-	return "/" + filepath.ToSlash(rel)
-}
-
 // fileContent is ansible's get_file_content(path): stripped content, or
 // ok=false when the file is missing, unreadable or empty.
 func (e *factEnv) fileContent(abs string) (string, bool) {
@@ -606,16 +594,4 @@ func pyCapitalize(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + strings.ToLower(s[1:])
-}
-
-func normalizeArch(goarch string) string {
-	switch goarch {
-	case "amd64":
-		return "x86_64"
-	case "arm64":
-		return "aarch64"
-	case "386":
-		return "i386"
-	}
-	return goarch
 }

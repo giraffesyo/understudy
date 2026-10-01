@@ -452,10 +452,8 @@ func strptime(data, format string) (pyDatetime, error) {
 			}
 			tz = &pyTZ{Offset: off}
 		}
-		if tz != nil {
-			if name, ok := found["Z"]; ok {
-				tz.Name = name
-			}
+		if name, ok := found["Z"]; ok {
+			tz.Name = name
 		}
 	}
 	leapFix := false

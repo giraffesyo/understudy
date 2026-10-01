@@ -682,21 +682,6 @@ func runValidate(env *RunEnv, cmdline string) (int, string, string) {
 	return 0, stdout.String(), stderr.String()
 }
 
-// validateFailure renders a failed validate command the way Ansible does:
-// exit_status plus the command's output (and no rc).
-func validateFailure(err error) *agentproto.Result {
-	if ve, ok := err.(*fsutil.ValidateError); ok {
-		stdout := strings.TrimRight(ve.Stdout, "\n")
-		stderr := strings.TrimRight(ve.Stderr, "\n")
-		return &agentproto.Result{Failed: true, Msg: "failed to validate", Extra: map[string]any{
-			"exit_status": int64(ve.RC),
-			"stdout":      stdout, "stdout_lines": lines(stdout),
-			"stderr": stderr, "stderr_lines": lines(stderr),
-		}}
-	}
-	return agentproto.Fail("%v", err)
-}
-
 // lines is str.splitlines() for the *_lines companions.
 func lines(s string) []any {
 	out := []any{}

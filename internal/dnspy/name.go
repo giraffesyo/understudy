@@ -51,16 +51,6 @@ func (n Name) Equal(o Name) bool {
 	return true
 }
 
-// key is a case-folded form of n, for maps.
-func (n Name) key() string {
-	var b strings.Builder
-	for _, l := range n.Labels {
-		b.WriteByte(byte(len(l)))
-		b.Write(bytes.ToLower(l))
-	}
-	return b.String()
-}
-
 const nameEscaped = "\"().;\\@$"
 
 // String is Name.to_text().

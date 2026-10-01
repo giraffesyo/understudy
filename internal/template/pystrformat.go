@@ -109,9 +109,7 @@ func pyStrFormat(format string, args []any, kwargs map[string]any, markup bool) 
 				k := strings.IndexAny(lookups[1:], ".[")
 				attr := lookups[1:]
 				if k >= 0 {
-					attr, lookups = lookups[1:k+1], lookups[k+1:]
-				} else {
-					lookups = ""
+					attr = lookups[1 : k+1]
 				}
 				return "", fmt.Errorf("%s object has no attribute %s", pyStrRepr(pyClassName(v, false)), pyStrRepr(attr))
 			}

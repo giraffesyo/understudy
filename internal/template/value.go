@@ -998,19 +998,6 @@ func dictKeyOf(d *yaml.OMap, k any) (string, bool) {
 	return "", false
 }
 
-// dictSetFrom is dictSet for key k of src.
-func dictSetFrom(d, src *yaml.OMap, k string, v any) {
-	if typed, ok := src.TypedKey(k); ok {
-		if have, ok := dictKeyOf(d, typed); ok {
-			d.Set(have, v)
-		} else {
-			d.SetTyped(k, typed, v)
-		}
-		return
-	}
-	d.Set(k, v)
-}
-
 // typedKeyText is the text m holds the key k (not a string) under, when
 // m has it.
 func typedKeyText(m any, k any) (string, bool) {

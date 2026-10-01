@@ -33,12 +33,6 @@ func asBigInt(v any) (*big.Int, bool) {
 	return nil, false
 }
 
-// isBigInt reports whether v is an int beyond int64.
-func isBigInt(v any) bool {
-	_, ok := Undeprecate(v).(*big.Int)
-	return ok
-}
-
 // normInt is b as the engine keeps an int: int64 when it fits.
 func normInt(b *big.Int) any {
 	if b.IsInt64() {

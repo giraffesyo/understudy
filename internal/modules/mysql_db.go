@@ -78,13 +78,10 @@ func mysqlDBModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	if loginPort < 0 || loginPort > 65535 {
 		return m.failf("login_port must be a valid unix port number (0-65535)")
 	}
-	var ignoreTables []string
 	for _, t := range p.List("ignore_tables") {
-		s := pyStrValue(t)
-		if s == "" {
+		if pyStrValue(t) == "" {
 			return m.failf("Name of ignored table cannot be empty")
 		}
-		ignoreTables = append(ignoreTables, s)
 	}
 	chdir := pyExpandPath(p.Str("chdir"))
 	if chdir != "" {

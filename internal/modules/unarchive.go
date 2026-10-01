@@ -393,16 +393,15 @@ func unarchiveFetch(p *args.Parsed, rawURL string) (string, string) {
 // splitMultiExt is urls._split_multiext.
 func splitMultiExt(name string, count int) (string, string) {
 	const minLen, maxLen = 3, 5
-	for i := 0; i < count; i++ {
-		ext := filepath.Ext(name)
-		if len(ext) < minLen || len(ext) > maxLen+1 || ext == name {
-			break
-		}
-		root := strings.TrimSuffix(name, ext)
-		r2, e2 := splitMultiExt(root, count-1-i)
-		return r2, e2 + ext
+	if count <= 0 {
+		return name, ""
 	}
-	return name, ""
+	ext := filepath.Ext(name)
+	if len(ext) < minLen || len(ext) > maxLen+1 || ext == name {
+		return name, ""
+	}
+	root, rest := splitMultiExt(strings.TrimSuffix(name, ext), count-1)
+	return root, rest + ext
 }
 
 func (u *unarchiveRun) pickHandler() (archiveHandler, *agentproto.Result) {

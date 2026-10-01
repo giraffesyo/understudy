@@ -57,7 +57,6 @@ type gitRun struct {
 	p        *args.Parsed
 	gitPath  string
 	extraEnv map[string]string // run_command_environ_update + GIT_SSH_COMMAND
-	params   map[string]any    // module.params['repo'] etc. as given
 	warnings []any
 	result   map[string]any
 

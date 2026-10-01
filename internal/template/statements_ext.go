@@ -594,7 +594,6 @@ func (ec *EvalCtx) execExt(n tmplNode, out *renderOutput) (bool, error) {
 // top-level template, whose newline Ansible restores), a single trailing
 // newline is dropped.
 func (ec *EvalCtx) loadTemplate(name string) ([]tmplNode, string, error) {
-	var tried []string
 	for _, dir := range ec.searchPath {
 		path := name
 		if !filepath.IsAbs(name) {
@@ -602,7 +601,6 @@ func (ec *EvalCtx) loadTemplate(name string) ([]tmplNode, string, error) {
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			tried = append(tried, path)
 			continue
 		}
 		src := strings.TrimSuffix(string(data), "\n")

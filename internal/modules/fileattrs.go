@@ -59,12 +59,6 @@ func (d *fileDiff) value() map[string]any {
 	return map[string]any{"before": d.Before, "after": d.After}
 }
 
-// textDiff is a before/after content diff entry.
-func textDiff(beforeHeader, before, afterHeader, after string) map[string]any {
-	return map[string]any{"before_header": beforeHeader, "before": before,
-		"after_header": afterHeader, "after": after}
-}
-
 // attrDiffValue is the "(file attributes)" diff entry lineinfile-style
 // modules return: the headers plus whatever set_fs_attributes recorded.
 func attrDiffValue(d *fileDiff, path string) map[string]any {
@@ -373,10 +367,7 @@ func pyIntBase(s string, base int) (int64, bool) {
 		s = s[1:]
 	}
 	if base == 8 && len(s) > 2 && s[0] == '0' && (s[1] == 'o' || s[1] == 'O') {
-		s = s[2:]
-		if strings.HasPrefix(s, "_") {
-			s = s[1:]
-		}
+		s = strings.TrimPrefix(s[2:], "_")
 	}
 	if s == "" || strings.HasPrefix(s, "_") || strings.HasSuffix(s, "_") || strings.Contains(s, "__") {
 		return 0, false
