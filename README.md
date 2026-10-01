@@ -285,6 +285,7 @@ system-administration surface:
 | Web & VCS   | `uri`, `git` |
 | Databases   | `mysql_db`, `mysql_user`, `mysql_query`, `mysql_variables`, `mysql_info` (native MySQL/MariaDB protocol client, no Python driver) |
 | Facts/util  | `setup`, `ping`, `debug`, `set_fact`, `set_stats`, `assert`, `fail`, `meta`, `include_vars`, `validate_argument_spec` |
+| Inventory   | `add_host`, `group_by` |
 
 All modules are idempotent (query-before-mutate) and honor `--check` and,
 where meaningful, `--diff`.
@@ -389,8 +390,30 @@ than silently diverging. Known boundaries:
   or the `ANSIBLE_INVENTORY_USE_EXTRA_VARS` environment variable (not
   `ansible.cfg`), and the fact cache is not consulted. `meta:
   refresh_inventory` parses the sources again and replaces the hosts,
-  groups and variables: a play host the refreshed inventory dropped runs
-  nothing more in the play, and a new one runs from the next play.
+  groups and variables, then makes the run's `add_host` and `group_by`
+  changes again (hosts first, then groups; a host the refresh dropped
+  loses its `group_by` groups): a play host the refreshed inventory
+  dropped runs nothing more in the play, and a new one runs from the next
+  play.
+- **`add_host` and `group_by`**: both change the run's in-memory
+  inventory at once, as ansible-core 2.21's inventory RPC does, with its
+  `changed` rules (a host, group, membership or variable that really
+  changed), its results and errors. `add_host` bypasses the host loop:
+  the linear strategy runs it on the first host only (once per loop
+  item), its result, register and failure stay that host's, and a
+  failure fails every host left in the batch, as a `run_once` task's
+  does; the free strategies refuse it, ending the run. A host it adds
+  joins `ansible_play_hosts(_all)` for the rest of the batch. New groups
+  and hosts take their `group_vars/` and `host_vars/` files, which stay
+  over the variables `add_host` gives. `TRANSFORM_INVALID_GROUP_CHARS`
+  applies to the groups the two create (a parent named with invalid
+  characters then fails as in ansible-core); groups in the inventory
+  sources keep their names, as with the default (`never`). Host patterns
+  are cached until the inventory changes, so a host left half-made by a
+  failed `add_host` is not matched until the next change, as in
+  ansible-core. Not modeled: the connection variables ansible-core adds
+  to a task's variables under their other names (`ansible_port` for an
+  `ansible_ssh_port` that a `host:port` name sets).
 - **Command line and configuration**: `ansible-playbook` and `ansible`
   parse their options as ansible-core's argparse does (abbreviations,
   combined short options, mutually exclusive options), with the same

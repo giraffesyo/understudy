@@ -173,7 +173,8 @@ type Runner struct {
 	dbgMu          sync.Mutex
 	custom         map[string]*yaml.OMap // set_stats: host ("_run": the run's) -> stats
 	playVarOrigins []template.KeyOrigin  // where the play's vars and vars_files name reserved variables
-	refreshedHosts []string              // the play's hosts after a meta: refresh_inventory (nil: none ran)
+	playHostsAll   []string              // the play's hosts as the batch started or the inventory was refreshed
+	dynPlayHosts   []string              // hosts add_host added during the batch (the strategy's hosts cache)
 	playEnded      bool                  // meta: end_play
 	batchEnded     bool                  // meta: end_batch
 	mu             sync.Mutex
@@ -238,6 +239,23 @@ func init() { playbook.ModuleKnown = actions.Known }
 // resolvePlayHosts matches a play's pattern (∩ --limit) against inventory,
 // initializing stats rows for newly seen hosts.
 func (r *Runner) resolvePlayHosts(play *playbook.Play) ([]string, error) {
+	names, err := r.matchPlayHosts(play)
+	if err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, name := range names {
+		if _, ok := r.stats[name]; !ok {
+			r.stats[name] = &HostStats{}
+			r.order = append(r.order, name)
+		}
+	}
+	return names, nil
+}
+
+// matchPlayHosts matches a play's pattern (∩ --limit) against inventory.
+func (r *Runner) matchPlayHosts(play *playbook.Play) ([]string, error) {
 	hosts, err := r.Inv.Match(play.HostPattern)
 	if err != nil {
 		return nil, err
@@ -260,15 +278,9 @@ func (r *Runner) resolvePlayHosts(play *playbook.Play) ([]string, error) {
 		hosts = filtered
 	}
 	var names []string
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	for _, h := range hosts {
 		names = append(names, h.Name)
 		r.registerImplicit(h)
-		if _, ok := r.stats[h.Name]; !ok {
-			r.stats[h.Name] = &HostStats{}
-			r.order = append(r.order, h.Name)
-		}
 	}
 	return names, nil
 }
@@ -360,7 +372,7 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 	r.curPlay = play
 	r.ended = map[string]bool{}
 	r.playEnded = false
-	r.refreshedHosts = nil
+	r.playHostsAll = nil
 	r.mu.Unlock()
 	r.Store.SetPlayVars(play.Vars)
 	reserved := append([]template.KeyOrigin{}, play.VarOrigins...)
@@ -430,6 +442,17 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 			r.Callback.PlayStart(play) // Ansible reprints the banner per batch
 		}
 		r.batchEnded = false
+		// Each batch matches the play's hosts again (ignoring the
+		// batch): hosts add_host put in its groups are among them.
+		cached := allHosts
+		if bi > 0 {
+			if cached, err = r.matchPlayHosts(play); err != nil {
+				return err
+			}
+		}
+		r.mu.Lock()
+		r.playHostsAll = append([]string{}, cached...)
+		r.mu.Unlock()
 		failedBefore := len(r.failedSet(batch))
 		r.mu.Lock()
 		r.batchFailed = map[string]bool{}
@@ -485,6 +508,7 @@ func (r *Runner) runPlayBatch(ctx context.Context, play *playbook.Play, playHost
 		r.nextBlockID = 1 << 20 // above any parse-time block ID
 	}
 	r.failedIn = map[string]map[int]bool{}
+	r.dynPlayHosts = nil
 	r.mu.Unlock()
 	if play.GatherFacts == nil || *play.GatherFacts {
 		gather := &playbook.Task{
@@ -673,8 +697,21 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 			}
 			continue
 		}
+		if !r.freeStrategyCheck(play, task) {
+			return nil
+		}
 		before := r.failedSet(active)
 		r.runTaskAcrossHosts(ctx, play, task, active, playHosts, false)
+		if (task.RunOnce || bypassesHostLoop(task)) && !freeStrategy(play) && !task.IgnoreErrors &&
+			len(r.failedSet(active)) > len(before) {
+			// A run_once task (or one bypassing the host loop) that
+			// failed fails every host left in the batch.
+			r.mu.Lock()
+			for _, h := range active {
+				r.failed[h] = true
+			}
+			r.mu.Unlock()
+		}
 
 		// any_errors_fatal: a new hard failure ends the whole playbook once
 		// this task has finished on every host.
@@ -813,6 +850,10 @@ func (r *Runner) runTaskAcrossHosts(ctx context.Context, play *playbook.Play, ta
 			r.runOnceHosts = nil
 			r.mu.Unlock()
 		}()
+		active = active[:1]
+	} else if bypassesHostLoop(task) && len(active) > 0 {
+		// The action bypasses the host loop: only the first host runs
+		// it, and the result stays that host's.
 		active = active[:1]
 	}
 	g, gctx := errgroup.WithContext(ctx)
@@ -1277,20 +1318,39 @@ func (r *Runner) newHostContext(host string, pos template.Position, playHosts []
 		}
 	}
 	if playHosts != nil {
-		list := make([]any, len(playHosts))
-		for i, h := range playHosts {
-			list[i] = h
+		// The strategy's hosts caches: every host of the play (as
+		// matched when the batch started or the inventory was
+		// refreshed, then those add_host added) and the batch (those
+		// still in the inventory); the play's removed hosts (failed,
+		// unreachable, ended) are left out of all but the first.
+		all := strList(playHosts)
+		if cached := r.playHostsCached(); cached != nil {
+			all = strList(cached)
+			playHosts = intersect(playHosts, cached)
 		}
-		all := list
-		if refreshed := r.playHostsRefreshed(); refreshed != nil {
-			// After meta: refresh_inventory, the play's hosts are the
-			// refreshed inventory's, and its batch those still in it.
-			all = strList(refreshed)
-			playHosts = intersect(playHosts, refreshed)
-			list = strList(playHosts)
+		all = r.withDynamicPlayHosts(all)
+		removed := r.removedHosts()
+		var hosts []any
+		for _, h := range all {
+			if !removed[h.(string)] {
+				hosts = append(hosts, h)
+			}
 		}
-		c.SetMagic("ansible_play_hosts", all)
-		c.SetMagic("play_hosts", deprecate(deprecatedPlayHosts, list))
+		var batch []string
+		for _, h := range playHosts {
+			if !removed[h] {
+				batch = append(batch, h)
+			}
+		}
+		playHosts = batch
+		if playHosts == nil {
+			playHosts = []string{}
+		}
+		if hosts == nil {
+			hosts = []any{}
+		}
+		c.SetMagic("ansible_play_hosts", hosts)
+		c.SetMagic("play_hosts", deprecate(deprecatedPlayHosts, strList(playHosts)))
 		c.SetMagic("ansible_play_hosts_all", all)
 	}
 	c.SetMagic("playbook_dir", r.Opts.BaseDir)
@@ -1308,7 +1368,7 @@ func (r *Runner) newHostContext(host string, pos template.Position, playHosts []
 		}
 		if conn == "" || conn == "smart" {
 			conn = "ssh"
-			if (host == "localhost" || host == "127.0.0.1") && r.Inv != nil && r.Inv.Hosts[host] == nil {
+			if (host == "localhost" || host == "127.0.0.1") && r.Inv != nil && r.Inv.Host(host) == nil {
 				conn = "local"
 			}
 		}
@@ -1323,12 +1383,28 @@ func (r *Runner) newHostContext(host string, pos template.Position, playHosts []
 	return c
 }
 
-// playHostsRefreshed is the play's hosts in the refreshed inventory, nil
-// unless meta: refresh_inventory ran in the play.
-func (r *Runner) playHostsRefreshed() []string {
+// playHostsCached is the play's hosts as the batch started, or as the
+// refreshed inventory matched them after meta: refresh_inventory.
+func (r *Runner) playHostsCached() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.refreshedHosts
+	return r.playHostsAll
+}
+
+// removedHosts are the play's removed hosts: failed (in this play or an
+// earlier one), unreachable, or ended by end_host or a refresh.
+func (r *Runner) removedHosts() map[string]bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[string]bool{}
+	for _, m := range []map[string]bool{r.failed, r.unreachable, r.ended} {
+		for h, v := range m {
+			if v {
+				out[h] = true
+			}
+		}
+	}
+	return out
 }
 
 // refreshInventory is meta: refresh_inventory: the inventory sources
@@ -1341,14 +1417,19 @@ func (r *Runner) refreshInventory(play *playbook.Play, playHosts []string) error
 	if err != nil {
 		return err
 	}
+	// Hosts and groups add_host and group_by made are made again.
+	if err := inv.ReplayDynamic(r.Inv); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	r.Inv = inv
+	r.dynPlayHosts = nil
 	r.mu.Unlock()
 	r.implicitMu.Lock()
 	r.implicitSet = false
 	r.implicitMu.Unlock()
 	for _, name := range inv.SortedHostNames() {
-		r.Store.SetInventoryVars(name, inv.EffectiveVars(inv.Hosts[name]))
+		r.Store.SetInventoryVars(name, inv.EffectiveVars(inv.Host(name)))
 	}
 	hosts, err := r.resolvePlayHosts(play)
 	if err != nil {
@@ -1368,7 +1449,7 @@ func (r *Runner) refreshInventory(play *playbook.Play, playHosts []string) error
 	if hosts == nil {
 		hosts = []string{}
 	}
-	r.refreshedHosts = hosts
+	r.playHostsAll = hosts
 	return nil
 }
 
@@ -1895,9 +1976,12 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 	}
 	var conn connection.Connection
 	var inProcess bool
-	if target != host && (target == "localhost" || target == "127.0.0.1") && r.Inv.Hosts[target] == nil {
+	if target != host && (target == "localhost" || target == "127.0.0.1") && r.Inv.Host(target) == nil {
 		// Implicit localhost: the control node, over the local connection.
 		conn, inProcess = connection.NewLocal(), true
+	} else if noConnectionActions[task.Module] {
+		// The action runs on the controller alone (_requires_connection
+		// is False): no connection is made, so none can fail.
 	} else {
 		conn, inProcess, err = r.Conns.GetWith(ctx, target, kw)
 	}
@@ -2470,6 +2554,12 @@ func (r *Runner) dispatch(ctx context.Context, task *playbook.Task, actx *action
 	}
 	if task.Module == "set_stats" {
 		return r.runSetStats(task, actx, args)
+	}
+	if task.Module == "add_host" {
+		return r.runAddHost(task, actx, args)
+	}
+	if task.Module == "group_by" {
+		return r.runGroupBy(actx, args)
 	}
 	if a := actions.Lookup(task.Module); a != nil {
 		res := a.Run(ctx, actx, args, freeForm)
@@ -3102,7 +3192,7 @@ func (r *Runner) warnReservedFor(host string, task *playbook.Task) {
 		seq = append(seq, play.RoleDefaultOrigins...)
 	}
 	if r.Inv != nil {
-		if h := r.Inv.Hosts[host]; h != nil {
+		if h := r.Inv.Host(host); h != nil {
 			var all *inventory.Group
 			var groups []*inventory.Group
 			for _, g := range r.Inv.OrderedGroups(h) {

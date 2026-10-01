@@ -1,0 +1,7 @@
+[all:vars]
+ansible_connection=local
+[web]
+h1 role=front
+h2
+[db]
+d1

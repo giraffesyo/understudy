@@ -20,6 +20,13 @@ func init() {
 	Register("set_stats", actionFunc(func(context.Context, *Context, map[string]any, string) *agentproto.Result {
 		return agentproto.Fail("set_stats runs in the executor")
 	}))
+	// add_host and group_by change the run's inventory, which the
+	// executor holds.
+	for _, name := range []string{"add_host", "group_by"} {
+		Register(name, actionFunc(func(context.Context, *Context, map[string]any, string) *agentproto.Result {
+			return agentproto.Fail("%s runs in the executor", name)
+		}))
+	}
 }
 
 type actionFunc func(ctx context.Context, actx *Context, args map[string]any, freeForm string) *agentproto.Result

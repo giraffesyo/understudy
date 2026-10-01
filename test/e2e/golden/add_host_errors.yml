@@ -1,0 +1,58 @@
+# add_host and group_by failures: their own checks, and the inventory's
+# errors (raised, so "Task failed: ..." is the result's msg too). A
+# failed add_host fails only the host that ran it, but like a run_once
+# task it fails every host left in the play.
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: no name
+      add_host:
+        groups: x
+      ignore_errors: true
+    - name: groups neither a list nor a string
+      add_host:
+        name: e1
+        groups: {a: 1}
+      ignore_errors: true
+    - name: an empty host name
+      add_host:
+        name: ""
+      ignore_errors: true
+    - name: an empty group name leaves the host half made
+      add_host:
+        name: e2
+        groups: [""]
+      ignore_errors: true
+    - name: group_by without a key
+      group_by:
+        parents: x
+      ignore_errors: true
+    - name: group_by with an unknown option
+      group_by:
+        key: x
+        bogus: 1
+      ignore_errors: true
+    - name: a group as its own parent
+      group_by:
+        key: selfish
+        parents: [selfish]
+      ignore_errors: true
+    - name: a parent loop
+      group_by:
+        key: all
+        parents: ungrouped
+      ignore_errors: true
+    - name: an empty key
+      group_by:
+        key: ""
+      ignore_errors: true
+    - debug:
+        msg: "{{ groups }} {{ hostvars['e2'] is defined }}"
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: fails for every host
+      add_host:
+        groups: x
+    - debug:
+        msg: never

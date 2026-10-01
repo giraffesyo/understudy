@@ -1,0 +1,27 @@
+# TRANSFORM_INVALID_GROUP_CHARS: add_host and group_by make the groups
+# they name safe as the setting says ("always" warns that it replaced
+# characters, "silently" does not); a parent named with invalid
+# characters is then looked up as written, which fails (a KeyError).
+- hosts: web
+  gather_facts: false
+  tasks:
+    - group_by:
+        key: "kind {{ inventory_hostname }}"
+    - add_host:
+        name: n1
+        groups: ["x.y", "x-y"]
+    - add_host:
+        name: n1
+        groups: ["x-y"]
+    - group_by:
+        key: "child.{{ inventory_hostname }}"
+        parents: ["p.q"]
+      ignore_errors: true
+    - debug:
+        msg: "{{ groups }}"
+      run_once: true
+- hosts: x_y
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "{{ inventory_hostname }} {{ group_names }}"

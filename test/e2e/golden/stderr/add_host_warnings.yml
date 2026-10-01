@@ -1,0 +1,17 @@
+# The inventory's warnings as add_host and group_by change it: invalid
+# characters in a group name (kept, TRANSFORM_INVALID_GROUP_CHARS being
+# "never"), shown once; a group and a host of the same name.
+- hosts: all
+  gather_facts: false
+  tasks:
+    - group_by:
+        key: "with space"
+        parents: ["a-parent"]
+    - add_host:
+        name: same
+        groups: [same, "dotted.group"]
+    - add_host:
+        name: localhost
+        groups: [extra]
+    - debug:
+        msg: "{{ groups }}"

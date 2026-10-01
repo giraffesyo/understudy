@@ -1,0 +1,60 @@
+# group_by runs on every host: each joins the group its key names
+# (created under its parents, "all" by default, when new). changed
+# reports whether the inventory changed; spaces in the names show as
+# dashes in the result. The groups serve later plays.
+- hosts: web
+  gather_facts: false
+  tasks:
+    - name: by a variable
+      group_by:
+        key: "kind_{{ kind }}"
+      register: grouped
+    - debug:
+        msg: "{{ grouped.add_group }} {{ grouped.parent_groups }} {{ grouped.changed }}"
+    - name: again, nothing changes
+      group_by: key=kind_{{ kind }}
+    - name: under new parents
+      group_by:
+        key: "host_{{ inventory_hostname }}"
+        parents: [parent_one, "parent two"]
+    - name: a string parent that exists
+      group_by:
+        key: "under_web_{{ inventory_hostname }}"
+        parents: web
+    - name: one host, then all
+      group_by: key=later
+      when: inventory_hostname == 'h2'
+    - group_by: key=later
+    - name: in a loop
+      group_by:
+        key: "loop_{{ item }}"
+      loop: [1, 2]
+    - name: delegated
+      group_by: key=delegated
+      delegate_to: localhost
+    - name: changed_when false
+      group_by: key=cw_{{ inventory_hostname }}
+      changed_when: false
+    - name: a new parent, for one host
+      group_by:
+        key: "child_{{ inventory_hostname }}"
+        parents: new_parent
+      when: inventory_hostname == 'h1'
+    - debug:
+        msg: "{{ groups }} {{ group_names }}"
+- hosts: kind_a
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "{{ inventory_hostname }} {{ group_names }} {{ webvar }}"
+- hosts: parent_one:&kind_b
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "{{ inventory_hostname }} {{ groups['parent-two'] }}"
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "{{ groups.keys() | list }}"
+      run_once: true
