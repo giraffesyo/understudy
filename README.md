@@ -533,10 +533,38 @@ than silently diverging. Known boundaries:
   result's scalars are named as tagged too). `to_json` of a value that
   contains itself fails in CPython with a C-stack message that depends on
   the platform (`Stack overflow (used 16354 kB)`); understudy reports
-  `maximum recursion depth exceeded`. A filter called with too many
-  positional arguments is not rejected with Python's `takes N positional
-  arguments` error, and a `when:` whose result is not a boolean is taken
-  for its truthiness rather than failing as a broken conditional.
+  `maximum recursion depth exceeded`. Filters and tests bind their
+  arguments to ansible-core's Python signatures (`takes 1 positional
+  argument but 2 were given`, `got an unexpected keyword argument 'x'.
+  Did you mean 'y'?`). `union`/`intersect`/`difference`/
+  `symmetric_difference` come out in CPython's set order for numbers
+  (string hashes are randomized per Python process; understudy keeps
+  their first-seen order), and seeded `random`/`shuffle` pick what
+  Python's Mersenne Twister picks. `password_hash` does not implement
+  `blowfish` (bcrypt). Not implemented (they fail as unknown, `No filter
+  named ...`): the filters `attr`, `combinations`, `permutations`,
+  `product`, `commonpath`, `e`/`escape`, `forceescape`, `safe`,
+  `striptags`, `expandvars`, `fileglob`, `filesizeformat`, `items`,
+  `normpath`, `relpath`, `pprint`, `rekey_on_member`, `subelements`,
+  `to_datetime`, `to_uuid`, `tojson`, `urldecode`, `urlencode`, `urlize`,
+  `vault`/`unvault`, `win_*`, `wordcount`, `xmlattr`, `zip_longest`, and
+  the tests `abs`/`is_abs`, `is_dir`, `is_file`, `is_link`, `is_mount`/
+  `mount`, `is_same_file`/`same_file`, `link_exists`, `isnan`/`nan`,
+  `issubset`/`issuperset`, `lower`, `upper`, `change`, `escaped`,
+  `filter`, `test`, `finished`, `started`, `successful`, `reachable`,
+  `unreachable`, `timedout`, `uri`/`url`/`urn`, `vault_encrypted`,
+  `vaulted_file`.
+- **Broken conditionals**: a conditional whose result is not a boolean
+  fails as ansible-core's broken conditional (or, with
+  `ALLOW_BROKEN_CONDITIONALS`, warns), naming where the result's value
+  came from: a variable's definition (play, `vars_files`, `include_vars`,
+  role, YAML and INI inventory, `-e`), a `set_fact` argument, an item of
+  one of those, or the expression for a computed or registered value.
+  Not tracked: the items of a loop over a literal list of numbers and
+  values reached through `hostvars` name the expression instead.
+- **`debug var=`**: undefined values render in place as ansible-core's
+  placeholders; a `var` naming a method (`d.items`) prints its address
+  rather than failing as "unsupported for variable storage".
 
 ## Building & testing
 
