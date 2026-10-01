@@ -49,7 +49,8 @@ standard library.
 
 Prebuilt binaries for Linux and macOS (amd64 and arm64) are attached to each
 [GitHub release](https://github.com/giraffesyo/understudy/releases), with a
-`checksums.txt` of their SHA-256 sums:
+`checksums.txt` of their SHA-256 sums, a CycloneDX SBOM per tarball, and
+build provenance attestations (see [SECURITY.md](SECURITY.md#verifying-release-artifacts)):
 
 ```sh
 v=v0.1.0 os=linux arch=amd64    # or darwin / arm64
@@ -828,10 +829,16 @@ exit code byte for byte: argparse's usage, errors and help, `ansible.cfg`
 discovery and errors (the Python traceback after a configuration error
 is left out), and settings only a command line or config reaches.
 
-CI (`.github/workflows/ci.yml`) runs gofmt, `go vet`, `make depcheck`, the
-unit suite on Linux and macOS, the cross-compile check, the golden suite
-against the latest ansible-core (pinned in one place: `ANSIBLE_CORE_VERSION`
-in the workflow), and the Docker end-to-end suite.
+CI (`.github/workflows/ci.yml`) runs gofmt, `go mod verify`, `go vet`,
+staticcheck, govulncheck, `make depcheck`, the unit suite on Linux and macOS
+(and on the minimum Go `go.mod` declares), the unit suite under the race
+detector, the cross-compile check, the golden suite against the latest
+ansible-core (pinned in one place: `.github/golden/requirements.in`,
+installed from its hash-checked lock), and the Docker end-to-end suite.
+The golden and Docker jobs set `UNDERSTUDY_REQUIRE_PREREQS=1`, which turns
+the harnesses' skips for a missing `ansible-playbook`, Docker or
+`bin/understudy` into failures. CodeQL and OpenSSF Scorecard run in their
+own workflows; contributions follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Releases
 
@@ -842,19 +849,24 @@ back to the module version `go install` records.
 
 ```sh
 make release VERSION=v1.2.3   # dist/understudy_v1.2.3_<os>_<arch>.tar.gz + dist/checksums.txt
+make sbom VERSION=v1.2.3      # + dist/understudy_v1.2.3_<os>_<arch>.sbom.cdx.json, checksums over both
 ```
 
 builds stripped, static tarballs (binary, LICENSE, README) for linux and
-darwin on amd64 and arm64. To publish one, push a tag:
+darwin on amd64 and arm64.
 
-```sh
-git tag -a v1.2.3 -m v1.2.3 && git push origin v1.2.3
-```
-
-The release workflow (`.github/workflows/release.yml`) tests, runs
-`make release` with the tag as the version, and creates the GitHub release
-with the tarballs and checksums (a tag with a `-`, such as `v1.3.0-rc.1`, is
-marked as a prerelease).
+Releases are cut by [release-please](https://github.com/googleapis/release-please)
+from the [Conventional Commits](CONTRIBUTING.md#commit-messages-conventional-commits)
+on `main`; nobody pushes tags by hand. On each push to `main` the release
+workflow (`.github/workflows/release.yml`) opens or updates a release PR
+that bumps the version in `.release-please-manifest.json` and adds the
+release's section to `CHANGELOG.md`. Merging that PR tags `vX.Y.Z` and
+creates the GitHub release; the same workflow then checks out the tag, runs
+the unit tests, `make release VERSION=vX.Y.Z` (so `understudy version`
+reports the tag, which it checks) and `make sbom`, attests build provenance
+and the SBOMs, and uploads the tarballs, SBOMs and `checksums.txt` to the
+release. Running the workflow by hand with a tag rebuilds and re-uploads an
+existing release's artifacts.
 
 ## License
 
