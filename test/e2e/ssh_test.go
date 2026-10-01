@@ -165,3 +165,31 @@ func TestSSHAsyncJob(t *testing.T) {
 		t.Fatalf("exit=%d\n%s", code, out)
 	}
 }
+
+// A task that times out on an SSH target has the processes its module
+// started killed there too: the agent, terminated, takes the command's
+// process group (background jobs included) down with it.
+func TestSSHTimedOutCommandIsKilled(t *testing.T) {
+	name, port := startSSHContainer(t)
+	out, code := runSSH(t, port, `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - shell: (sleep 3 && touch /tmp/bg-marker) & sleep 3 && touch /tmp/fg-marker
+      timeout: 1
+      ignore_errors: true
+    - become: true
+      shell: (sleep 3 && touch /tmp/become-marker) & wait
+      timeout: 1
+      ignore_errors: true
+`)
+	if code != 0 || !strings.Contains(out, "ignored=2") {
+		t.Fatalf("exit=%d\n%s", code, out)
+	}
+	time.Sleep(4 * time.Second)
+	for _, m := range []string{"/tmp/bg-marker", "/tmp/fg-marker", "/tmp/become-marker"} {
+		if exec.Command("docker", "exec", name, "test", "-e", m).Run() == nil {
+			t.Errorf("the timed-out command kept running and created %s", m)
+		}
+	}
+}

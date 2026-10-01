@@ -444,9 +444,13 @@ than silently diverging. Known boundaries:
   Go's RE2 (lookaround and backreferences in *patterns* are rejected with a
   clear error rather than mis-matched),
   iterated with Python's `re.sub`/`findall` match rules; a task that hits
-  its `timeout` has the process its module started killed (ansible-core
-  leaves it running, even after the playbook exits) — output is identical,
-  only the orphaned work is stopped.
+  its `timeout` has the processes its module started killed — each command
+  a module runs leads its own process group, so its background jobs and
+  pipeline stages go with it, on the control node and (the agent being
+  terminated in turn) on SSH targets (ansible-core leaves them running,
+  even after the playbook exits) — output is identical, only the orphaned
+  work is stopped. A Ctrl-C (or SIGTERM/SIGHUP) is passed on to those
+  process groups, so it still stops them as it would in the terminal's.
 
 ## Building & testing
 

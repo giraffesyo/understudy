@@ -28,6 +28,10 @@ func main() {
 	case "version":
 		fmt.Printf("understudy-agent proto=%d version=%s\n", agentproto.ProtoVersion, version)
 	case "run":
+		// The module's commands lead their own process groups: the
+		// agent's termination (or its shell's) takes them down too.
+		modules.ForwardSignals()
+		modules.ExitWithParent()
 		os.Exit(modules.ServeFrame(os.Stdin, os.Stdout))
 	default:
 		fmt.Fprintf(os.Stderr, "agent: unknown command %q\n", os.Args[1])
