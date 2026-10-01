@@ -1,0 +1,5 @@
+h1 ansible_connection=local name=host
+[web]
+h1
+[web:vars]
+timeout=1

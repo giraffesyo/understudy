@@ -171,6 +171,7 @@ type Runner struct {
 	dbgReader      *bufio.Reader
 	dbgMu          sync.Mutex
 	custom         map[string]*yaml.OMap // set_stats: host ("_run": the run's) -> stats
+	playVarOrigins []template.KeyOrigin  // where the play's vars and vars_files name reserved variables
 	playEnded      bool                  // meta: end_play
 	batchEnded     bool                  // meta: end_batch
 	mu             sync.Mutex
@@ -402,6 +403,7 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 	}
 	// The play's variables, before any host's, are checked for reserved
 	// names (VariableManager.get_vars warns as it merges them).
+	r.playVarOrigins = reserved
 	r.warnReserved(append(reserved, r.Opts.ExtraVarOrigins...))
 	// ansible-core reads vars_files and resolves the play's hosts before
 	// the banner: a file that fails to parse, or a pattern that is an
@@ -3020,25 +3022,65 @@ func (r *Runner) warnReserved(origins []template.KeyOrigin) {
 }
 
 // warnReservedFor checks the variables a task sees on host, as get_vars
-// does before the task runs: the play's roles' defaults, the host's
-// inventory variables (its groups' then its own), the roles' vars, then
-// the task's (and its blocks') vars.
+// does before the task runs: warn_if_reserved over the merged variables,
+// whose names keep the place (and origin) they were first set at, in
+// get_vars' order: the play's roles' defaults; the inventory's all
+// group, the host's other groups, the all group's group_vars files (next
+// to the inventory, then the playbook), the other groups' files; the
+// host's inventory variables and host_vars files; the play's vars and
+// vars_files; the roles' vars; the task's (and its blocks') vars; extra
+// vars.
 func (r *Runner) warnReservedFor(host string, task *playbook.Task) {
-	if play := r.curPlay; play != nil {
-		r.warnReserved(play.RoleDefaultOrigins)
+	if r.Inv != nil {
+		for _, w := range r.Inv.VarsWarnings() {
+			r.warnBlock("[WARNING]: " + w + "\n")
+		}
+	}
+	var seq []template.KeyOrigin
+	play := r.curPlay
+	if play != nil {
+		seq = append(seq, play.RoleDefaultOrigins...)
 	}
 	if r.Inv != nil {
 		if h := r.Inv.Hosts[host]; h != nil {
+			var all *inventory.Group
+			var groups []*inventory.Group
 			for _, g := range r.Inv.OrderedGroups(h) {
-				r.warnReserved(g.VarOrigins)
+				if g.Name == "all" {
+					all = g
+				} else {
+					groups = append(groups, g)
+				}
 			}
-			r.warnReserved(h.VarOrigins)
+			if all != nil {
+				seq = append(seq, all.VarOrigins...)
+			}
+			for _, g := range groups {
+				seq = append(seq, g.VarOrigins...)
+			}
+			if all != nil {
+				seq = append(append(seq, all.FileVarOrigins[0]...), all.FileVarOrigins[1]...)
+			}
+			for _, layer := range []int{0, 1} {
+				for _, g := range groups {
+					seq = append(seq, g.FileVarOrigins[layer]...)
+				}
+			}
+			seq = append(append(append(seq, h.VarOrigins...), h.FileVarOrigins[0]...), h.FileVarOrigins[1]...)
 		}
 	}
-	if play := r.curPlay; play != nil {
-		r.warnReserved(play.RoleVarOrigins)
+	seq = append(seq, r.playVarOrigins...)
+	if play != nil {
+		seq = append(seq, play.RoleVarOrigins...)
 	}
-	r.warnReserved(task.VarOrigins)
+	seq = append(append(seq, task.VarOrigins...), r.Opts.ExtraVarOrigins...)
+	seen := map[string]bool{}
+	for _, o := range seq {
+		if !seen[o.Name] {
+			seen[o.Name] = true
+			r.warnReserved([]template.KeyOrigin{o})
+		}
+	}
 }
 
 // isUnreachable reports whether a host has an unreachable result.

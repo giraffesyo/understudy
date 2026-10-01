@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/giraffesyo/understudy/internal/omap"
 	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -46,12 +47,43 @@ func loadYAMLInventory(inv *Inventory, data []byte, filename string) error {
 	case truthy(root["plugin"]):
 		return errors.New("Plugin configuration YAML file, not YAML inventory")
 	}
+	// The document's nodes locate the variables' names, unless it parses
+	// as JSON (ansible-core then loads it as JSON, without origins).
+	var node *yaml.Node
+	if _, err := omap.UnmarshalJSON(data); err != nil {
+		node, _ = yaml.ParseSingle(data, absPath(filename))
+	}
 	for _, name := range mappingKeys(v) {
-		if _, err := loadYAMLGroup(inv, name, root[name]); err != nil {
+		if _, err := loadYAMLGroup(inv, name, root[name], mapValue(node, name), absPath(filename)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// varOrigins are where a variables mapping names reserved variables: at
+// its node's keys, or nowhere known without one.
+func varOrigins(node *yaml.Node, vars any, file string) []template.KeyOrigin {
+	if node != nil {
+		return keyOrigins(node, file)
+	}
+	var out []template.KeyOrigin
+	if _, isMap := asMapping(vars); isMap {
+		for _, k := range mappingKeys(vars) {
+			if template.IsReservedName(k) {
+				out = append(out, template.KeyOrigin{Name: k})
+			}
+		}
+	}
+	return out
+}
+
+// mapValue is a mapping node's value node for key (nil when there is none).
+func mapValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode && node.Kind != yaml.AliasNode {
+		return nil
+	}
+	return node.MapGet(key)
 }
 
 func isEmpty(v any) bool {
@@ -82,7 +114,7 @@ func truthy(v any) bool {
 
 // loadYAMLGroup is the yaml plugin's _parse_group; it returns the group
 // name.
-func loadYAMLGroup(inv *Inventory, name string, body any) (string, error) {
+func loadYAMLGroup(inv *Inventory, name string, body any, node *yaml.Node, file string) (string, error) {
 	m, isMap := asMapping(body)
 	if !isMap && body != nil {
 		inv.warning(fmt.Sprintf("Skipping '%s' as this is not a valid group definition", name))
@@ -126,9 +158,12 @@ func loadYAMLGroup(inv *Inventory, name string, body any) (string, error) {
 			for _, k := range mappingKeys(val) {
 				group.Vars[k] = sub[k]
 			}
+			for _, o := range varOrigins(mapValue(node, "vars"), val, file) {
+				group.VarOrigins = addOrigin(group.VarOrigins, o)
+			}
 		case "children":
 			for _, childName := range mappingKeys(val) {
-				child, err := loadYAMLGroup(inv, childName, sub[childName])
+				child, err := loadYAMLGroup(inv, childName, sub[childName], mapValue(mapValue(node, "children"), childName), file)
 				if err != nil {
 					return "", err
 				}
@@ -158,10 +193,14 @@ func loadYAMLGroup(inv *Inventory, name string, body any) (string, error) {
 					}
 					keys = mappingKeys(hostVars)
 				}
+				origins := varOrigins(mapValue(mapValue(node, "hosts"), pattern), hostVars, file)
 				for _, n := range names {
 					h := inv.addHost(n, group, port)
 					for _, k := range keys {
 						h.Vars[k] = vars[k]
+					}
+					for _, o := range origins {
+						h.VarOrigins = addOrigin(h.VarOrigins, o)
 					}
 				}
 			}

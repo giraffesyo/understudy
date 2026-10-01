@@ -406,18 +406,12 @@ func (l *loader) sourceVars(sub, name string, into map[string]any) error {
 		if info, err := os.Stat(src); err != nil || !info.IsDir() {
 			dir = filepath.Dir(src)
 		}
-		target := map[string]any{}
-		err := applyVarsDir(l.inv, filepath.Join(dir, sub), func(n string) map[string]any {
-			if n == name {
-				return target
-			}
-			return nil
-		})
-		if err != nil {
-			return err
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			dir = real
 		}
-		for k, v := range target {
-			into[k] = v
+		var origins []template.KeyOrigin
+		if err := applyVarsFiles(l.inv.warning, filepath.Join(dir, sub), name, into, &origins); err != nil {
+			return err
 		}
 	}
 	return nil
