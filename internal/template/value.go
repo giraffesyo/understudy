@@ -41,6 +41,8 @@ func truthy(v any) bool {
 		return t != 0
 	case int:
 		return t != 0
+	case IntEnum:
+		return t.Value != 0
 	case float64:
 		return t != 0
 	case string:
@@ -97,6 +99,8 @@ func toStrIn(v any, active map[cycleID]bool) string {
 		return strconv.FormatInt(t, 10)
 	case int:
 		return strconv.Itoa(t)
+	case IntEnum:
+		return strconv.FormatInt(t.Value, 10)
 	case float64:
 		return pyFloatStr(t)
 	case string:
@@ -276,6 +280,8 @@ func asInt(v any) (int64, bool) {
 		return t, true
 	case int:
 		return int64(t), true
+	case IntEnum:
+		return t.Value, true
 	case bool: // Python: True == 1
 		if t {
 			return 1, true
@@ -320,6 +326,13 @@ func asString(v any) (string, bool) {
 
 // arith implements Jinja's binary arithmetic and concatenation operators.
 func arith(op tokKind, a, b any) (any, error) {
+	// An IntEnum's arithmetic is its int's (the result a plain int).
+	if e, ok := a.(IntEnum); ok {
+		a = e.Value
+	}
+	if e, ok := b.(IntEnum); ok {
+		b = e.Value
+	}
 	if op == tokAdd {
 		if r, ok := markupConcat(Undeprecate(a), Undeprecate(b)); ok {
 			return r, nil

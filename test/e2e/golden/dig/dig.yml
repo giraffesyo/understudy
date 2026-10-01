@@ -1,0 +1,260 @@
+# community.general.dig against the test DNS fixture (dnsfixture_test.go,
+# its port in dns_port): record types and their presentation, flat=0
+# dicts, options as keywords and as terms, and the error handling.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    s: "@127.0.0.1"
+    p: "{{ dns_port | int }}"
+  tasks:
+    - name: flat
+      debug:
+        msg: "{{ query('community.general.dig', item, s, port=p) }}"
+      loop:
+        - a.test.
+        - a.test/AAAA
+        - a.test./TXT
+        - test./SOA
+        - test./NS
+        - test./MX
+        - test./CAA
+        - test./DNSKEY
+        - test./DS
+        - test./NSEC3PARAM
+        - test./ZONEMD
+        - test./CDS
+        - test./CDNSKEY
+        - test./CSYNC
+        - test./NSEC
+        - test./SPF
+        - test./TXT
+        - a.test./HINFO
+        - a.test./LOC
+        - a.test./RP
+        - a.test./SSHFP
+        - a.test./RRSIG
+        - a.test./AFSDB
+        - a.test./KX
+        - a.test./URI
+        - a.test./EUI48
+        - a.test./EUI64
+        - a.test./OPENPGPKEY
+        - a.test./DHCID
+        - a.test./CERT
+        - a.test./SMIMEA
+        - a.test./TYPE65280
+        - a.test./TYPE65281
+        - a.test./NSEC3
+        - a.test./SVCB
+        - a.test./HTTPS
+        - _sip._tcp.test./SRV
+        - _443._tcp.a.test./TLSA
+        - naptr.test./NAPTR
+        - south.test./LOC
+        - empty.test./TXT
+        - nsec3salt.test./NSEC3PARAM
+        - alias.test.
+        - alias2.test.
+        - alias.test./CNAME
+        - dn.test./DNAME
+        - mixed.test.
+        - CASE.test.
+        - odd\.name.test.
+        - tc.test./TXT
+        - bin.test./TXT
+        - bin.test./HINFO
+        - bin.test./CAA
+        - 192.0.2.1/PTR
+        - 192.0.2.80/PTR
+        - 2001:db8::1/PTR
+        - notanip/PTR
+        - a.test/a
+        - a.test./aaaa
+        - nx.test.
+        - x.nx.test
+        - servfail.test.
+        - refused.test.
+        - notimp.test.
+        - loop1.test.
+        - dangling.test.
+        - version.bind./TXT
+        - nope
+    - name: dicts
+      debug:
+        msg: "{{ query('community.general.dig', item, s, port=p, flat=0) }}"
+      loop:
+        - a.test.
+        - a.test./TXT
+        - test./SOA
+        - test./NS
+        - test./MX
+        - test./CAA
+        - test./DNSKEY
+        - test./DS
+        - test./NSEC3PARAM
+        - test./ZONEMD
+        - test./SPF
+        - a.test./HINFO
+        - a.test./LOC
+        - a.test./RP
+        - a.test./SSHFP
+        - a.test./AAAA
+        - a.test./URI
+        - _sip._tcp.test./SRV
+        - _443._tcp.a.test./TLSA
+        - naptr.test./NAPTR
+        - south.test./LOC
+        - alias2.test.
+        - alias.test./CNAME
+        - dn.test./DNAME
+        - mixed.test.
+        - tc.test./TXT
+        - Case.TEST.
+        - bin.test./CAA
+        - 192.0.2.80/PTR
+        - nsec3salt.test./NSEC3PARAM
+        - nx.test.
+    - name: dicts of undecodable bytes
+      debug:
+        msg: "{{ query('community.general.dig', item, s, port=p, flat=0) }}"
+      loop:
+        - bin.test./TXT
+        - bin.test./HINFO
+    - name: an attribute a generic record does not have
+      debug:
+        msg: "{{ query('community.general.dig', 'version.bind./TXT', s, port=p, class='CH', flat=0) }}"
+    - name: lookup
+      debug:
+        msg:
+          - "{{ lookup('community.general.dig', 'a.test.', s, port=p) }}"
+          - "{{ lookup('community.general.dig', 'nx.test.', s, port=p) }}"
+          - "{{ lookup('community.general.dig', 'servfail.test.', s, port=p) }}"
+          - "{{ lookup('community.general.dig', 'a.test./RRSIG', s, port=p) }}"
+          - "{{ lookup('community.general.dig', 'test./SOA', s, port=p, flat=0) }}"
+          - "{{ lookup('community.general.dig', 'a.test.', s, port=p, wantlist=True) }}"
+          - "{{ lookup('community.general.dig', 'nx.test.', s, port=p, real_empty=True) }}"
+          - "{{ lookup('community.general.dig', 'nx.test.', s, port=p, fail_on_error=True, errors='ignore') }}"
+          - "{{ lookup('community.general.dig', 'nx.test.', s, port=p, fail_on_error=True, errors='ignore', wantlist=True) }}"
+    - name: real_empty
+      debug:
+        msg: "{{ query('community.general.dig', item, s, port=p, real_empty=true) }}"
+      loop:
+        - nx.test.
+        - servfail.test.
+    - name: retry_servfail
+      debug:
+        msg:
+          - "{{ query('community.general.dig', 'flaky.test.', s, port=p, retry_servfail=True) }}"
+          - "{{ query('community.general.dig', 'flaky.test.', s, port=p) }}"
+          - "{{ query('community.general.dig', 'flaky.test.', s, 'retry_servfail=yes', port=p) }}"
+    - name: class
+      debug:
+        msg: "{{ query('community.general.dig', 'version.bind./TXT', s, port=p, class=item) }}"
+      loop: [CH, chaos, IN, ANY, BOGUS, CLASS3, HS]
+      ignore_errors: true
+    - name: options as terms
+      debug:
+        msg:
+          - "{{ query('community.general.dig', 'a.test.', 'a.test./MX', s, 'port=1', port=p) }}"
+          - "{{ query('community.general.dig', 'a.test.', 'qtype=mx', s, port=p) }}"
+          - "{{ query('community.general.dig', 'version.bind.', 'qtype=TXT', 'class=CH', s, port=p) }}"
+          - "{{ query('community.general.dig', 'test.', 'qtype=SOA', 'flat=0', s, port=p) }}"
+          - "{{ query('community.general.dig', 'nx.test.', 'a.test.', s, port=p) }}"
+          - "{{ query('community.general.dig', 'nx.test.', 'real_empty=no', s, port=p) }}"
+          - "{{ query('community.general.dig', 'nx.test.', 'real_empty=yes', s, port=p) }}"
+          - "{{ query('community.general.dig', 'a/b/c', s, port=p) }}"
+          - "{{ query('community.general.dig', 'a.test./TXT', 'tcp=yes', s, port=p) }}"
+          - "{{ query('community.general.dig', 'a.test.', '@127.0.0.1,127.0.0.1', port=p) }}"
+          - "{{ query('community.general.dig', s, port=p) }}"
+          - "{{ query('community.general.dig', 'a.test', s, port=p) }}"
+          - "{{ query('community.general.dig', 'a.test.', 'flat= 0', s, port=p) }}"
+          - "{{ query('community.general.dig', 'a.test.', 'bogus=1', s, port=p) }}"
+    - name: option types
+      debug:
+        msg:
+          - "{{ query('community.general.dig', 'a.test.', s, port=dns_port, flat='0') }}"
+          - "{{ query('community.general.dig', 'a.test.', s, port=p, flat=0.0) }}"
+          - "{{ query('community.general.dig', 'a.test.', s, port=p, flat=True) }}"
+          - "{{ query('community.general.dig', 'a.test.', s, port=p, fail_on_error='maybe') }}"
+          - "{{ query('community.general.dig', 'a.test.', s, port=p, tcp='yes', qtype='TXT') }}"
+          - "{{ query('community.general.dig', 'a.test.', s, port=p, real_empty='on', retry_servfail=1) }}"
+    - name: failures
+      debug:
+        msg: "{{ query('community.general.dig', item, s, port=p, fail_on_error=true) }}"
+      loop:
+        - nx.test.
+        - x.nx.test
+        - servfail.test.
+        - refused.test.
+        - notimp.test.
+        - loop1.test.
+        - dangling.test.
+        - a.test./RRSIG
+        - yx.test.
+        - a.test./ANY
+        - a.test./TYPE70000
+        - a.test./ALL
+        - nope
+        - a..test
+      ignore_errors: true
+    - name: yxdomain fails without fail_on_error
+      debug:
+        msg: "{{ query('community.general.dig', 'yx.test.', s, port=p) }}"
+      ignore_errors: true
+    - name: qtype not a choice
+      debug:
+        msg: "{{ query('community.general.dig', 'a.test.', s, port=p, qtype='txt') }}"
+      ignore_errors: true
+    - name: qtype int
+      debug:
+        msg: "{{ query('community.general.dig', 'a.test.', s, port=p, qtype=1) }}"
+      ignore_errors: true
+    - name: flat not an int
+      debug:
+        msg: "{{ query('community.general.dig', 'a.test.', s, port=p, flat=1.5) }}"
+      ignore_errors: true
+    - name: class int
+      debug:
+        msg: "{{ query('community.general.dig', 'a.test.', s, port=p, class=3) }}"
+      ignore_errors: true
+    - name: _terms keyword
+      debug:
+        msg: "{{ query('community.general.dig', 'a.test.', s, port=p, _terms=['x']) }}"
+      ignore_errors: true
+    - name: flat term not an int
+      debug:
+        msg: "{{ query('community.general.dig', 'a.test.', 'flat=x', s, port=p) }}"
+      ignore_errors: true
+    - name: class term unknown
+      debug:
+        msg: "{{ query('community.general.dig', 'a.test.', 'class=XX', s, port=p) }}"
+      ignore_errors: true
+    - name: nameserver dnspython rejects
+      debug:
+        msg: "{{ query('community.general.dig', 'a.test.', '@127.1', port=p) }}"
+      ignore_errors: true
+    - name: term not a string
+      debug:
+        msg: "{{ query('community.general.dig', 5, s, port=p) }}"
+      ignore_errors: true
+    - name: label too long
+      debug:
+        msg: "{{ query('community.general.dig', 'x' * 64 + '.test.', s, port=p) }}"
+      ignore_errors: true
+    - name: enums stored
+      set_fact:
+        keys: "{{ query('community.general.dig', 'test./DNSKEY', s, port=p, flat=0) }}"
+        ds: "{{ query('community.general.dig', 'test./DS', s, port=p, flat=0) | first }}"
+    - name: enums are ints
+      debug:
+        msg:
+          - "{{ (query('community.general.dig', 'test./DNSKEY', s, port=p, flat=0) | first).flags + 1 }}"
+          - "{{ ds.digest_type == 2 }}"
+          - "{{ keys | map(attribute='flags') | list }}"
+    - name: timeout
+      debug:
+        msg: "{{ query('community.general.dig', 'drop.test.', s, port=p) }}"
+    - name: timeout failing
+      debug:
+        msg: "{{ query('community.general.dig', 'drop.test.', s, port=p, fail_on_error=True) }}"
+      ignore_errors: true

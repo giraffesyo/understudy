@@ -8,8 +8,8 @@ The tables are what _sre consults for str patterns: \\d (str.isdecimal),
 \\s (str.isspace), \\w (str.isalnum), sre's lower/upper (the first code
 point of str.lower()/str.upper()), unicode_iscased, re._casefix's
 _EXTRA_CASES, plus str.isprintable() and str.isidentifier() for the
-parser's messages and group names, and a subset of unicodedata names
-for \\N{...}.
+parser's messages and group names, and unicodedata.lookup()'s names
+for \\N{...} (names.bin and nameRanges).
 """
 
 import re._casefix
@@ -17,6 +17,9 @@ import subprocess
 import _sre
 import sys
 import unicodedata
+import zlib
+import hashlib
+import os
 
 MAX = sys.maxunicode + 1
 
@@ -62,6 +65,54 @@ def fmt_pairs(name, pairs):
         lines.append("\t" + " ".join(row))
     lines.append("}")
     return "\n".join(lines)
+
+
+def capi_alias_names():
+    """The aliases and named sequences unicodedata.lookup() accepts, read
+    through the module's _ucnhash_CAPI (its getname with aliases and
+    sequences): CPython keeps them at private code points from U+F0000."""
+    import ctypes
+
+    get = ctypes.pythonapi.PyCapsule_GetPointer
+    get.restype = ctypes.c_void_p
+    get.argtypes = [ctypes.py_object, ctypes.c_char_p]
+    api = ctypes.cast(get(unicodedata._ucnhash_CAPI, b"unicodedata._ucnhash_CAPI"), ctypes.POINTER(ctypes.c_void_p))
+    getname = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_uint32, ctypes.c_char_p, ctypes.c_int, ctypes.c_int)(api[0])
+    buf = ctypes.create_string_buffer(256)
+    aliases, sequences = [], []
+    for code in range(0xF0000, 0xF1000):
+        if getname(code, buf, len(buf), 1):
+            name = buf.value.decode("ascii")
+            value = unicodedata.lookup(name)
+            if len(value) == 1:
+                aliases.append((ord(value), name))
+            else:
+                sequences.append(name)
+    return aliases, sequences
+
+
+def write_names(path):
+    """names.bin (zlib): every name unicodedata.name() gives that is not
+    algorithmic, one per line as "<code point delta from the previous
+    line's>\t<name>", then "=", then the aliases as "<hex code
+    point>\t<alias>". Named sequences are left out: lookup() returns
+    them as several characters, which \\N{...} rejects."""
+    lines = []
+    prev = 0
+    for cp in range(MAX):
+        n = unicodedata.name(chr(cp), None)
+        if n is None or n.startswith("HANGUL SYLLABLE ") or n == "CJK UNIFIED IDEOGRAPH-%04X" % cp:
+            continue
+        lines.append("%d\t%s" % (cp - prev, n))
+        prev = cp
+    lines.append("=")
+    aliases, sequences = capi_alias_names()
+    for cp, n in aliases:
+        assert unicodedata.lookup(n) == chr(cp)
+        lines.append("%x\t%s" % (cp, n))
+    data = zlib.compress(("\n".join(lines) + "\n").encode("ascii"), 9)
+    with open(path, "wb") as f:
+        f.write(data)
 
 
 def first(s):
@@ -116,34 +167,48 @@ def main():
     parts.append("\n".join(extra))
     parts.append("")
 
-    # A subset of unicodedata.lookup() names: Latin, Greek, punctuation,
-    # currency, letterlike, arrows, math, box drawing and shapes. CJK
-    # unified ideographs and Hangul syllables are computed.
-    names = ["// charNames is a subset of the unicodedata names \\N{...} looks up.", "var charNames = map[string]rune{"]
-    seen = set()
-    for lo, hi in [(0x20, 0x250), (0x370, 0x400), (0x2000, 0x2070), (0x20A0, 0x20C1),
-                   (0x2100, 0x2300), (0x2500, 0x2600)]:
-        for cp in range(lo, hi):
-            n = unicodedata.name(chr(cp), "")
-            if n and n not in seen:
-                seen.add(n)
-                names.append('\t"%s": 0x%x,' % (n, cp))
-    # Common aliases (NameAliases.txt) lookup() accepts.
-    for alias in ["NULL", "CHARACTER TABULATION", "LINE FEED", "LINE TABULATION",
-                  "FORM FEED", "CARRIAGE RETURN", "ESCAPE", "DELETE", "NO-BREAK SPACE",
-                  "TAB", "LF", "CR", "NUL", "ESC", "DEL", "NBSP", "SP", "VT", "FF",
-                  "NEW LINE", "END OF LINE", "BACKSPACE", "BELL", "ALERT",
-                  "BYTE ORDER MARK", "BOM", "ZWSP", "ZWNJ", "ZWJ"]:
-        try:
-            c = unicodedata.lookup(alias)
-        except KeyError:
-            continue
-        if len(c) == 1 and alias not in seen:
-            seen.add(alias)
-            names.append('\t"%s": 0x%x,' % (alias, ord(c)))
-    names.append("}")
-    parts.append("\n".join(names))
+    # unicodedata.lookup()'s names: the algorithmic ones by range (CJK
+    # unified ideographs, which name() names, and Tangut ideographs, which
+    # only lookup() knows), Hangul syllables computed from their jamo, and
+    # every other name and alias in names.bin.
+    cjk = ranges(lambda cp: unicodedata.name(chr(cp), "") == "CJK UNIFIED IDEOGRAPH-%04X" % cp)
+    tangut = []
+    for cp in range(MAX):
+        if unicodedata.name(chr(cp), None) is None:
+            try:
+                if unicodedata.lookup("TANGUT IDEOGRAPH-%04X" % cp) == chr(cp):
+                    tangut.append(cp)
+            except KeyError:
+                pass
+    tset = set(tangut)
+    algo = ["// nameRanges are the code points unicodedata.lookup() names as",
+            "// prefix + their hex code.",
+            "var nameRanges = []struct {",
+            "\tprefix string",
+            "\ttab    []rangeTab",
+            "}{",
+            '\t{"CJK UNIFIED IDEOGRAPH-", %s},' % fmt_ranges("", cjk)[len("var  = "):],
+            '\t{"TANGUT IDEOGRAPH-", %s},' % fmt_ranges("", ranges(lambda cp: cp in tset))[len("var  = "):],
+            "}"]
+    parts.append("\n".join(algo))
     parts.append("")
+    # The digest of every name lookup() gives one code point for, as
+    # "<name>\t<hex code point>" lines sorted, for the Go test to check
+    # its own set against.
+    every = []
+    for cp in range(MAX):
+        n = unicodedata.name(chr(cp), None)
+        if n is not None:
+            every.append("%s\t%x" % (n, cp))
+    every += ["TANGUT IDEOGRAPH-%04X\t%x" % (cp, cp) for cp in tangut]
+    every += ["%s\t%x" % (n, cp) for cp, n in capi_alias_names()[0]]
+    every.sort()
+    digest = hashlib.sha256(("\n".join(every) + "\n").encode("ascii")).hexdigest()
+    parts.append("// namesDigest is the SHA-256 of the %d names lookup() gives one code" % len(every))
+    parts.append("// point for (see gen_tables.py).")
+    parts.append('const namesDigest = "%s"' % digest)
+    parts.append("")
+    write_names(os.path.join(os.path.dirname(out_path), "names.bin"))
 
     with open(out_path, "w") as f:
         f.write("\n".join(parts))

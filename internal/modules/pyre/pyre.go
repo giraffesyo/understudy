@@ -76,6 +76,7 @@ func (e *Error) ExcName() string {
 // Pattern is a compiled regular expression (re.Pattern).
 type Pattern struct {
 	pattern string
+	bytes   bool // a bytes pattern (its bytes as latin-1 code points)
 	flags   Flag
 	groups  int
 	names   []string
@@ -87,6 +88,7 @@ type Pattern struct {
 type cacheKey struct {
 	pattern string
 	flags   Flag
+	bytes   bool
 }
 
 var (
@@ -98,14 +100,18 @@ const maxCache = 512
 
 // Compile is re.compile(pattern, flags).
 func Compile(pattern string, flags Flag) (*Pattern, error) {
-	key := cacheKey{pattern, flags}
+	return cachedCompile(pattern, flags, false)
+}
+
+func cachedCompile(pattern string, flags Flag, bytes bool) (*Pattern, error) {
+	key := cacheKey{pattern, flags, bytes}
 	cacheMu.Lock()
 	p, ok := cache[key]
 	cacheMu.Unlock()
 	if ok {
 		return p, nil
 	}
-	p, err := compile(pattern, flags)
+	p, err := compile(pattern, flags, bytes)
 	if err != nil {
 		return nil, err
 	}
@@ -127,8 +133,8 @@ func MustCompile(pattern string, flags Flag) *Pattern {
 	return p
 }
 
-func compile(pattern string, flags Flag) (p *Pattern, err error) {
-	sp, err := parse([]rune(pattern), flags)
+func compile(pattern string, flags Flag, bytes bool) (p *Pattern, err error) {
+	sp, err := parse([]rune(pattern), flags, bytes)
 	if err != nil {
 		return nil, err
 	}
@@ -146,6 +152,7 @@ func compile(pattern string, flags Flag) (p *Pattern, err error) {
 	pr := c.program(sp, st.flags)
 	return &Pattern{
 		pattern: pattern,
+		bytes:   bytes,
 		flags:   st.flags,
 		groups:  st.groups() - 1,
 		names:   st.groupnames,
@@ -161,8 +168,8 @@ func (p *Pattern) String() string { return p.pattern }
 // Pattern is the pattern's source.
 func (p *Pattern) Pattern() string { return p.pattern }
 
-// Flags is Pattern.flags (UNICODE included unless ASCII, inline flags
-// merged).
+// Flags is Pattern.flags (inline flags merged; for a str pattern,
+// UNICODE included unless ASCII).
 func (p *Pattern) Flags() Flag { return p.flags }
 
 // Groups is Pattern.groups: the number of capturing groups.

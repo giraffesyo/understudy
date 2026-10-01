@@ -1,9 +1,15 @@
 package pyre
 
 import (
+	"bytes"
+	"compress/zlib"
+	_ "embed"
 	"fmt"
+	"io"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 //go:generate python3 testdata/gen_tables.py tables.go
@@ -130,56 +136,106 @@ var jamoL = []string{"G", "GG", "N", "D", "DD", "R", "M", "B", "BB", "S", "SS", 
 var jamoV = []string{"A", "AE", "YA", "YAE", "EO", "E", "YEO", "YE", "O", "WA", "WAE", "OE", "YO", "U", "WEO", "WE", "WI", "YU", "EU", "YI", "I"}
 var jamoT = []string{"", "G", "GG", "GS", "N", "NJ", "NH", "D", "L", "LG", "LM", "LB", "LS", "LT", "LP", "LH", "M", "B", "BS", "S", "SS", "NG", "J", "C", "K", "T", "P", "H"}
 
-var cjkRanges = []rangeTab{
-	{0x3400, 0x4DBF}, {0x4E00, 0x9FFF}, {0x20000, 0x2A6DF}, {0x2A700, 0x2B739},
-	{0x2B740, 0x2B81D}, {0x2B820, 0x2CEA1}, {0x2CEB0, 0x2EBE0}, {0x2EBF0, 0x2EE5D},
-	{0x30000, 0x3134A}, {0x31350, 0x323AF},
-}
-
-// LookupName is unicodedata.lookup(name) over the names \N{...} knows.
+// LookupName is unicodedata.lookup(name) for a name of one code point
+// (\N{...} in str patterns and unicode_escape).
 func LookupName(name string) (rune, bool) { return lookupName(name) }
 
-// lookupName is unicodedata.lookup() for \N{...}: case-insensitive, over
-// a subset of the names (see gen_tables.py) plus the computed CJK
-// unified ideograph and Hangul syllable names.
-func lookupName(name string) (rune, bool) {
-	up := strings.ToUpper(name)
-	if r, ok := charNames[up]; ok {
-		return r, true
+//go:embed names.bin
+var namesData []byte
+
+var (
+	namesOnce sync.Once
+	names     map[string]rune
+)
+
+// loadNames reads names.bin (see gen_tables.py): the names, then the
+// aliases.
+func loadNames() {
+	names = make(map[string]rune, 60000)
+	zr, err := zlib.NewReader(bytes.NewReader(namesData))
+	if err != nil {
+		panic("pyre: names.bin: " + err.Error())
 	}
-	if h, ok := strings.CutPrefix(up, "CJK UNIFIED IDEOGRAPH-"); ok && (len(h) == 4 || len(h) == 5) {
-		var v rune
-		for _, c := range h {
-			switch {
-			case c >= '0' && c <= '9':
-				v = v*16 + c - '0'
-			case c >= 'A' && c <= 'F':
-				v = v*16 + c - 'A' + 10
-			default:
-				return 0, false
+	data, err := io.ReadAll(zr)
+	if err != nil {
+		panic("pyre: names.bin: " + err.Error())
+	}
+	cp, aliases := int64(0), false
+	for len(data) > 0 {
+		line, rest, _ := bytes.Cut(data, []byte{'\n'})
+		data = rest
+		if string(line) == "=" {
+			aliases = true
+			continue
+		}
+		num, name, _ := bytes.Cut(line, []byte{'\t'})
+		if aliases {
+			v, _ := strconv.ParseInt(string(num), 16, 32)
+			names[string(name)] = rune(v)
+			continue
+		}
+		d, _ := strconv.ParseInt(string(num), 10, 32)
+		cp += d
+		names[string(name)] = rune(cp)
+	}
+}
+
+// lookupName is unicodedata.lookup() of a single code point's name, as
+// CPython 3.14 looks it up: ASCII case-insensitively, Hangul syllables
+// from their jamo, CJK unified and Tangut ideographs by their hex code
+// point, then the names and aliases (a named sequence is several code
+// points: no single one).
+func lookupName(name string) (rune, bool) {
+	up := []byte(name)
+	for i, c := range up {
+		switch {
+		case c >= 0x80:
+			return 0, false
+		case c >= 'a' && c <= 'z':
+			up[i] = c - 32
+		}
+	}
+	key := string(up)
+	if rest, ok := strings.CutPrefix(key, "HANGUL SYLLABLE "); ok {
+		return hangulSyllable(rest)
+	}
+	for _, r := range nameRanges {
+		h, ok := strings.CutPrefix(key, r.prefix)
+		if !ok {
+			continue
+		}
+		v, err := strconv.ParseUint(h, 16, 32)
+		if err != nil || fmt.Sprintf("%04X", v) != h || !inTab(r.tab, rune(v)) {
+			return 0, false
+		}
+		return rune(v), true
+	}
+	namesOnce.Do(loadNames)
+	r, ok := names[key]
+	return r, ok
+}
+
+// hangulSyllable is CPython's find_syllable over the leading consonant,
+// the vowel and the trailing consonant in turn: each the longest jamo
+// name the text starts with.
+func hangulSyllable(s string) (rune, bool) {
+	longest := func(s string, jamo []string) (int, int) {
+		best, n := -1, -1
+		for i, j := range jamo {
+			if len(j) > n && strings.HasPrefix(s, j) {
+				best, n = i, len(j)
 			}
 		}
-		if inTab(cjkRanges, v) {
-			return v, true
-		}
+		return best, max(n, 0)
+	}
+	l, n := longest(s, jamoL)
+	s = s[n:]
+	v, n := longest(s, jamoV)
+	s = s[n:]
+	t, n := longest(s, jamoT)
+	s = s[n:]
+	if l < 0 || v < 0 || t < 0 || s != "" {
 		return 0, false
 	}
-	if rest, ok := strings.CutPrefix(up, "HANGUL SYLLABLE "); ok {
-		for l, ls := range jamoL {
-			if !strings.HasPrefix(rest, ls) {
-				continue
-			}
-			for v, vs := range jamoV {
-				if !strings.HasPrefix(rest[len(ls):], vs) {
-					continue
-				}
-				for t, ts := range jamoT {
-					if rest[len(ls)+len(vs):] == ts {
-						return rune(0xAC00 + (l*21+v)*28 + t), true
-					}
-				}
-			}
-		}
-	}
-	return 0, false
+	return rune(0xAC00 + (l*21+v)*28 + t), true
 }
