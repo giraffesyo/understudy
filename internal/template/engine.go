@@ -183,6 +183,10 @@ func Cause(err error) (msg string, ok bool) {
 	if ve, ok := AsVaultError(err); ok {
 		return "Error rendering template: " + ve.Error(), true
 	}
+	var ut *UntrustedError
+	if errors.As(err, &ut) {
+		return ut.Error(), true
+	}
 	return "", false
 }
 

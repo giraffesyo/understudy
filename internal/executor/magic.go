@@ -69,6 +69,11 @@ func (r *Runner) setRunMagic(c *vars.Context, host string, playHosts []string, w
 		c.SetMagic("role_names", play)
 		c.SetMagic("ansible_dependent_role_names", deps)
 		c.SetMagic("ansible_role_names", append(append([]any{}, play...), deps...))
+		name := p.Name
+		if name == "" {
+			name = p.HostPattern
+		}
+		c.SetMagic("ansible_play_name", name)
 	}
 	if _, ok := c.Get("ansible_facts"); !ok {
 		c.SetMagic("ansible_facts", map[string]any{})

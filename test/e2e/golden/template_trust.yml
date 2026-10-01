@@ -1,0 +1,94 @@
+---
+# Text a template computes is not trusted as an expression; text passed
+# through variables unchanged keeps the trust of where it was written (a
+# play's vars, a set_fact argument, include_vars, a loop's list, the
+# vars lookup). A conditional or debug's var= given untrusted text fails
+# where that text came from.
+- hosts: localhost
+  gather_facts: false
+  ignore_errors: true
+  vars:
+    lit: "1 == 1"
+    comp: "{{ '1 == 1' }}"
+    viaref: "{{ lit }}"
+    vname: x
+    vcomp: "{{ 'x' }}"
+    lst: ["1 == 1"]
+    d: {k: "1 == 1"}
+  tasks:
+    - set_fact:
+        x: 5
+        sflit: "1 == 1"
+        sfcomp: "{{ '1 == 1' }}"
+        sfref: "{{ lit }}"
+        sfvname: "{{ vname }}"
+    - debug: msg="1 == 1"
+      register: reg
+    - include_vars:
+        file: vars/trust.yml
+    - debug: msg=a
+      when: "{{ lit }}"
+    - debug: msg=b
+      when: "{{ comp }}"
+    - debug: msg=c
+      when: "{{ viaref }}"
+    - debug: msg=d
+      when: "{{ sflit }}"
+    - debug: msg=e
+      when: "{{ sfcomp }}"
+    - debug: msg=f
+      when: "{{ sfref }}"
+    - debug: msg=g
+      when: "{{ '1 == 1' }}"
+    - debug: msg=h
+      when: "{{ lst[0] }}"
+    - debug: msg=i
+      when: "{{ d.k }}"
+    - debug: msg=j
+      when: "{{ item }}"
+      loop: ["1 == 1"]
+    - debug: msg=k
+      when: "{{ item }}"
+      loop: "{{ lst }}"
+    - debug: msg=l
+      when: "{{ item }}"
+      loop: "{{ ['1 == 1'] }}"
+    - debug: msg=m
+      when: "{{ item }}"
+      with_items: ["1 == 1"]
+    - debug: msg=n
+      when: "{{ ivc }}"
+    - debug: msg=o
+      when: "{{ lit | default('x') }}"
+    - debug: msg=p
+      when: "{{ lit | lower }}"
+    - debug: msg=q
+      when: "{{ lit ~ '' }}"
+    - debug: msg=r
+      when: "{{ hostvars['localhost']['ivc'] }}"
+    - debug: msg=s
+      when: "{{ lookup('vars', 'lit') }}"
+    - debug: msg=t
+      when: "{{ reg.msg }}"
+    - debug: msg=u
+      until: "{{ comp }}"
+      retries: 1
+      delay: 0
+    - debug: msg=v
+      failed_when: "{{ comp }}"
+    - debug: msg=w
+      changed_when: "{{ sfcomp }}"
+    - assert:
+        that: "{{ sfcomp }}"
+    - assert:
+        that: ["{{ comp }}"]
+    - debug:
+        var: "{{ vname }}"
+    - debug:
+        var: "{{ vcomp }}"
+    - debug:
+        var: "{{ sfvname }}"
+    - debug:
+        var: "{{ 'x' }}"
+    - debug: msg=x
+      when: "{{ ansible_play_name }}"
