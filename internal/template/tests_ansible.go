@@ -1,10 +1,13 @@
 package template
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 // registerAnsibleTests installs match/search/version and the task-result
@@ -182,6 +185,9 @@ func regexTest(anchored bool) TestFunc {
 		}
 		pattern, _ := asString(args[0])
 		ignorecase := len(args) > 1 && truthy(args[1])
+		if msg := pyre.SyntaxError(pattern); msg != "" {
+			return false, errors.New(msg) // re.error
+		}
 		if anchored {
 			// Python re.match anchors at the start only.
 			pattern = `\A(?:` + pattern + `)`

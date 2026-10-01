@@ -3,7 +3,6 @@ package modules
 import (
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
@@ -101,8 +100,8 @@ func replaceModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	}
 	replaced, count, err := pySubn(re, p.Str("replace"), section)
 	if err != nil {
-		if te, ok := err.(*pyTplError); ok && te.indexError {
-			return &agentproto.Result{Failed: true, Msg: "Task failed: Module failed: " + te.msg}
+		if te, ok := err.(*pyTplError); ok && te.IndexError {
+			return &agentproto.Result{Failed: true, Msg: "Task failed: Module failed: " + te.Msg}
 		}
 		return agentproto.Fail("Unable to process replace due to error: %v", err)
 	}
@@ -149,163 +148,6 @@ func setMsgEmpty(res *agentproto.Result) {
 		res.Extra = map[string]any{}
 	}
 	res.Extra["msg"] = ""
-}
-
-// pyTplError is an error from Python's replacement-template parser:
-// re.error, or IndexError for an unknown group name.
-type pyTplError struct {
-	msg        string
-	indexError bool
-}
-
-func (e *pyTplError) Error() string { return e.msg }
-
-// pyTplPart is a literal (group < 0) or a group reference.
-type pyTplPart struct {
-	lit   string
-	group int
-}
-
-func isPyIdentifier(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i, r := range s {
-		if r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r > 127 {
-			continue
-		}
-		if i > 0 && r >= '0' && r <= '9' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-// parsePyTemplate is sre_parse.parse_template: \1..\99, \g<n>, \g<name>,
-// octal and character escapes, with Python's errors and positions.
-func parsePyTemplate(re *regexp.Regexp, repl string) ([]pyTplPart, error) {
-	var parts []pyTplPart
-	var lit strings.Builder
-	flush := func() {
-		if lit.Len() > 0 {
-			parts = append(parts, pyTplPart{lit: lit.String(), group: -1})
-			lit.Reset()
-		}
-	}
-	errAt := func(msg string, pos int) error {
-		return &pyTplError{msg: fmt.Sprintf("%s at position %d", msg, pos)}
-	}
-	groups := re.NumSubexp()
-	addGroup := func(idx, pos int) error {
-		if idx > groups {
-			return errAt(fmt.Sprintf("invalid group reference %d", idx), pos)
-		}
-		flush()
-		parts = append(parts, pyTplPart{group: idx})
-		return nil
-	}
-	isDigit := func(c byte) bool { return c >= '0' && c <= '9' }
-	isOct := func(c byte) bool { return c >= '0' && c <= '7' }
-	i := 0
-	for i < len(repl) {
-		c := repl[i]
-		if c != '\\' {
-			lit.WriteByte(c)
-			i++
-			continue
-		}
-		if i+1 >= len(repl) {
-			return nil, errAt("bad escape (end of pattern)", len(repl)-1)
-		}
-		start := i
-		e := repl[i+1]
-		i += 2
-		switch {
-		case e == 'g':
-			if i >= len(repl) || repl[i] != '<' {
-				return nil, errAt("missing <", i)
-			}
-			i++
-			end := strings.IndexByte(repl[i:], '>')
-			if end < 0 {
-				return nil, errAt("missing >, unterminated name", i)
-			}
-			name := repl[i : i+end]
-			i += end + 1
-			if name == "" {
-				return nil, errAt("missing group name", i-1)
-			}
-			var idx int
-			if n, err := strconv.Atoi(name); err == nil && !strings.ContainsAny(name, "+-") {
-				idx = n
-			} else if !isPyIdentifier(name) {
-				return nil, errAt(fmt.Sprintf("bad character in group name %s", pyStrRepr(name)), i-len(name)-1)
-			} else {
-				idx = re.SubexpIndex(name)
-				if idx < 0 {
-					return nil, &pyTplError{msg: fmt.Sprintf("unknown group name %s", pyStrRepr(name)), indexError: true}
-				}
-			}
-			if err := addGroup(idx, i-len(name)-1); err != nil {
-				return nil, err
-			}
-		case e == '0':
-			j := i
-			for j < len(repl) && j < i+2 && isOct(repl[j]) {
-				j++
-			}
-			n, _ := strconv.ParseInt("0"+repl[i:j], 8, 32)
-			lit.WriteRune(rune(n & 0xff))
-			i = j
-		case isDigit(e):
-			this := repl[start:i]
-			if i < len(repl) && isDigit(repl[i]) {
-				this += string(repl[i])
-				i++
-				if isOct(e) && isOct(this[2]) && i < len(repl) && isOct(repl[i]) {
-					this += string(repl[i])
-					i++
-					n, _ := strconv.ParseInt(this[1:], 8, 32)
-					if n > 0o377 {
-						return nil, errAt(fmt.Sprintf("octal escape value %s outside of range 0-0o377", this), start)
-					}
-					lit.WriteRune(rune(n))
-					continue
-				}
-			}
-			n, _ := strconv.Atoi(this[1:])
-			if err := addGroup(n, start+1); err != nil {
-				return nil, err
-			}
-		default:
-			if esc, ok := map[byte]string{'a': "\a", 'b': "\b", 'f': "\f", 'n': "\n", 'r': "\r", 't': "\t", 'v': "\v", '\\': "\\"}[e]; ok {
-				lit.WriteString(esc)
-			} else if e >= 'a' && e <= 'z' || e >= 'A' && e <= 'Z' {
-				return nil, errAt("bad escape "+repl[start:i], start)
-			} else {
-				lit.WriteString(repl[start:i])
-			}
-		}
-	}
-	flush()
-	return parts, nil
-}
-
-// expandPyTemplate renders a parsed template for one match (unmatched
-// groups expand to "").
-func expandPyTemplate(parts []pyTplPart, s string, m []int) string {
-	var b strings.Builder
-	for _, p := range parts {
-		if p.group < 0 {
-			b.WriteString(p.lit)
-			continue
-		}
-		if 2*p.group+1 < len(m) && m[2*p.group] >= 0 {
-			b.WriteString(s[m[2*p.group]:m[2*p.group+1]])
-		}
-	}
-	return b.String()
 }
 
 // pySubn is Python's re.subn(pattern, repl, s): every non-overlapping match
