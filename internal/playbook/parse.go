@@ -44,7 +44,7 @@ var playKeywords = map[string]bool{
 	"force_handlers": true, "vars_prompt": true,
 	"gather_subset": true, "gather_timeout": true, "fact_path": true,
 	"check_mode": true, "diff": true, "become_flags": true, "become_exe": true,
-	"debugger": true, "timeout": true,
+	"debugger": true, "timeout": true, "ignore_errors": true,
 }
 
 // Deferred play keys that must fail loudly rather than be ignored.
@@ -435,6 +435,13 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 				return nil, err
 			}
 			play.ForceHandlers = b
+		case "ignore_errors":
+			inh := &Task{}
+			var err error
+			if inh.IgnoreErrors, _, err = decodeBoolKW(inh, val, file, "ignore_errors"); err != nil {
+				return nil, err
+			}
+			play.ignoreErrors = inh
 		case "gather_subset", "gather_timeout", "fact_path":
 			// Passed through to the implicit setup task's arguments.
 			v, err := val.Decode()
@@ -448,6 +455,9 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 				play.GatherArgs[key] = yaml.AsMap(v)
 			}
 		}
+	}
+	for _, list := range [][]*Task{play.PreTasks, play.Tasks, play.PostTasks, play.Handlers} {
+		play.inheritIgnoreErrors(list)
 	}
 	return play, nil
 }
@@ -802,6 +812,40 @@ func parseInheritable(node *yaml.Node, file string) (*Task, error) {
 	return inh, nil
 }
 
+// inheritIgnoreErrors gives t the ignore_errors of inh (an enclosing
+// block, include or the play) when t sets none: the nearest setting wins.
+func inheritIgnoreErrors(t, inh *Task) {
+	if t.hasLiteral("ignore_errors") || t.KeywordTemplates["ignore_errors"] != "" {
+		return
+	}
+	if inh.hasLiteral("ignore_errors") {
+		t.IgnoreErrors = inh.IgnoreErrors
+		t.markLiteral("ignore_errors")
+	} else if s := inh.KeywordTemplates["ignore_errors"]; s != "" {
+		setKeywordTemplate(t, "ignore_errors", s)
+	} else {
+		t.IgnoreErrors = t.IgnoreErrors || inh.IgnoreErrors
+	}
+}
+
+// inheritIgnoreErrors gives the play's ignore_errors to the tasks that
+// set none of their own.
+func (p *Play) inheritIgnoreErrors(tasks []*Task) {
+	if p.ignoreErrors == nil {
+		return
+	}
+	for _, t := range tasks {
+		inheritIgnoreErrors(t, p.ignoreErrors)
+		if t.IsDynamicInclude() {
+			// What the include's tasks inherit from above it.
+			if t.Parents == nil {
+				t.Parents = &Task{LoopVar: "item"}
+			}
+			inheritIgnoreErrors(t.Parents, p.ignoreErrors)
+		}
+	}
+}
+
 // Inherit applies a parent's inheritable keywords to a task, as a block
 // does to its tasks (the task's own settings win).
 func Inherit(t, parent *Task) { applyBlockInheritance(t, parent) }
@@ -872,7 +916,7 @@ func applyBlockInheritance(t *Task, inh *Task) {
 		t.Timeout = inh.Timeout
 	}
 	t.NoLog = t.NoLog || inh.NoLog
-	t.IgnoreErrors = t.IgnoreErrors || inh.IgnoreErrors
+	inheritIgnoreErrors(t, inh)
 	if t.Delegate == "" {
 		t.Delegate = inh.Delegate
 	}

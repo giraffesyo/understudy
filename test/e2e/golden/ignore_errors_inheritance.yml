@@ -1,0 +1,44 @@
+---
+# ignore_errors set on a play passes down to its tasks, roles and
+# includes; the nearest setting (the task's, then its innermost block's)
+# wins.
+- hosts: localhost
+  gather_facts: false
+  ignore_errors: true
+  roles:
+    - failrole
+  tasks:
+    - name: the play's setting
+      fail:
+        msg: play level
+    - block:
+        - block:
+            - name: the innermost block's setting
+              fail:
+                msg: inner block says true
+          ignore_errors: true
+      ignore_errors: false
+    - name: an include's tasks
+      include_tasks: includes/inc_fail.yml
+    - name: an import's tasks
+      import_tasks: includes/inc_fail.yml
+
+- hosts: localhost
+  gather_facts: false
+  ignore_errors: "{{ 'yes' | bool }}"
+  tasks:
+    - name: a templated setting
+      fail:
+        msg: templated
+
+- hosts: localhost
+  gather_facts: false
+  ignore_errors: true
+  tasks:
+    - block:
+        - name: a block's false wins over the play
+          fail:
+            msg: block says false
+      ignore_errors: false
+    - debug:
+        msg: not reached
