@@ -517,7 +517,15 @@ func (r *pipRun) resolvePackageNames(packages []*pipPackage, pip []string, pyBin
 		r.warnings = append(r.warnings, "Using check mode with packages from vcs urls, file paths, or archives will not behave as expected when using pip versions <24.1.")
 		return packages, nil
 	}
-	tmp, err := os.CreateTemp(pyGettempdir(), "tmp")
+	// tempfile.NamedTemporaryFile(): tmp + 8 random characters.
+	var tmp *os.File
+	var err error
+	for i := 0; i < 100; i++ {
+		tmp, err = os.OpenFile(filepath.Join(pyGettempdir(), "tmp"+pyTempName()), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if !os.IsExist(err) {
+			break
+		}
+	}
 	if err != nil {
 		return nil, agentproto.Fail("%v", err)
 	}

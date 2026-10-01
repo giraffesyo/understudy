@@ -1,0 +1,84 @@
+---
+# pip against each distribution's own Python, pip and packaging (Ubuntu
+# and Alpine ship packaging 24, Rocky 9 the pyparsing-era 20.9, whose
+# requirement rules differ), installing offline from generated wheels
+# (files/pip/pip_fixtures.py): a virtualenv, check mode, a system Python
+# that is externally managed (PEP 668) unless break_system_packages,
+# and a virtualenv's own Python running the module (Rocky's has
+# setuptools, so pkg_resources stands in for packaging; Ubuntu's and
+# Alpine's have neither).
+- hosts: target
+  gather_facts: false
+  environment:
+    PIP_NO_INDEX: "1"
+    PIP_FIND_LINKS: /tmp/fx/wheels
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PIP_NO_CACHE_DIR: "1"
+    PIP_ROOT_USER_ACTION: ignore
+  tasks:
+    - name: pip, venv and packaging from the distribution
+      become: true
+      shell: |
+        case {{ distro }} in
+          ubuntu) apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-pip python3-venv python3-packaging ;;
+          alpine) apk add -q py3-pip py3-packaging ;;
+          rocky) dnf -y -q install python3-pip python3-packaging ;;
+        esac >/dev/null 2>&1
+      changed_when: false
+    - name: fixtures
+      copy: {src: "{{ playbook_dir }}/../files/pip/pip_fixtures.py", dest: /tmp/pip_fixtures.py}
+    - name: build the fixtures
+      shell: >-
+        python3 /tmp/pip_fixtures.py /tmp/fx && cd /tmp/fx/repo && git init -q && git add -A &&
+        git -c user.name=g -c user.email=g@example.com commit -q -m fixture
+      changed_when: false
+
+    - name: create the virtualenv and install into it
+      pip: {name: goldpkg==1.0, virtualenv: /tmp/venv, virtualenv_command: python3 -m venv}
+    - name: check mode against what is installed
+      pip: {name: "{{ item }}", virtualenv: /tmp/venv}
+      check_mode: true
+      loop:
+        - goldpkg
+        - GoldPkg>=1.0
+        - goldpkg>1.0
+        - goldpkg==1.0.*
+        - goldpkg~=1.0.0
+        - goldpkg (<2)
+        - goldpkg==1.0+local
+        - "goldpkg; python_version > '3'"
+        - "goldpkg @ file:///tmp/fx/wheels/goldpkg-1.0-py3-none-any.whl"
+    - name: the cmd shows each name as packaging prints it
+      pip:
+        name: ["Gold_Pkg[b,a]>=1.0,!=1.5,<2", "goldpkg>1.0", "<3", "x @ https://example.invalid/x.whl", "y; os_name=='posix'"]
+        executable: /bin/echo
+    - name: version as its own argument
+      pip: {name: goldpkg, version: "1.5", virtualenv: /tmp/venv}
+    - name: check mode resolves a vcs url through pip (24.1 and later)
+      pip: {name: "git+file:///tmp/fx/repo#egg=goldvcs", virtualenv: /tmp/venv}
+      check_mode: true
+    - name: a vcs url (changed when the package list changes)
+      pip: {name: "git+file:///tmp/fx/repo#egg=goldvcs", extra_args: -q, virtualenv: /tmp/venv}
+    - name: absent
+      pip: {name: [goldpkg, goldvcs], state: absent, virtualenv: /tmp/venv}
+
+    - name: the system Python
+      pip: {name: goldpkg}
+      become: true
+      ignore_errors: true
+    - name: the system Python, allowed to break system packages
+      pip: {name: goldpkg, break_system_packages: true}
+      become: true
+    - name: the system Python, in check mode
+      pip: {name: [goldpkg, not-installed], state: absent}
+      become: true
+      check_mode: true
+
+    - name: the virtualenv's Python runs the module
+      pip: {name: goldpkg, virtualenv: /tmp/venv}
+      vars:
+        ansible_python_interpreter: /tmp/venv/bin/python
+      ignore_errors: true
+    - name: a virtualenv command that is not installed
+      pip: {name: goldpkg, virtualenv: /tmp/venv2, virtualenv_command: virtualenv}
+      ignore_errors: true
