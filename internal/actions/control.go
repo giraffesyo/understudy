@@ -107,15 +107,20 @@ func runDebug(_ context.Context, actx *Context, args map[string]any, _ string) *
 				}
 				return res
 			} else if cause, ok := template.Cause(err); ok {
+				rootMsg, rootPos, rootValue, rendering := template.RenderingCause(err)
+				if rendering {
+					cause = "Error rendering expression: " + rootMsg
+				}
 				inner := "Error while resolving `var` expression: " + cause
 				res := agentproto.Fail("Task failed: %s", inner)
 				res.Origin = "verbatim"
 				res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: inner}
-				if se, ok := template.AsStorageError(err); ok {
-					// A value that cannot be stored (a method): the
-					// rendering error, caused by the value's type.
-					res.ErrorChain.Inner = "Error while resolving `var` expression: " + se.Rendering()
-					res.ErrorChain.Root = &agentproto.ErrorChain{Inner: se.Error(), InnerValue: se.Value}
+				if rendering {
+					// A value that cannot be stored (a method) or
+					// decrypted: the rendering error, caused by it.
+					res.ErrorChain.Inner = "Error while resolving `var` expression: Error rendering expression."
+					res.ErrorChain.Root = &agentproto.ErrorChain{Inner: rootMsg, InnerValue: rootValue,
+						InnerFile: rootPos.File, InnerLine: rootPos.Line, InnerCol: rootPos.Col}
 				}
 				if p, has := actx.ArgPos["var"]; has {
 					res.ErrorChain.InnerFile, res.ErrorChain.InnerLine, res.ErrorChain.InnerCol = p.File, p.Line, p.Col

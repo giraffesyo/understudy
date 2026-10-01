@@ -1,0 +1,45 @@
+---
+# Using an encrypted variable with no vault secret to decrypt it fails
+# as ansible-core's undecryptable variable, at the value's origin: in a
+# module argument, through another variable, in debug's var and in a
+# conditional. A play that never reads it runs as usual.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    secret: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          65353865313563636334383065393837383565623233623530326534366638643961396261396464
+          3437613339313561313966363262333536353463616238390a663235313563643662613031393663
+          35383033373163653461636630333861663831613163393134643266646362393735376630396362
+          6666393638316439300a383836626130393236346433626138663136636132626464653236376339
+          6266
+    through: "{{ secret }}"
+  tasks:
+    - name: a task that does not read it
+      debug:
+        msg: unrelated
+
+    - name: in an argument
+      debug:
+        msg: "{{ secret }}"
+      ignore_errors: true
+
+    - name: through another variable
+      debug:
+        msg: "x {{ through }}"
+      ignore_errors: true
+
+    - name: in debug's var
+      debug:
+        var: secret
+      ignore_errors: true
+
+    - name: in a conditional
+      debug:
+        msg: never
+      when: secret == 'x'
+      ignore_errors: true
+
+    - name: in a free-form argument
+      command: echo {{ secret }}
+      ignore_errors: true

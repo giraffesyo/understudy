@@ -548,6 +548,12 @@ func (c *Context) GetTagged(name string) (any, bool) {
 	sourced.sourced = true
 	v, err := sourced.deepTemplate(raw)
 	if err != nil {
+		if ve, ok := template.AsVaultError(err); ok && ve.Pos.File == "" {
+			// An encrypted value fails where it was defined.
+			if ref, ok := c.VarOrigin(name); ok {
+				ve.Pos = ref.Pos
+			}
+		}
 		panic(err) // recovered by Context.Template*/executor boundary
 	}
 	c.cache[name] = v
@@ -663,11 +669,11 @@ func (c *Context) deepTemplateIn(v any, seen map[containerID]any) (any, error) {
 		return t.V, nil
 	case yaml.VaultedString:
 		if c.store.VaultDecrypt == nil {
-			return nil, fmt.Errorf("an encrypted value was found but no vault password was provided (use --vault-password-file or --ask-vault-pass)")
+			return nil, &template.VaultError{Reason: template.VaultNoSecrets}
 		}
 		plain, err := c.store.VaultDecrypt(t)
 		if err != nil {
-			return nil, err
+			return nil, &template.VaultError{Reason: template.VaultCannotOpen}
 		}
 		// The decrypted value may itself contain templates.
 		return c.store.engine.RenderTemplate(plain, c, c.pos)
