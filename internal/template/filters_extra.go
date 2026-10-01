@@ -745,6 +745,9 @@ func ntSplit(p string) (head, tail string) {
 	return d + r + strings.TrimRight(rest[:i], `/\`), rest[i:]
 }
 
+// PyGlob is glob.glob(pathname), for the fileglob lookup.
+func PyGlob(pathname string) []string { return pyGlob(pathname) }
+
 func hasMagic(s string) bool { return strings.ContainsAny(s, "*?[") }
 
 // pyGlob is glob.glob(pathname): directories are read in the order the

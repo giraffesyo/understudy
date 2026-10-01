@@ -242,7 +242,8 @@ rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 `reset_connection`, `refresh_inventory`, `noop`).
 
 **Task keywords** — `when`, `loop` / `with_*` (`items`, `nested`, `together`, `subelements`,
-`sequence`, `dict`, `indexed_items`, `flattened`, `lines`, `fileglob`, ...) with
+`sequence`, `dict`, `indexed_items`, `flattened`, `lines`, `fileglob` (in the
+file system's directory order, as `glob.glob` lists), ...) with
 `loop_control` (`loop_var`, `index_var`, `label`, `extended`, `pause`,
 `break_when`), `register`,
 `until`/`retries`/`delay`, `changed_when`, `failed_when`, `ignore_errors` (also
@@ -619,8 +620,7 @@ than silently diverging. Known boundaries:
   backslashes, as ansible-core's `escape_backslashes` has them. Not
   modeled: markup through `format`, slicing and `%`; `rekey_on_member` on
   a member that is not a string keys by its str() (dict keys are
-  strings); `fileglob` lists a directory in its own order, as Python's
-  `os.scandir` does; a plugin error about a value (`rekey_on_member`'s
+  strings); a plugin error about a value (`rekey_on_member`'s
   missing key) shows the value with an unknown origin where ansible-core
   knows a variable's; an item of a list literal read from a variable is
   named by its plain class (`datetime.date`) where ansible-core names

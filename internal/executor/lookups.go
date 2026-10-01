@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -153,12 +154,41 @@ func (r *Runner) resolveLookupPath(path string) string {
 // findLookupFile searches a relative file like Ansible's
 // find_file_in_search_path: <subdir>/ then the playbook dir.
 func (r *Runner) findLookupFile(ec *template.EvalCtx, name, subdir string) string {
+	if p, ok := r.findLookupPath(ec, name, subdir); ok || p != "" {
+		return p // found, or an absolute (or ~) path that is not there
+	}
+	return filepath.Join(r.Opts.BaseDir, name)
+}
+
+// lookupSearchPaths is ansible_search_path, or the playbook directory.
+func (r *Runner) lookupSearchPaths(ec *template.EvalCtx) []string {
+	if ec != nil && ec.Vars() != nil {
+		if v, ok := ec.Vars().Get("ansible_search_path"); ok {
+			if list, ok := v.([]any); ok {
+				paths := make([]string, len(list))
+				for i, p := range list {
+					paths[i] = template.PyStr(p)
+				}
+				return paths
+			}
+		}
+	}
+	return []string{r.Opts.BaseDir}
+}
+
+// findLookupPath is find_file_in_search_path: the first of the search
+// path's candidates for name that exists (ok false: none does; an
+// absolute or ~ name is still returned).
+func (r *Runner) findLookupPath(ec *template.EvalCtx, name, subdir string) (string, bool) {
 	if filepath.IsAbs(name) {
-		return name
+		_, err := os.Stat(name)
+		return name, err == nil
 	}
 	if strings.HasPrefix(name, "~") {
 		if home, err := os.UserHomeDir(); err == nil && (name == "~" || strings.HasPrefix(name, "~/")) {
-			return home + name[1:]
+			p := home + name[1:]
+			_, err := os.Stat(p)
+			return p, err == nil
 		}
 	}
 	// DataLoader.path_dwim_relative_stack over ansible_search_path (role
@@ -197,10 +227,10 @@ func (r *Runner) findLookupFile(ec *template.EvalCtx, name, subdir string) strin
 	search = append(search, filepath.Join(r.Opts.BaseDir, name))
 	for _, c := range search {
 		if _, err := os.Stat(c); err == nil {
-			return c
+			return c, true
 		}
 	}
-	return filepath.Join(r.Opts.BaseDir, name)
+	return "", false
 }
 
 // taskActionVar carries the running task's action into lookups (first_found
@@ -290,41 +320,39 @@ func lookupFile(r *Runner, ec *template.EvalCtx, terms []any, kw map[string]any)
 	return out, nil
 }
 
-func lookupFileglob(r *Runner, _ *template.EvalCtx, terms []any, _ map[string]any) ([]any, error) {
+// lookupFileglob is the fileglob lookup: a term with a directory globs
+// its file part in that directory as the search path finds it (warning
+// when none does); a bare pattern globs in each search path's files/
+// directory, then the path itself, the first with matches winning. Only
+// regular files (symlinks followed) are kept, in glob.glob's order.
+func lookupFileglob(r *Runner, ec *template.EvalCtx, terms []any, _ map[string]any) ([]any, error) {
 	var out []any
-	for _, pattern := range termStrings(terms) {
-		matches, err := r.globLookup(pattern)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, matches...)
-	}
-	return out, nil
-}
-
-// globLookup expands a fileglob pattern (absolute, or playbook-relative,
-// checking the conventional files/ subdirectory too), returning only files.
-func (r *Runner) globLookup(pattern string) ([]any, error) {
-	patterns := []string{pattern}
-	if !filepath.IsAbs(pattern) {
-		patterns = []string{
-			filepath.Join(r.Opts.BaseDir, "files", pattern),
-			filepath.Join(r.Opts.BaseDir, pattern),
-		}
-	}
-	var out []any
-	for _, p := range patterns {
-		matches, err := filepath.Glob(p)
-		if err != nil {
-			return nil, fmt.Errorf("fileglob: bad pattern %q: %v", pattern, err)
-		}
-		for _, m := range matches {
-			if info, err := os.Stat(m); err == nil && info.Mode().IsRegular() {
-				out = append(out, m)
+	for _, term := range termStrings(terms) {
+		dir, file := path.Split(term)
+		var found []string
+		if dir != "" {
+			d, ok := r.findLookupPath(ec, path.Dir(term), "files")
+			if !ok {
+				r.warn(fmt.Sprintf("Unable to find '%s' in expected paths (use -vvvvv to see paths)", path.Dir(term)))
+				continue
+			}
+			found = append(found, d)
+		} else {
+			for _, p := range r.lookupSearchPaths(ec) {
+				found = append(found, filepath.Join(p, "files"), p)
 			}
 		}
-		if len(out) > 0 {
-			break
+		for _, d := range found {
+			var matches []any
+			for _, g := range template.PyGlob(pyJoin(d, file)) {
+				if st, err := os.Stat(g); err == nil && st.Mode().IsRegular() {
+					matches = append(matches, g)
+				}
+			}
+			if len(matches) > 0 {
+				out = append(out, matches...)
+				break
+			}
 		}
 	}
 	return out, nil
