@@ -1,0 +1,41 @@
+# constructed: vars and groups from expressions over what 01-hosts
+# defined (and, with use_vars_plugins, group_vars/ and host_vars/).
+plugin: ansible.builtin.constructed
+strict: false
+use_vars_plugins: true
+compose:
+  upper_os: os | upper
+  combined: os ~ '-' ~ arch
+  from_group: role | default('none')
+  from_group_vars: colour | default('unset')
+  from_host_vars: secret | default('unset')
+  short: inventory_hostname_short
+  site_seen: site | default('no all vars')
+  missing: nope.attr
+  not_a_string: 5
+groups:
+  webservers: inventory_hostname.startswith('web')
+  "bad-name": true
+  is_db: "'dbs' in group_names"
+  broken: nope.attr
+  not_bool: os
+keyed_groups:
+  - key: os
+    prefix: os
+  - key: arch
+  - key: env
+    prefix: env
+    separator: "-"
+    parent_group: "{{ 'envs' }}"
+  - key: empty_val
+    prefix: e
+    default_value: unset
+  - key: "{'a': empty_val | default(''), 'b': arch}"
+    prefix: m
+    trailing_separator: false
+  - key: labels | default([])
+    prefix: t
+    default_value: dflt
+  - key: undefined_thing
+  - key: "[]"
+  - key: "{}"

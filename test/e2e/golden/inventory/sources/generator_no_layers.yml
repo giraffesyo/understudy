@@ -1,0 +1,3 @@
+plugin: generator
+hosts:
+  name: "x"

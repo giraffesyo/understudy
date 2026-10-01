@@ -1,0 +1,12 @@
+-vvv
+-i
+@INV@/sources/constructed
+-i
+@INV@/sources/toml_inventory.toml
+-i
+h1,h[1:2],
+-i
+@INV@/nowhere
+-i
+@INV@/sources/generator_no_layers.yml
+@INV@/playbook.yml

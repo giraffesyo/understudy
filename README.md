@@ -85,14 +85,17 @@ understudy playbook -i inventory site.yml --check --diff
 understudy playbook -i 'localhost,' -c local site.yml
 ```
 
-Inventory works the way you expect — INI and YAML formats, host ranges
-(`web[01:20].example.com`), `group_vars/`, `host_vars/`, patterns
+Inventory works the way you expect — INI, YAML and TOML formats, host
+ranges (`web[01:20].example.com`), `group_vars/`, `host_vars/`, patterns
 (`web:&staging:!db`), and `--limit`. Sources go through ansible-core's
-plugin chain (`host_list`, `script`, `auto`, `yaml`, `ini`): INI values
-are Python literals as ansible-core reads them (`yes` stays a string), a
-source no plugin can parse is reported with each plugin's failure and
-skipped, and with nothing parsed only the implicit localhost remains
-(which `all` does not match).
+plugin chain (`host_list`, `script`, `auto`, `yaml`, `ini`, `toml`, and
+with `enable_plugins` also `advanced_host_list`, `constructed` and
+`generator`): INI values are Python literals as ansible-core reads them
+(`yes` stays a string), a YAML file naming a `plugin:` configures that
+plugin (`constructed`'s `compose`, `groups` and `keyed_groups`,
+`generator`'s `layers`), a source no plugin can parse is reported with
+each plugin's failure and skipped, and with nothing parsed only the
+implicit localhost remains (which `all` does not match).
 
 ## Playbooks in Go
 
@@ -348,11 +351,23 @@ than silently diverging. Known boundaries:
   de-duplication; filters warn only for the values they read.
   `deprecation_warnings = False` (or `ANSIBLE_DEPRECATION_WARNINGS`)
   silences them.
-- **Inventory plugins**: the built-in file plugins are native (`host_list`,
-  `script`, `auto`, `yaml`, `ini`); TOML sources and plugin configs for
-  other inventory plugins (`constructed`, `generator`, collection plugins)
-  fail to parse with a clear message, and the source is skipped as
-  ansible-core skips one it cannot parse.
+- **Inventory plugins**: ansible-core's own inventory plugins are native
+  (`host_list`, `advanced_host_list`, `script`, `auto`, `yaml`, `ini`,
+  `toml` with a port of Python's `tomllib`, `constructed`, `generator`),
+  their option validation and errors included; a config naming a
+  collection's plugin fails to parse as an unknown plugin, and the source
+  is skipped as ansible-core skips one it cannot parse. TOML dates and
+  times load as their `isoformat()` strings (as YAML timestamps load as
+  strings). ansible-core orders a group's hosts two or more levels of
+  child groups down by Python set iteration (object addresses); understudy
+  takes them level by level in the order the groups were added, so such
+  hosts can list in another order in `groups`. `constructed`'s
+  `use_vars_plugins` reads `group_vars/` and `host_vars/` next to the
+  sources parsed before it; `use_extra_vars` is read from the config file
+  or the `ANSIBLE_INVENTORY_USE_EXTRA_VARS` environment variable (not
+  `ansible.cfg`), and the fact cache is not consulted. `meta:
+  refresh_inventory` parses the sources again (their output and warnings
+  included) but keeps the hosts and groups loaded at the start.
 - **Exit codes**: as ansible-playbook, the result of the last play run
   (failed and unreachable hosts carry over between plays until
   `clear_host_errors`); several playbooks each end with a recap, and one
@@ -432,12 +447,14 @@ than silently diverging. Known boundaries:
   (`redirecting (type: modules) ...`, at load and each time a task resolves
   one) and the password hashing backend. Its version banner names
   understudy's build rather than ansible-core's Python installation.
-  At `-vvv`, results dump indented and the local connection announces
-  itself (`<host> ESTABLISH LOCAL CONNECTION FOR USER: ...`); the lines that
-  trace ansible-core's Python machinery are not reproduced: the `EXEC`/`PUT`
-  commands that stage and run AnsiballZ payloads, `Using module file`, the
-  variable manager's repeated ``Read `vars_file` `` lines, inventory
-  plugins' parse attempts, and SSH connection tracing (understudy's agent
+  `-v` names the plugin a `plugin:` config runs (`Using inventory plugin
+  ...`); at `-vvv` each inventory source shows the plugins that declined
+  it and the one that parsed it, results dump indented and the local
+  connection announces itself (`<host> ESTABLISH LOCAL CONNECTION FOR USER:
+  ...`); the lines that trace ansible-core's Python machinery are not
+  reproduced: the `EXEC`/`PUT` commands that stage and run AnsiballZ
+  payloads, `Using module file`, the variable manager's repeated ``Read
+  `vars_file` `` lines, and SSH connection tracing (understudy's agent
   protocol runs no per-command `ssh`).
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
   strings; regular expressions use
