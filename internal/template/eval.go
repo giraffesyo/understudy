@@ -503,6 +503,24 @@ func (ec *EvalCtx) compareOnce(op string, l, r any, off int) (bool, error) {
 	if err := ec.rejectUndefined(r, off); err != nil {
 		return false, err
 	}
+	// An undefined item compared with a value raises.
+	var u Undefined
+	var tripped bool
+	switch op {
+	case "==", "!=":
+		u, tripped = comparedMarker(l, r)
+	case "in", "not in":
+		u, tripped = containsMarker(l, r)
+	default:
+		if la, ok := Undeprecate(l).([]any); ok {
+			if lb, ok := Undeprecate(r).([]any); ok {
+				u, tripped = firstComparedMarker(la, lb)
+			}
+		}
+	}
+	if tripped {
+		return false, u.useError(ec.pos)
+	}
 	if op == "==" {
 		return equal(l, r), nil
 	}
@@ -565,8 +583,16 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 		return nil, ec.pluginError("filter", t.full, err)
 	}
 	if !markerSafeFilters[t.name] {
-		if err := ec.tripArgs(in, args, kwargs); err != nil {
-			return nil, err
+		// A plugin that uses an undefined item gives that marker as its
+		// result (ansible-core's MarkerError handling).
+		checkIn := in
+		if keysOnlyFilters[t.name] {
+			if _, _, isMap := orderedMap(in); isMap {
+				checkIn = nil // iterating a dict reads its keys only
+			}
+		}
+		if u, ok := argsMarker(checkIn, args, kwargs); ok {
+			return u, nil
 		}
 	}
 	// The filter reads some of the deprecated values it was given
@@ -659,8 +685,10 @@ func (ec *EvalCtx) evalTest(t *testExpr) (any, error) {
 		return nil, ec.pluginError("test", t.full, err)
 	}
 	if !markerSafeTests[t.name] {
-		if err := ec.tripArgs(in, args, kwargs); err != nil {
-			return nil, err
+		// A plugin that uses an undefined item gives that marker as its
+		// result (ansible-core's MarkerError handling).
+		if u, ok := argsMarker(in, args, kwargs); ok {
+			return u, nil
 		}
 	}
 	saved := ec.testKwargs
@@ -814,29 +842,36 @@ func (ec *EvalCtx) evalItem(e Expr) (any, error) {
 	return ec.eval(e)
 }
 
-// tripArgs is the error a plugin using undefined items of its input or
-// arguments raises.
-func (ec *EvalCtx) tripArgs(in any, args []any, kwargs map[string]any) error {
+// keysOnlyFilters iterate their input: a dict's keys, not its values.
+var keysOnlyFilters = map[string]bool{
+	"list": true, "reverse": true, "select": true, "reject": true, "selectattr": true,
+	"rejectattr": true, "batch": true, "slice": true, "unique": true, "sort": true,
+	"join": true,
+}
+
+// argsMarker is the first undefined item of a plugin's input or
+// arguments, which the plugin trips using them.
+func argsMarker(in any, args []any, kwargs map[string]any) (Undefined, bool) {
 	if _, isU := in.(Undefined); !isU {
-		if err := tripMarkers(in, ec.pos); err != nil {
-			return err
+		if u, ok := firstMarker(in); ok {
+			return u, true
 		}
 	}
 	for _, a := range args {
 		if _, isU := a.(Undefined); isU {
 			continue
 		}
-		if err := tripMarkers(a, ec.pos); err != nil {
-			return err
+		if u, ok := firstMarker(a); ok {
+			return u, true
 		}
 	}
 	for _, k := range sortedKeys(kwargs) {
 		if _, isU := kwargs[k].(Undefined); isU {
 			continue
 		}
-		if err := tripMarkers(kwargs[k], ec.pos); err != nil {
-			return err
+		if u, ok := firstMarker(kwargs[k]); ok {
+			return u, true
 		}
 	}
-	return nil
+	return Undefined{}, false
 }

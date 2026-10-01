@@ -326,7 +326,9 @@ func (ec *EvalCtx) lookupName(name string) (any, bool) {
 	}
 	if ec.vars != nil {
 		if tg, ok := ec.vars.(TaggedGetter); ok {
-			if v, ok := tg.GetTagged(name); ok {
+			if v, ok, u := getMarking(tg, name); u != nil {
+				return *u, true
+			} else if ok {
 				return ec.own.variable(name, ec.access(v)), true
 			}
 		} else if v, ok := ec.vars.Get(name); ok {
@@ -341,6 +343,24 @@ func (ec *EvalCtx) lookupName(name string) (any, bool) {
 		return v, true
 	}
 	return nil, false
+}
+
+// getMarking is GetTagged where a variable whose template is undefined
+// is that undefined value (a marker: `x is defined` is false), as
+// ansible-core's lazy templating of a variable gives it.
+func getMarking(tg TaggedGetter, name string) (v any, ok bool, u *Undefined) {
+	defer func() {
+		if r := recover(); r != nil {
+			e, isErr := r.(error)
+			var ue *UndefinedError
+			if !isErr || !errors.As(e, &ue) {
+				panic(r)
+			}
+			u = &Undefined{Name: ue.Name, Err: ue}
+		}
+	}()
+	v, ok = tg.GetTagged(name)
+	return v, ok, nil
 }
 
 // HasTemplate reports whether s contains any template syntax worth parsing.

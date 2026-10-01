@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"reflect"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -14,9 +15,15 @@ func registerTests(e *Engine) {
 	t := e.Tests
 
 	t["defined"] = func(ec *EvalCtx, in any, args []any) (bool, error) {
+		if err := capturedUse(in, ec.pos); err != nil {
+			return false, err
+		}
 		return !isUndefined(in), nil
 	}
 	t["undefined"] = func(ec *EvalCtx, in any, args []any) (bool, error) {
+		if err := capturedUse(in, ec.pos); err != nil {
+			return false, err
+		}
 		return isUndefined(in), nil
 	}
 	t["none"] = func(ec *EvalCtx, in any, args []any) (bool, error) {
@@ -84,7 +91,17 @@ func registerTests(e *Engine) {
 		if len(args) != 1 {
 			return false, fmt.Errorf("sameas requires one argument")
 		}
-		// No object identity for Go values; only nil/bool make sense.
+		// Containers are the same object when they share their storage;
+		// Go values otherwise have no identity, so equal comparable
+		// values (nil, booleans) stand in for it.
+		if ia, ok := containerOf(in); ok {
+			ib, ok := containerOf(args[0])
+			return ok && ia == ib, nil
+		}
+		a, b := reflect.TypeOf(in), reflect.TypeOf(args[0])
+		if a != b || (a != nil && !a.Comparable()) {
+			return false, nil
+		}
 		return in == args[0], nil
 	}
 	t["divisibleby"] = func(ec *EvalCtx, in any, args []any) (bool, error) {

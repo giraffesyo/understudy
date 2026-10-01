@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -114,6 +115,11 @@ func argTemplateError(task *playbook.Task, key string, pos template.Position, er
 		// where that template is.
 		chain.Inner = fmt.Sprintf("Error while resolving value for '%s'.", key)
 		chain.Root = &agentproto.ErrorChain{Inner: cause, InnerFile: at.File, InnerLine: at.Line, InnerCol: at.Col}
+	} else if at, ok := syntaxElsewhere(err, pos); ok {
+		// A variable's own template that does not parse: raised where
+		// that template is.
+		chain.Inner = fmt.Sprintf("Error while resolving value for '%s'.", key)
+		chain.Root = &agentproto.ErrorChain{Inner: cause, InnerFile: at.File, InnerLine: at.Line, InnerCol: at.Col}
 	} else if msg, at, value, ok := template.RenderingCause(err); ok {
 		// A value variable storage does not support (a timedelta, a
 		// method), shown apart as its own value, or one that cannot be
@@ -148,4 +154,17 @@ func resolvedAction(task *playbook.Task) string {
 		return a
 	}
 	return "ansible.builtin." + task.Module
+}
+
+// syntaxElsewhere is where a syntax error err raised from a template
+// other than the argument's at pos is (a variable's value).
+func syntaxElsewhere(err error, pos template.Position) (template.Position, bool) {
+	var te *template.TemplateError
+	if !errors.As(err, &te) || !te.Syntax || te.Pos.File == "" {
+		return template.Position{}, false
+	}
+	if te.Pos.File == pos.File && te.Pos.Line == pos.Line && te.Pos.Col == pos.Col {
+		return template.Position{}, false
+	}
+	return te.Pos, true
 }
