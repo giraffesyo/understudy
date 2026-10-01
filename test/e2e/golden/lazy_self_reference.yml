@@ -1,0 +1,72 @@
+---
+# A container's item may read its own container (or another variable
+# that reads it), as ansible-core's lazy containers template only the
+# items read. Only a template that reads itself again, through any chain
+# of items and variables, recurses (Python's recursion limit: "Recursive
+# loop detected in template"), raising only where that item is used.
+- hosts: localhost
+  gather_facts: false
+  ignore_errors: true
+  vars:
+    d: {a: "{{ d.b }}", b: 1}
+    cfg: {base: /opt, bin: "{{ cfg.base }}/bin", lib: "{{ cfg.bin }}/../lib", all: "{{ [cfg.bin, cfg.lib] }}"}
+    e: {a: "{{ e.a }}", b: 1}
+    f: {a: "{{ f.b }}", b: "{{ f.c }}", c: 3}
+    g: {a: "{{ g.b }}", b: "{{ g.a }}", c: 3}
+    h: {a: "{{ h }}", b: 1}
+    i: {a: "{{ i | length }}", b: 1}
+    l: ["{{ l[1] }}", 2]
+    m: ["{{ m }}", 2]
+    n: {a: "{{ n.b }}", b: [1, "{{ n.c }}"], c: 5}
+    o: {a: {x: "{{ o.b }}"}, b: 7}
+    p: {a: "{{ p2.a }}", b: 1}
+    p2: {a: "{{ p.b }}"}
+    r: "{{ s }}"
+    s: {a: "{{ r.b }}", b: 2}
+    t: {a: "{{ t.keys() | list }}", b: 1}
+    r1: "{{ r2 }}"
+    r2: "{{ r1 }}"
+    k: {a: "{{ r3 }}", b: 1}
+    r3: "{{ k.a }}"
+    v: {a: "{{ w }}"}
+    w: "{{ v }}"
+    x: {a: "{{ x.b }}", b: "{{ undefined_thing }}"}
+    lz: "{{ [nope, 1] }}"
+    lz2: "{{ s2 }}"
+    s2: {a: "{{ nope }}", b: 2}
+  tasks:
+    - debug: var=d
+    - debug: msg="{{ d.a }}"
+    - debug: msg="{{ cfg }}"
+    - debug: var=e.b
+    - debug: msg="{{ e.a }}"
+    - debug: msg="{{ e }}"
+    - debug: msg="{{ f }}"
+    - debug: msg="{{ g.c }}"
+    - debug: msg="{{ g.a }}"
+    - debug: msg="{{ g | length }}"
+    - debug: msg="{{ g == 1 }}"
+    - debug: var=g.c
+    - debug: msg="{{ h.b }}"
+    - debug: msg="{{ h.a }}"
+    - debug: msg="{{ i }}"
+    - debug: msg="{{ l }}"
+    - debug: msg="{{ m[1] }}"
+    - debug: msg="{{ m[0] }}"
+    - debug: msg="{{ n }}"
+    - debug: msg="{{ o }}"
+    - debug: msg="{{ p.a }}"
+    - debug: msg="{{ s.a }}"
+    - debug: msg="{{ r }}"
+    - debug: msg="{{ t }}"
+    - debug: msg="{{ r1 }}"
+    - debug: msg="{{ k.b }}"
+    - debug: msg="{{ x.a }}"
+    - debug: msg="{{ lz | length }} {{ lz[1] }}"
+    - debug: msg="{{ lz2.b }} {{ lz2 | length }}"
+    - debug: var=lz2
+    - set_fact:
+        cp: "{{ d }}"
+    - debug: var=cp
+    - set_fact:
+        y: "{{ g }}"

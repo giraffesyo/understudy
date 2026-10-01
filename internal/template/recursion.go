@@ -1,6 +1,7 @@
 package template
 
 import (
+	"errors"
 	"reflect"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -16,8 +17,57 @@ import (
 
 // RecursionError is Python's RecursionError where ansible-core reports
 // one: in a template result ("template") or a `var` expression
-// ("expression").
-type RecursionError struct{ In string }
+// ("expression"). Pos, when known, is the template that recursed.
+type RecursionError struct {
+	In  string
+	Pos Position
+}
+
+// HoldsRecursion reports whether v is or holds the placeholder of a
+// lazy container's item that recursed (an Undefined raising a
+// RecursionError).
+func HoldsRecursion(v any) bool {
+	return firstRecursion(v, map[cycleID]bool{}) != nil
+}
+
+// firstRecursion is the RecursionError of the first item in v, depth
+// first, that recursed.
+func firstRecursion(v any, active map[cycleID]bool) *RecursionError {
+	if u, ok := v.(Undefined); ok {
+		var re *RecursionError
+		if u.Err != nil && errors.As(u.Err, &re) {
+			return re
+		}
+		return nil
+	}
+	id, ok := containerOf(v)
+	if !ok || active[id] {
+		return nil
+	}
+	active[id] = true
+	defer delete(active, id)
+	switch t := v.(type) {
+	case []any:
+		for _, item := range t {
+			if re := firstRecursion(item, active); re != nil {
+				return re
+			}
+		}
+	case map[string]any:
+		for _, k := range sortedKeys(t) {
+			if re := firstRecursion(t[k], active); re != nil {
+				return re
+			}
+		}
+	case *yaml.OMap:
+		for _, k := range t.Keys() {
+			if re := firstRecursion(t.Get(k), active); re != nil {
+				return re
+			}
+		}
+	}
+	return nil
+}
 
 func (e *RecursionError) Error() string {
 	return "Recursive loop detected in " + e.In + ": maximum recursion depth exceeded"

@@ -1,0 +1,26 @@
+---
+# Templates that read themselves again through a chain of container
+# items and variables recurse until Python's recursion limit: the task
+# fails ("Recursive loop detected in template") where the value is used.
+# The template the error names is wherever the stack ran out, which
+# depends on the frames each step of the loop takes (see vvvSkip).
+- hosts: localhost
+  gather_facts: false
+  ignore_errors: true
+  vars:
+    g: {a: "{{ g.b }}", b: "{{ g.a }}", c: 3}
+    k: {a: "{{ r3 }}", b: 1}
+    r3: "{{ k.a }}"
+    u: {a: "{{ u.b }}", b: "{{ u.c }}", c: "{{ u.a }}"}
+    v: {a: "{{ w }}"}
+    w: "{{ v }}"
+  tasks:
+    - debug: var=g
+    - debug: msg="{{ k.a }}"
+    - debug: msg="{{ r3 }}"
+    - debug: msg="{{ u.b }}"
+    - debug: msg="{{ u | length }}"
+    - debug: msg="{{ v }}"
+    - debug: msg="{{ w }}"
+    - assert:
+        that: g.a == 1

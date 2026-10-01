@@ -55,6 +55,10 @@ func (e *Engine) EvalExpressionReplacing(src string, vars VarGetter, pos Positio
 	if HasCycle(v) {
 		return nil, nil, &RecursionError{In: "expression"}
 	}
+	if re := firstRecursion(v, map[cycleID]bool{}); re != nil {
+		// A lazy container's item that recursed raises, as no marker.
+		return nil, nil, re
+	}
 	v, err = ec.storable(ec.finalize(dropNestedOmit(v)))
 	if err != nil {
 		if se, ok := AsStorageError(err); ok {

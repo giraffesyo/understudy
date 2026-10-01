@@ -6,7 +6,6 @@ package vars
 
 import (
 	"errors"
-	"fmt"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -384,8 +383,7 @@ func (c *Context) WithRoleScope(defaults, roleVars []map[string]any) *Context {
 	}
 	child := *c
 	child.flat, child.flatOrigins = c.store.flattenOrigins(c.host, defaults, roleVars)
-	child.resolving = map[string]bool{}
-	child.cache = map[string]any{}
+	child.resetResolution()
 	return &child
 }
 
@@ -403,9 +401,13 @@ type Context struct {
 	// values came from, where known.
 	flatOrigins    map[string]valueOrigin
 	overlayOrigins map[string]valueOrigin
-	resolving      map[string]bool
+	resolving      map[string]int // variables resolving: the items active when each began
 	cache          map[string]any
-	pos            template.Position
+	// items are the resolution of a variable's container items: those
+	// being templated (one met again inside itself recurses forever, as
+	// in ansible-core) and those done.
+	itemRes *itemResolution
+	pos     template.Position
 
 	keepDeprecated bool
 	// sourced: templates in the value being resolved report their own
@@ -440,8 +442,9 @@ func (s *Store) NewContext(host string, pos template.Position) *Context {
 		store:     s,
 		overlay:   map[string]any{},
 		magic:     map[string]any{},
-		resolving: map[string]bool{},
+		resolving: map[string]int{},
 		cache:     map[string]any{},
+		itemRes:   newItemResolution(),
 		pos:       pos,
 	}
 	c.flat, c.flatOrigins = s.flattenOrigins(host, nil, nil)
@@ -471,8 +474,7 @@ func (c *Context) WithOverlay(vars map[string]any) *Context {
 			delete(child.overlayOrigins, k)
 		}
 	}
-	child.resolving = map[string]bool{}
-	child.cache = map[string]any{}
+	child.resetResolution()
 	return &child
 }
 
@@ -762,18 +764,33 @@ func (c *Context) GetTagged(name string) (any, bool) {
 		}
 		return nil, false
 	}
-	if c.resolving[name] {
-		// Matching Ansible's error text for recursive templates.
-		panic(&CycleError{Name: name})
-	}
-	c.resolving[name] = true
-	defer delete(c.resolving, name)
 	// A variable's templates report where the variable was defined, as
 	// ansible-core's origin-tagged values do (a deprecated value read,
 	// an undefined variable).
 	sourced := *c
 	sourced.sourced = true
 	sourced.lazyItems = true
+	progress := len(c.itemRes.active)
+	if entered, ok := c.resolving[name]; ok {
+		// Read again while it resolves. ansible-core's lazy containers
+		// template only the items read, so an item may read the others
+		// (d: {a: "{{ d.b }}", b: 1}): the variable resolves again, the
+		// items being templated placeholders that recurse if read. Read
+		// again with no item entered since, it recurses forever, until
+		// Python's recursion limit.
+		if entered == progress {
+			panic(&template.RecursionError{In: "template", Pos: rawOrigin(raw)})
+		}
+		c.resolving[name] = progress
+		defer func() { c.resolving[name] = entered }()
+		v, err := sourced.deepTemplate(raw)
+		if err != nil {
+			panic(err)
+		}
+		return v, true
+	}
+	c.resolving[name] = progress
+	defer delete(c.resolving, name)
 	v, err := sourced.deepTemplate(raw)
 	if err != nil {
 		if ve, ok := template.AsVaultError(err); ok && ve.Pos.File == "" {
@@ -784,8 +801,22 @@ func (c *Context) GetTagged(name string) (any, bool) {
 		}
 		panic(err) // recovered by Context.Template*/executor boundary
 	}
-	c.cache[name] = v
+	if !template.HoldsRecursion(v) {
+		// One holding a placeholder is only its value inside the
+		// resolution that made it.
+		c.cache[name] = v
+	}
 	return v, true
+}
+
+// rawOrigin is where a raw value was written, where known.
+func rawOrigin(raw any) template.Position {
+	if s, ok := raw.(string); ok {
+		if file, line, col, ok := yaml.Origin(s); ok {
+			return template.Position{File: file, Line: line, Col: col}
+		}
+	}
+	return template.Position{}
 }
 
 // RawVar implements template.RawVarGetter: a variable's value as
@@ -804,11 +835,28 @@ func (c *Context) RawVar(name string) (any, bool) {
 	return raw, ok
 }
 
-// CycleError reports a self-referencing variable.
-type CycleError struct{ Name string }
+// itemResolution tracks a context's container items as its variables
+// resolve: an item is the raw container it is in and its key or index.
+type itemResolution struct {
+	active map[itemID]bool
+	done   map[itemID]any
+}
 
-func (e *CycleError) Error() string {
-	return fmt.Sprintf("recursive loop detected in template: variable %q references itself", e.Name)
+type itemID struct {
+	container containerID
+	key       any
+}
+
+func newItemResolution() *itemResolution {
+	return &itemResolution{active: map[itemID]bool{}, done: map[itemID]any{}}
+}
+
+// resetResolution starts the context's resolution anew (its variables
+// may mean other values).
+func (c *Context) resetResolution() {
+	c.resolving = map[string]int{}
+	c.cache = map[string]any{}
+	c.itemRes = newItemResolution()
 }
 
 // origin is where a template in the value being templated reports from:
@@ -880,9 +928,28 @@ func idOf(v any) (containerID, bool) {
 // items are lazy, one whose template fails (an undefined value, a
 // plugin's or Jinja's error) becomes the marker ansible-core's lazy
 // container holds for it, raising only where the item is used.
-func (c *Context) deepTemplateItem(v any, seen map[containerID]any) (out any, err error) {
+func (c *Context) deepTemplateItem(id itemID, v any, seen map[containerID]any) (out any, err error) {
 	if !c.lazyItems {
 		return c.deepTemplateIn(v, seen)
+	}
+	if _, isContainer := idOf(v); !isContainer && c.itemRes != nil {
+		// An item being templated, met again, is a placeholder that
+		// recurses forever if read; one templated already has its value,
+		// unless it holds a placeholder (its value only inside the
+		// resolution that made it).
+		if c.itemRes.active[id] {
+			return template.Undefined{Name: "captured error", Err: &template.RecursionError{In: "template", Pos: rawOrigin(v)}}, nil
+		}
+		if done, ok := c.itemRes.done[id]; ok {
+			return done, nil
+		}
+		c.itemRes.active[id] = true
+		defer func() {
+			delete(c.itemRes.active, id)
+			if err == nil && !template.HoldsRecursion(out) {
+				c.itemRes.done[id] = out
+			}
+		}()
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -906,8 +973,9 @@ func (c *Context) deepTemplateItem(v any, seen map[containerID]any) (out any, er
 }
 
 // itemMarker is the marker a lazy container's item that failed with err
-// holds: an undefined value's, or a captured template error's. Other
-// errors (a recursive or undecryptable variable) are raised.
+// holds: an undefined value's, or a captured template error's (a
+// recursing item's included). Other errors (an undecryptable variable)
+// are raised.
 func itemMarker(err error) (any, bool) {
 	var ue *template.UndefinedError
 	if errors.As(err, &ue) {
@@ -918,6 +986,10 @@ func itemMarker(err error) (any, bool) {
 		if _, vault := template.AsVaultError(err); !vault {
 			return template.Undefined{Name: "captured error", Err: err}, true
 		}
+	}
+	var re *template.RecursionError
+	if errors.As(err, &re) {
+		return template.Undefined{Name: "captured error", Err: err}, true
 	}
 	return nil, false
 }
@@ -973,7 +1045,7 @@ func (c *Context) deepTemplateIn(v any, seen map[containerID]any) (any, error) {
 			defer delete(seen, id)
 		}
 		for i, item := range t {
-			r, err := c.items().deepTemplateItem(item, seen)
+			r, err := c.items().deepTemplateItem(itemID{id, i}, item, seen)
 			if err != nil {
 				return nil, err
 			}
@@ -985,7 +1057,7 @@ func (c *Context) deepTemplateIn(v any, seen map[containerID]any) (any, error) {
 		seen[id] = out
 		defer delete(seen, id)
 		for k, val := range t {
-			r, err := c.items().deepTemplateItem(val, seen)
+			r, err := c.items().deepTemplateItem(itemID{id, k}, val, seen)
 			if err != nil {
 				return nil, err
 			}
@@ -999,7 +1071,7 @@ func (c *Context) deepTemplateIn(v any, seen map[containerID]any) (any, error) {
 		seen[id] = out
 		defer delete(seen, id)
 		for _, k := range t.Keys() {
-			r, err := c.items().deepTemplateItem(t.Get(k), seen)
+			r, err := c.items().deepTemplateItem(itemID{id, k}, t.Get(k), seen)
 			if err != nil {
 				return nil, err
 			}
@@ -1166,8 +1238,7 @@ func (c *Context) EvalExprReplacing(expr string) (v any, markers []template.Mark
 	// Variables resolve anew, an undefined item of one a marker in place.
 	child := *c
 	child.markers = true
-	child.resolving = map[string]bool{}
-	child.cache = map[string]any{}
+	child.resetResolution()
 	return c.store.engine.EvalExpressionReplacing(expr, &child, c.pos)
 }
 
