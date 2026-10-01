@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // dockerRunID is unique to this test process: the pid keeps it readable,
@@ -89,9 +90,22 @@ func dockerRun(t *testing.T, base string, args ...string) string {
 }
 
 // dockerPort returns the host port a container's port is published on.
+// Docker Desktop can report a running container before its port mapping
+// is published, so a failed lookup is retried while the container runs.
 func dockerPort(t *testing.T, name, port string) string {
 	t.Helper()
-	out, err := exec.Command("docker", "port", name, port).Output()
+	var out []byte
+	var err error
+	for i := 0; i < 20; i++ {
+		if out, err = exec.Command("docker", "port", name, port).Output(); err == nil {
+			break
+		}
+		state, _ := exec.Command("docker", "inspect", "-f", "{{.State.Status}}", name).Output()
+		if strings.TrimSpace(string(state)) != "running" {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 	if err != nil {
 		state, _ := exec.Command("docker", "inspect", "-f", "{{.State.Status}} {{.State.ExitCode}} {{.State.Error}}", name).CombinedOutput()
 		t.Fatalf("docker port %s %s: %v (container: %s)", name, port, err, strings.TrimSpace(string(state)))
