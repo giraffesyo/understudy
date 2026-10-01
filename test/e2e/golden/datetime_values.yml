@@ -1,0 +1,29 @@
+---
+# A datetime a variable holds is ansible-core's _AnsibleTaggedDateTime
+# (an operator or plugin error names it so); one an expression just made
+# is a datetime.datetime.
+- hosts: localhost
+  gather_facts: false
+  ignore_errors: true
+  vars:
+    pdt: "{{ '2024-01-02 03:04:05' | to_datetime }}"
+  tasks:
+    - set_fact:
+        dt: "{{ '2024-01-02 03:04:05' | to_datetime }}"
+    - debug: msg="{{ dt < 5 }}"
+    - debug: msg="{{ dt - 5 }}"
+    - debug: msg="{{ 5 - dt }}"
+    - debug: msg="{{ dt + 5 }}"
+    - debug: msg="{{ dt > 'x' }}"
+    - debug: msg="{{ pdt < 5 }}"
+    - debug: msg="{{ ('2024-01-02 03:04:05' | to_datetime) < 5 }}"
+    - debug: msg="{{ ('2024-01-02 03:04:05' | to_datetime) - 5 }}"
+    - debug: msg="{{ (dt - ('2024-01-01 03:04:05' | to_datetime)).days }}"
+    - debug: msg="{{ (dt + (dt - pdt)) - 5 }}"
+    - debug: msg="{{ dt == pdt }}"
+    - debug: msg="{{ dt == 5 }}"
+    - debug: msg="{{ dt * 2 }}"
+    - debug: msg="{{ dt | type_debug }}"
+    - debug: msg="{{ [dt] | max }}"
+    - debug: msg="{{ [dt, 1] | max }}"
+    - debug: msg="{{ [pdt, 1] | min }}"
