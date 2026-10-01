@@ -2,7 +2,7 @@ package template
 
 import (
 	"fmt"
-	"strconv"
+	"math/big"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -19,13 +19,28 @@ func registerFilters(e *Engine) {
 
 	f["mandatory"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		if u, ok := in.(Undefined); ok {
-			msg := fmt.Sprintf("mandatory variable %q not defined", u.Name)
-			if len(args) > 0 {
-				if s, ok := asString(args[0]); ok {
-					msg = s
-				}
+			if len(args) > 0 && args[0] != nil {
+				return nil, fmt.Errorf("%s", toStr(args[0]))
 			}
-			return nil, fmt.Errorf("%s", msg)
+			if m, ok := kwargs["msg"]; ok && m != nil {
+				return nil, fmt.Errorf("%s", toStr(m))
+			}
+			// The undefined's name: the variable, or the attribute that
+			// was missing.
+			name := u.Name
+			if i := strings.Index(name, " object"); i > 0 && !strings.ContainsAny(name[:i], ".[ ") {
+				name = strings.TrimLeft(name[i+len(" object"):], ".[")
+				if j := strings.IndexAny(name, ".["); j >= 0 {
+					name = name[:j]
+				}
+				name = strings.TrimSuffix(name, "]")
+			} else if j := strings.IndexAny(name, ".["); j > 0 {
+				name = name[:j]
+			}
+			if name == "" {
+				return nil, fmt.Errorf("Mandatory variable not defined.")
+			}
+			return nil, fmt.Errorf("Mandatory variable %s not defined.", pyStrRepr(name))
 		}
 		return in, nil
 	}
@@ -50,14 +65,15 @@ func registerFilters(e *Engine) {
 	}
 
 	f["int"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		def := int64(0)
+		// Jinja's do_int(value, default=0, base=10): int(value) (with the
+		// base for a str), else int(float(value)), else the default as
+		// given. Ints have no size limit.
+		var def any = int64(0)
 		if len(args) > 0 {
-			if d, ok := asInt(args[0]); ok {
-				def = d
-			}
+			def = args[0]
+		} else if d, ok := kwargs["default"]; ok {
+			def = d
 		}
-		// Ansible: int(value, default=0, base=10) — base is positional or a
-		// kwarg.
 		base := int64(10)
 		if len(args) > 1 {
 			if bi, ok := asInt(args[1]); ok {
@@ -69,8 +85,20 @@ func registerFilters(e *Engine) {
 				base = bi
 			}
 		}
+		in = Undeprecate(in)
+		if s, ok := asString(in); ok {
+			if v, ok := pyParseInt(s, base); ok {
+				return v, nil
+			}
+			if f, ok := pyParseFloat(s); ok {
+				if v, ok := floatToInt(f); ok {
+					return v, nil
+				}
+			}
+			return def, nil
+		}
 		switch t := in.(type) {
-		case int64:
+		case int64, *big.Int:
 			return t, nil
 		case int:
 			return int64(t), nil
@@ -80,37 +108,31 @@ func registerFilters(e *Engine) {
 			}
 			return int64(0), nil
 		case float64:
-			return int64(t), nil
-		case string, yaml.UnsafeString:
-			s, _ := asString(t)
-			s = strings.TrimSpace(s)
-			// Python's int(s, base) accepts the matching radix prefix.
-			s = stripRadixPrefix(s, base)
-			if v, err := strconv.ParseInt(s, int(base), 64); err == nil {
+			if v, ok := floatToInt(t); ok {
 				return v, nil
 			}
-			// Python's int() rejects floats-in-strings, Ansible's filter
-			// truncates them.
-			if fv, err := strconv.ParseFloat(s, 64); err == nil {
-				return int64(fv), nil
-			}
-			return def, nil
 		}
 		return def, nil
 	}
 
 	f["float"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		def := 0.0
+		// Jinja's do_float(value, default=0.0): float(value), else the
+		// default as given.
+		var def any = 0.0
 		if len(args) > 0 {
-			if d, ok := asFloat(args[0]); ok {
-				def = d
-			}
+			def = args[0]
+		} else if d, ok := kwargs["default"]; ok {
+			def = d
+		}
+		in = Undeprecate(in)
+		if b, ok := in.(*big.Int); ok {
+			return bigToFloat(b) // OverflowError is not caught
 		}
 		if v, ok := asFloat(in); ok {
 			return v, nil
 		}
 		if s, ok := asString(in); ok {
-			if v, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
+			if v, ok := pyParseFloat(s); ok {
 				return v, nil
 			}
 		}
@@ -135,35 +157,35 @@ func registerFilters(e *Engine) {
 	f["count"] = lengthFilter
 
 	f["upper"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, err := requireString(in, "upper")
+		s, err := softStr(in)
 		if err != nil {
 			return nil, err
 		}
 		return strings.ToUpper(s), nil
 	}
 	f["lower"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, err := requireString(in, "lower")
+		s, err := softStr(in)
 		if err != nil {
 			return nil, err
 		}
 		return strings.ToLower(s), nil
 	}
 	f["capitalize"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, err := requireString(in, "capitalize")
+		s, err := softStr(in)
 		if err != nil {
 			return nil, err
 		}
 		return pyCapitalize(s), nil
 	}
 	f["title"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, err := requireString(in, "title")
+		s, err := softStr(in)
 		if err != nil {
 			return nil, err
 		}
 		return pyTitle(s), nil
 	}
 	f["trim"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, err := requireString(in, "trim")
+		s, err := softStr(in)
 		if err != nil {
 			return nil, err
 		}
@@ -171,15 +193,15 @@ func registerFilters(e *Engine) {
 	}
 
 	f["replace"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, err := requireString(in, "replace")
+		s, err := softStr(in)
 		if err != nil {
 			return nil, err
 		}
-		old, err := argStr(args, 0, "")
+		old, err := argSoftStr(args, 0, "")
 		if err != nil {
 			return nil, err
 		}
-		niu, err := argStr(args, 1, "")
+		niu, err := argSoftStr(args, 1, "")
 		if err != nil {
 			return nil, err
 		}
@@ -191,7 +213,7 @@ func registerFilters(e *Engine) {
 	}
 
 	f["join"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		sep, err := argStr(args, 0, "")
+		sep, err := argSoftStr(args, 0, "")
 		if err != nil {
 			return nil, err
 		}
@@ -207,9 +229,15 @@ func registerFilters(e *Engine) {
 	}
 
 	f["split"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, err := requireString(in, "split")
-		if err != nil {
-			return nil, err
+		// The filter is str.split itself.
+		s, ok := asString(in)
+		if !ok {
+			return nil, fmt.Errorf("descriptor 'split' for 'str' objects doesn't apply to a '%s' object", pyClassName(in, ec.fromVar(-1)))
+		}
+		if len(args) > 0 && args[0] != nil {
+			if _, ok := asString(args[0]); !ok {
+				return nil, fmt.Errorf("must be str or None, not %s", pyClassName(args[0], ec.fromVar(0)))
+			}
 		}
 		return strMethods["split"](s, args)
 	}
@@ -220,7 +248,7 @@ func registerFilters(e *Engine) {
 			return nil, err
 		}
 		if len(items) == 0 {
-			return nil, fmt.Errorf("sequence is empty")
+			return Undefined{Name: "first item", Err: &UndefinedError{Hint: "No first item, sequence was empty."}}, nil
 		}
 		return items[0], nil
 	}
@@ -230,7 +258,7 @@ func registerFilters(e *Engine) {
 			return nil, err
 		}
 		if len(items) == 0 {
-			return nil, fmt.Errorf("sequence is empty")
+			return Undefined{Name: "last item", Err: &UndefinedError{Hint: "No last item, sequence was empty."}}, nil
 		}
 		return items[len(items)-1], nil
 	}
@@ -245,7 +273,7 @@ func registerFilters(e *Engine) {
 
 	// center(width=80): pad a string with spaces so it is centered in width.
 	f["center"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, err := requireString(in, "center")
+		s, err := softStr(in)
 		if err != nil {
 			return nil, err
 		}
@@ -265,16 +293,17 @@ func registerFilters(e *Engine) {
 	// batch(n, fill_with=None): group a sequence into lists of n, padding the
 	// last group with fill_with when given.
 	f["batch"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		n, err := argInt(args, 0, 1)
-		if err != nil {
-			return nil, err
-		}
-		if n < 1 {
-			n = 1
-		}
 		items, err := iterate(in)
 		if err != nil {
 			return nil, err
+		}
+		n, err := argInt(args, 0, 1)
+		if err != nil {
+			// len(tmp) == linecount never holds: one batch.
+			n = int64(len(items))
+		}
+		if n < 1 {
+			n = 1
 		}
 		fill, hasFill := filterArg(args, 1, kwargs, "fill_with")
 		out := []any{}
@@ -299,7 +328,7 @@ func registerFilters(e *Engine) {
 	f["slice"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		n, err := argInt(args, 0, 1)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("unsupported operand type(s) for //: 'int' and '%s'", pyClassName(args[0], ec.fromVar(0)))
 		}
 		if n < 1 {
 			n = 1
@@ -338,13 +367,13 @@ func registerFilters(e *Engine) {
 	// truncate(length=255, killwords=False, end='...', leeway=5): shorten a
 	// string, matching Jinja2's word-aware truncation.
 	f["truncate"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, err := requireString(in, "truncate")
+		s, err := softStr(in)
 		if err != nil {
 			return nil, err
 		}
 		length, err := argInt(args, 0, 255)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("'>=' not supported between instances of '%s' and 'int'", pyClassName(args[0], ec.fromVar(0)))
 		}
 		killwords := argBoolAt(args, 1, kwargs, "killwords", false)
 		end, err := argStrKw(args, 2, kwargs, "end", "...")
@@ -375,13 +404,13 @@ func registerFilters(e *Engine) {
 	// wordwrap(width=79, break_long_words=True, wrapstring="\n"): greedy word
 	// wrap matching textwrap for the common cases.
 	f["wordwrap"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, err := requireString(in, "wordwrap")
+		s, err := softStr(in)
 		if err != nil {
 			return nil, err
 		}
 		width, err := argInt(args, 0, 79)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("'<=' not supported between instances of '%s' and 'int'", pyClassName(args[0], ec.fromVar(0)))
 		}
 		if width < 1 {
 			width = 1
@@ -487,29 +516,6 @@ func wordWrap(s string, width int, breakLong bool, wrapstring string) string {
 	return strings.Join(lines, wrapstring)
 }
 
-// stripRadixPrefix removes a 0x/0o/0b prefix when it matches the requested
-// base, mirroring Python's int(s, base) which tolerates the prefix.
-func stripRadixPrefix(s string, base int64) string {
-	if len(s) < 2 || s[0] != '0' {
-		return s
-	}
-	switch base {
-	case 16:
-		if s[1] == 'x' || s[1] == 'X' {
-			return s[2:]
-		}
-	case 8:
-		if s[1] == 'o' || s[1] == 'O' {
-			return s[2:]
-		}
-	case 2:
-		if s[1] == 'b' || s[1] == 'B' {
-			return s[2:]
-		}
-	}
-	return s
-}
-
 // filterDefault implements default/d: replace Undefined (or, with the
 // second arg true, any falsy value).
 func filterDefault(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
@@ -529,12 +535,21 @@ func filterDefault(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any,
 	return in, nil
 }
 
-func requireString(in any, filter string) (string, error) {
-	s, ok := asString(in)
-	if !ok {
-		return "", fmt.Errorf("expected a string, got %s", typeName(in))
+// argSoftStr is argument i as str() makes it (def when absent).
+func argSoftStr(args []any, i int, def string) (string, error) {
+	if i >= len(args) {
+		return def, nil
 	}
-	return s, nil
+	return softStr(args[i])
+}
+
+// softStr is Jinja's soft_str: a string filter works on str() of any
+// value.
+func softStr(in any) (string, error) {
+	if s, ok := asString(in); ok {
+		return s, nil
+	}
+	return toStr(in), nil
 }
 
 // pyTypeName matches Ansible's type_debug output (Python type names).
@@ -544,7 +559,7 @@ func pyTypeName(v any) string {
 		return "NoneType"
 	case bool:
 		return "bool"
-	case int64, int:
+	case int64, int, *big.Int:
 		return "int"
 	case float64:
 		return "float"

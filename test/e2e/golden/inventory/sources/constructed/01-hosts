@@ -1,0 +1,12 @@
+web1.example.com os=linux arch=x86_64 env=prod empty_val= labels="['a', '']"
+web2 os=Linux arch=arm64 env=dev
+db1 os=bsd arch=x86_64
+
+[dbs]
+db1
+
+[dbs:vars]
+role=database
+
+[all:vars]
+site=main

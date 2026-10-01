@@ -85,14 +85,17 @@ understudy playbook -i inventory site.yml --check --diff
 understudy playbook -i 'localhost,' -c local site.yml
 ```
 
-Inventory works the way you expect — INI and YAML formats, host ranges
-(`web[01:20].example.com`), `group_vars/`, `host_vars/`, patterns
+Inventory works the way you expect — INI, YAML and TOML formats, host
+ranges (`web[01:20].example.com`), `group_vars/`, `host_vars/`, patterns
 (`web:&staging:!db`), and `--limit`. Sources go through ansible-core's
-plugin chain (`host_list`, `script`, `auto`, `yaml`, `ini`): INI values
-are Python literals as ansible-core reads them (`yes` stays a string), a
-source no plugin can parse is reported with each plugin's failure and
-skipped, and with nothing parsed only the implicit localhost remains
-(which `all` does not match).
+plugin chain (`host_list`, `script`, `auto`, `yaml`, `ini`, `toml`, and
+with `enable_plugins` also `advanced_host_list`, `constructed` and
+`generator`): INI values are Python literals as ansible-core reads them
+(`yes` stays a string), a YAML file naming a `plugin:` configures that
+plugin (`constructed`'s `compose`, `groups` and `keyed_groups`,
+`generator`'s `layers`), a source no plugin can parse is reported with
+each plugin's failure and skipped, and with nothing parsed only the
+implicit localhost remains (which `all` does not match).
 
 ## Playbooks in Go
 
@@ -253,7 +256,14 @@ loops and `namespace()`, in-place list/dict methods (`append`, `update`, ...), ~
 filters (`default`, `combine`, `selectattr`, `regex_replace`, `to_json`,
 `map`, `ternary`, `hash`, …), ~50 tests (`version`, `match`, task-result
 tests, …), chainable strict `Undefined`, and the native-types rule for
-`when:`/`loop:`.
+`when:`/`loop:`. Templates compile through a port of Jinja2's lexer and
+parser, so a broken template fails with Jinja's own `TemplateSyntaxError`
+(`expected token 'end of print statement', got 'integer'`, `Encountered
+unknown tag 'do'.`, line numbers in template files); filter and test
+failures read as ansible-core reports the Python exception its plugin
+raised (`The filter plugin 'ansible.builtin.combine' failed: ...`), and
+conditionals, loops and template files fail with ansible-core's error
+chains. Ints are arbitrary precision, as Python's are.
 
 **Modules** — ~48 target-side plus control-side actions, covering the common
 system-administration surface:
@@ -360,11 +370,23 @@ than silently diverging. Known boundaries:
   de-duplication; filters warn only for the values they read.
   `deprecation_warnings = False` (or `ANSIBLE_DEPRECATION_WARNINGS`)
   silences them.
-- **Inventory plugins**: the built-in file plugins are native (`host_list`,
-  `script`, `auto`, `yaml`, `ini`); TOML sources and plugin configs for
-  other inventory plugins (`constructed`, `generator`, collection plugins)
-  fail to parse with a clear message, and the source is skipped as
-  ansible-core skips one it cannot parse.
+- **Inventory plugins**: ansible-core's own inventory plugins are native
+  (`host_list`, `advanced_host_list`, `script`, `auto`, `yaml`, `ini`,
+  `toml` with a port of Python's `tomllib`, `constructed`, `generator`),
+  their option validation and errors included; a config naming a
+  collection's plugin fails to parse as an unknown plugin, and the source
+  is skipped as ansible-core skips one it cannot parse. TOML dates and
+  times load as their `isoformat()` strings (as YAML timestamps load as
+  strings). ansible-core orders a group's hosts two or more levels of
+  child groups down by Python set iteration (object addresses); understudy
+  takes them level by level in the order the groups were added, so such
+  hosts can list in another order in `groups`. `constructed`'s
+  `use_vars_plugins` reads `group_vars/` and `host_vars/` next to the
+  sources parsed before it; `use_extra_vars` is read from the config file
+  or the `ANSIBLE_INVENTORY_USE_EXTRA_VARS` environment variable (not
+  `ansible.cfg`), and the fact cache is not consulted. `meta:
+  refresh_inventory` parses the sources again (their output and warnings
+  included) but keeps the hosts and groups loaded at the start.
 - **Exit codes**: as ansible-playbook, the result of the last play run
   (failed and unreachable hosts carry over between plays until
   `clear_host_errors`); several playbooks each end with a recap, and one
@@ -480,12 +502,14 @@ than silently diverging. Known boundaries:
   (`redirecting (type: modules) ...`, at load and each time a task resolves
   one) and the password hashing backend. Its version banner names
   understudy's build rather than ansible-core's Python installation.
-  At `-vvv`, results dump indented and the local connection announces
-  itself (`<host> ESTABLISH LOCAL CONNECTION FOR USER: ...`); the lines that
-  trace ansible-core's Python machinery are not reproduced: the `EXEC`/`PUT`
-  commands that stage and run AnsiballZ payloads, `Using module file`, the
-  variable manager's repeated ``Read `vars_file` `` lines, inventory
-  plugins' parse attempts, and SSH connection tracing (understudy's agent
+  `-v` names the plugin a `plugin:` config runs (`Using inventory plugin
+  ...`); at `-vvv` each inventory source shows the plugins that declined
+  it and the one that parsed it, results dump indented and the local
+  connection announces itself (`<host> ESTABLISH LOCAL CONNECTION FOR USER:
+  ...`); the lines that trace ansible-core's Python machinery are not
+  reproduced: the `EXEC`/`PUT` commands that stage and run AnsiballZ
+  payloads, `Using module file`, the variable manager's repeated ``Read
+  `vars_file` `` lines, and SSH connection tracing (understudy's agent
   protocol runs no per-command `ssh`).
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
   strings; regular expressions use
@@ -495,6 +519,17 @@ than silently diverging. Known boundaries:
   its `timeout` has the process its module started killed (ansible-core
   leaves it running, even after the playbook exits) — output is identical,
   only the orphaned work is stopped.
+- **Template error details**: filter errors name the Python class of
+  their values as ansible-core's plugins see them — lazy containers and
+  tagged scalars for variables, plain types for values computed in the
+  template — judged from the filter's argument expressions (a registered
+  result's scalars are named as tagged too). `to_json` of a value that
+  contains itself fails in CPython with a C-stack message that depends on
+  the platform (`Stack overflow (used 16354 kB)`); understudy reports
+  `maximum recursion depth exceeded`. A filter called with too many
+  positional arguments is not rejected with Python's `takes N positional
+  arguments` error, and a `when:` whose result is not a boolean is taken
+  for its truthiness rather than failing as a broken conditional.
 
 ## Building & testing
 

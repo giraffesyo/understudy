@@ -1,0 +1,67 @@
+# The toml plugin: groups with vars, children and hosts, and every TOML
+# value type.
+[all.vars]
+has_java = false
+hex = 0xdead_beef
+oct = 0o755
+bin = 0b1010
+num = 1_000
+neg = -17
+flt = 6.02e23
+small = -1.5e-3
+pinf = inf
+nnan = -nan
+stamp = 1979-05-27T07:32:00Z
+offset = 1979-05-27T00:32:00.999999-07:00
+naive = 1979-05-27 07:32:00
+day = 1979-05-27
+tod = 07:32:00.5
+ml = """
+Roses are red
+  Violets \
+    are blue"""
+lit = 'C:\Users\x'
+mll = '''
+raw \n text'''
+escapes = "tab\there \u00e9 \U0001F600 \"q\""
+arr = [1, "two", [3.5, true], {x = 1}, ]
+multi_arr = [
+  1, # one
+  2,
+]
+inl = { a = 1, b.c = "d" }
+"quoted key" = "q"
+dotted.key.path = 5
+
+[web]
+children = [ "apache", "nginx" ]
+vars = { http_port = 8080, myvar = 23 }
+
+[web.hosts]
+host1 = {}
+host2 = { ansible_port = 222 }
+"host[3:4]" = { z = "range" }
+
+[apache.hosts]
+tomcat1 = {}
+tomcat2 = { myvar = 34 }
+tomcat3 = { mysecret = "03#pa33w0rd" }
+
+[nginx.hosts]
+jenkins1 = {}
+
+[nginx.vars]
+has_java = true
+
+# Not group definitions: skipped with a warning.
+[[tables]]
+a = 1
+[[tables]]
+a = 2
+
+[empty]
+
+[odd]
+unknown = 1
+[odd.hosts]
+"odd1:2200" = { x = 1 }

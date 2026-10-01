@@ -58,6 +58,7 @@ type filterExpr struct {
 	off    int
 	x      Expr
 	name   string
+	full   string // the name as written (ansible.builtin.combine)
 	args   []Expr
 	kwargs []kwarg
 }
@@ -66,7 +67,9 @@ type testExpr struct {
 	off     int
 	x       Expr
 	name    string
+	full    string // the name as written (ansible.builtin.combine)
 	args    []Expr
+	kwargs  []kwarg
 	negated bool
 }
 

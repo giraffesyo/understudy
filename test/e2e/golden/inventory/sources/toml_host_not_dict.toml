@@ -1,0 +1,4 @@
+[web]
+foo = 1
+[web.hosts]
+h1 = 5

@@ -375,7 +375,12 @@ func TestVersionAndResultTests(t *testing.T) {
 		{"'1.9' is version('1.10', '<')", true}, // numeric segments: 9 < 10
 		{"'1.10' is version('1.9', '>')", true},
 		{"'20.04' is version('18.04', '>=')", true},
-		{"'1.0.0' is version('1.0', '==')", true}, // missing segment = 0
+		{"'1.0.0' is version('1.0', '==')", false}, // LooseVersion: a longer list is greater
+		{"'1.0.0' is version('1.0', '>')", true},
+		{"'1.2' is version('1.2')", true}, // the default operator is eq
+		{"'1.3' is version('1.2')", false},
+		{"'1.2.3' is version('1.2.4', 'lt', strict=true)", true},
+		{"'1.2a1' is version('1.2', 'lt', version_type='strict')", true},
 		{"okRes is success", true},
 		{"okRes is succeeded", true},
 		{"okRes is changed", true},

@@ -1,0 +1,4 @@
+-v
+-i
+@INV@/sources/generator.yml
+@INV@/playbook.yml

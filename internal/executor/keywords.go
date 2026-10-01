@@ -104,6 +104,16 @@ func argTemplateError(task *playbook.Task, key string, pos template.Position, er
 	res.Origin = "verbatim"
 	chain := &agentproto.ErrorChain{Outer: "Task failed.", Inner: inner,
 		InnerFile: pos.File, InnerLine: pos.Line, InnerCol: pos.Col}
+	if file, line, col, ok := template.FileErrorOrigin(err); ok {
+		// Raised rendering a template file (the template lookup): the
+		// cause keeps the file's origin.
+		chain.Inner = fmt.Sprintf("Error while resolving value for '%s'.", key)
+		chain.Root = &agentproto.ErrorChain{Inner: cause, InnerFile: file, InnerLine: line, InnerCol: col, InnerPathOnly: line == 0}
+	} else if head, detail, ok := template.SplitCause(err); ok {
+		// A plugin's exception raised while handling another shows apart.
+		chain.Inner = fmt.Sprintf("Error while resolving value for '%s': %s", key, head)
+		chain.Root = &agentproto.ErrorChain{Inner: detail}
+	}
 	if a := task.ActionPos; a.Line == 0 || (a.Line == task.Src.Line && a.Col == task.Src.Col) {
 		// The action is where the task starts: one error, one origin.
 		chain.Outer = "Task failed: " + mid

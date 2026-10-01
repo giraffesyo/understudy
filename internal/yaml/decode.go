@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 )
@@ -222,6 +223,16 @@ func constructInt(s string) (any, error) {
 	}
 	d, err := strconv.ParseInt(strings.TrimSpace(digits), base, 64)
 	if err != nil {
+		// Python ints have no size limit.
+		if b, ok := new(big.Int).SetString(strings.TrimSpace(digits), base); ok && !strings.ContainsAny(digits, "+-_") {
+			if sign < 0 {
+				b.Neg(b)
+			}
+			if b.IsInt64() {
+				return b.Int64(), nil
+			}
+			return b, nil
+		}
 		return nil, &Error{Msg: fmt.Sprintf("invalid literal for int() with base %d: %s", base, pyRepr(digits))}
 	}
 	return sign * d, nil

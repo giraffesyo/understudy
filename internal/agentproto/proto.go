@@ -109,8 +109,14 @@ type ErrorChain struct {
 	Help  string // the cause's help text
 
 	// InnerFile/InnerLine/InnerCol locate the cause's origin, when known.
+	// InnerPathOnly marks an origin that names only the file.
 	InnerFile           string
 	InnerLine, InnerCol int
+	InnerPathOnly       bool
+
+	// Root, when set, is the cause of Inner (its Inner and origin
+	// fields): an error raised in a template file Inner's value read.
+	Root *ErrorChain
 
 	// Mid, when set, is a cause between the two (Outer caused by Mid,
 	// caused by Inner), located at MidFile:MidLine:MidCol.

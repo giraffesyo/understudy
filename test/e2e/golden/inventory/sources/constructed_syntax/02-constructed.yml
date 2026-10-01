@@ -1,0 +1,5 @@
+plugin: constructed
+strict: true
+compose:
+  bad: "{x: }"
+  tpl: "{{ x | }}"
