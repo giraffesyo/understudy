@@ -1,0 +1,5 @@
+plugin: ansible.builtin.generator
+hosts:
+  name: "{{ nope }}-{{ a }}"
+layers:
+  a: [1, 2]

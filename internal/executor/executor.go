@@ -105,6 +105,10 @@ type Options struct {
 	TaskTimeout int
 	// NoColor leaves the runner's own verbose lines (Display.vv) uncolored.
 	NoColor bool
+	// RefreshInventory re-parses the inventory sources for meta:
+	// refresh_inventory, as ansible-core's InventoryManager does (its
+	// plugins' output and warnings included). nil: nothing to re-read.
+	RefreshInventory func()
 }
 
 // Runner executes playbooks.

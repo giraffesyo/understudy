@@ -1,0 +1,7 @@
+plugin: generator
+hosts:
+  name: "h{{ a }}"
+  parents:
+    - vars: {x: 1}
+layers:
+  a: ab

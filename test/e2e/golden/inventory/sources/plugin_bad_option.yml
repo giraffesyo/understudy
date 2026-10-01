@@ -1,0 +1,2 @@
+plugin: ansible.builtin.constructed
+groups: [1]

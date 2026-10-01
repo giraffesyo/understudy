@@ -1,0 +1,6 @@
+plugin: generator
+use_extra_vars: true
+hosts:
+  name: "{{ pfx }}-{{ n }}"
+layers:
+  n: [one, two]

@@ -118,6 +118,11 @@ func normalizeOutput(s, work string) string {
 	return timingRe.ReplaceAllString(s, `"$1": "T"`)
 }
 
+// versionBannerRe is -vv's version banner, which describes the
+// installation (ansible-core's Python, module paths; understudy's build)
+// rather than the run.
+var versionBannerRe = regexp.MustCompile(`(?m)^ansible-playbook \[.*\]\n(?:  .*\n)*`)
+
 // Values only -v shows that differ on every run. Each pattern masks just
 // the per-run part, so the surrounding shape (and number formatting) is
 // still compared.
@@ -125,9 +130,7 @@ var verboseMasks = []struct {
 	re   *regexp.Regexp
 	repl string
 }{
-	// -vv's version banner describes the installation (ansible-core's
-	// Python, module paths; understudy's build) rather than the run.
-	{regexp.MustCompile(`(?m)^ansible-playbook \[.*\]\n(?:  .*\n)*`), "VERSION\n"},
+	{versionBannerRe, "VERSION\n"},
 	// A transfer's staging dir: <remote_tmp>/ansible-tmp-<time>-<pid>-<random>/.
 	{regexp.MustCompile(`/ansible-tmp-[0-9.]+-[0-9]+-[0-9]+/`), "/ansible-tmp-X/"},
 	// The controller's per-run temp dir, ~/.ansible/tmp/ansible-local-<pid><random>,
@@ -147,12 +150,9 @@ var verboseMasks = []struct {
 // vvvUnmodeled are -vvv lines that trace how ansible-core executes rather
 // than what the run does, which understudy does not reproduce: the shell
 // commands and file transfers that build and run AnsiballZ Python payloads
-// (EXEC/PUT, "Using module file"), the variable manager re-reading
-// vars_files on each variable lookup, and the inventory plugins' parse
-// attempts.
-var vvvUnmodeled = regexp.MustCompile("(?m)^(?:<[^>\n]*> (?:EXEC|PUT) .*|Using module file .*|Read `vars_file` .*|" +
-	".* declined parsing .* as it did not pass its verify_file\\(\\) method|Parsed .* inventory source with .* plugin|" +
-	"Skipping due to inventory source not existing or not being readable by the current user)\n")
+// (EXEC/PUT, "Using module file") and the variable manager re-reading
+// vars_files on each variable lookup.
+var vvvUnmodeled = regexp.MustCompile("(?m)^(?:<[^>\n]*> (?:EXEC|PUT) .*|Using module file .*|Read `vars_file` .*)\n")
 
 // vvvSkip are corpus cases whose ansible-playbook run itself changes at
 // -vvv (the default and -v/-vv harnesses still cover them).

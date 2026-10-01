@@ -1,0 +1,7 @@
+-e
+greet=hello pfx=os parent=oses
+-i
+@INV@/support/extra_vars
+-i
+@INV@/support/generator_extra.yml
+@INV@/playbook.yml
