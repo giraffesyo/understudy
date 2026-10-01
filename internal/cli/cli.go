@@ -728,8 +728,15 @@ func playbookCmd(args []string) int {
 		if err != nil {
 			absPath = path
 		}
-		plays, err := playbook.LoadFile(absPath)
+		plays, loaded, err := playbook.LoadFileTasks(absPath)
 		if err != nil {
+			// The tasks loaded before the error report their
+			// deprecations as they load.
+			if cfg, cerr := config.Load(); cerr != nil || cfg.DeprecationWarnings {
+				for _, w := range executor.TaskDeprecationWarnings(loaded) {
+					fmt.Fprint(os.Stderr, w)
+				}
+			}
 			printError(err)
 			return loadErrorCode(err)
 		}
