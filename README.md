@@ -604,8 +604,11 @@ than silently diverging. Known boundaries:
   Not tracked: the items of a loop over a literal list of numbers and
   values reached through `hostvars` name the expression instead.
 - **`debug var=`**: undefined values render in place as ansible-core's
-  placeholders; a `var` naming a method (`d.items`) prints its address
-  rather than failing as "unsupported for variable storage".
+  placeholders. A method or class (`d.items`, `range`) fails as
+  "unsupported for variable storage" there and in any template's result,
+  and renders as its Python repr in text; the object addresses some of
+  those reprs show (builtin methods, functions) cannot match a Python
+  process's.
 
 ## Building & testing
 

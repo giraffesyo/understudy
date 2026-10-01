@@ -34,6 +34,7 @@ type Context struct {
 	Delegated     bool                         // delegate_to names another host
 	DelegateFacts bool                         // delegate_facts: facts land on the delegate
 	ArgPos        map[string]template.Position // source positions of the task's module args
+	RawArgs       map[string]any               // the task's module args as written
 
 	// RunModule executes a module on the target (in-process or via agent).
 	RunModule func(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader) (*agentproto.Result, error)

@@ -101,6 +101,9 @@ func toStrIn(v any, active map[cycleID]bool) string {
 		return t
 	case yaml.UnsafeString:
 		return string(t)
+	case *methodValue, *globalValue:
+		r, _ := callableRepr(t)
+		return r
 	case []any:
 		var b strings.Builder
 		b.WriteByte('[')

@@ -75,7 +75,7 @@ func registerTests(e *Engine) {
 	}
 	t["callable"] = func(ec *EvalCtx, in any, args []any) (bool, error) {
 		switch in.(type) {
-		case boundMethod, globalFunc:
+		case boundMethod, globalFunc, *methodValue, *globalValue:
 			return true, nil
 		}
 		return false, nil
