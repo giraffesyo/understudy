@@ -263,6 +263,10 @@ type EvalCtx struct {
 	lastDeprecated *Deprecated // the deprecated value access() read last
 
 	own *ownership // what the render may mutate in place (nil: nothing)
+
+	// filterVars marks which of the running filter's input and positional
+	// arguments were read from variables (see pyClassName).
+	filterVars []bool
 }
 
 func (ec *EvalCtx) Engine() *Engine    { return ec.engine }

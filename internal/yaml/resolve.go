@@ -2,6 +2,7 @@ package yaml
 
 import (
 	"math"
+	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -51,7 +52,10 @@ func resolveScalar(s string) any {
 			if v, ok := parseInt11(s); ok {
 				return v
 			}
-			return s // overflow: fall back to string
+			if v, ok := parseBigInt11(s); ok {
+				return v // Python ints have no size limit
+			}
+			return s
 		}
 		if floatRe.MatchString(s) {
 			return parseFloat11(s)
@@ -90,6 +94,32 @@ func parseInt11(s string) (int64, bool) {
 		v = -v
 	}
 	return v, true
+}
+
+// parseBigInt11 is parseInt11 for an integer beyond int64.
+func parseBigInt11(s string) (*big.Int, bool) {
+	neg := s[0] == '-'
+	s = strings.TrimLeft(s, "+-")
+	s = strings.ReplaceAll(s, "_", "")
+	base := 10
+	switch {
+	case strings.HasPrefix(s, "0b"):
+		base, s = 2, s[2:]
+	case strings.HasPrefix(s, "0x"):
+		base, s = 16, s[2:]
+	case strings.HasPrefix(s, "0o"):
+		base, s = 8, s[2:]
+	case len(s) > 1 && s[0] == '0':
+		base, s = 8, s[1:]
+	}
+	b, ok := new(big.Int).SetString(s, base)
+	if !ok {
+		return nil, false
+	}
+	if neg {
+		b.Neg(b)
+	}
+	return b, true
 }
 
 func parseFloat11(s string) float64 {

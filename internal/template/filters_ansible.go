@@ -7,10 +7,12 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"hash/fnv"
 	"math"
+	"math/big"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -258,30 +260,69 @@ func registerAnsibleFilters(e *Engine) {
 	}
 
 	f["combine"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		for k := range kwargs {
+			if k != "recursive" && k != "list_merge" {
+				return nil, fmt.Errorf("'recursive' and 'list_merge' are the only valid keyword arguments")
+			}
+		}
 		recursive := truthy(kwargs["recursive"])
 		listMerge := "replace"
 		if lm, ok := kwargs["list_merge"]; ok {
-			s, _ := asString(lm)
-			switch s {
-			case "", "replace", "keep", "append", "prepend", "append_rp", "prepend_rp":
-				if s != "" {
-					listMerge = s
+			listMerge, _ = asString(lm)
+		}
+		// dictionaries = flatten(terms, levels=1): a list of dicts
+		// combines its items; nulls are skipped.
+		type term struct {
+			v       any
+			fromVar bool
+		}
+		var dicts []term
+		for i, t := range append([]any{in}, args...) {
+			fromVar := ec.fromVar(i - 1)
+			if isFlattenNull(t) {
+				continue
+			}
+			if list, ok := Undeprecate(t).([]any); ok {
+				for _, item := range list {
+					if !isFlattenNull(item) {
+						dicts = append(dicts, term{item, fromVar})
+					}
 				}
+				continue
+			}
+			dicts = append(dicts, term{t, fromVar})
+		}
+		switch len(dicts) {
+		case 0:
+			return yaml.NewOMap(), nil
+		case 1:
+			return dicts[0].v, nil
+		}
+		// merge_hash runs from the highest priority (last) down, checking
+		// list_merge and then that both sides are dicts.
+		for i := len(dicts) - 2; i >= 0; i-- {
+			switch listMerge {
+			case "replace", "keep", "append", "prepend", "append_rp", "prepend_rp":
 			default:
-				return nil, fmt.Errorf("combine: unsupported list_merge %q", s)
+				return nil, fmt.Errorf("merge_hash: 'list_merge' argument can only be equal to 'replace', 'keep', 'append', 'prepend', 'append_rp' or 'prepend_rp'")
+			}
+			x, y := dicts[i], dicts[i+1]
+			_, xok := asOMap(x.v)
+			_, yok := asOMap(y.v)
+			if i < len(dicts)-2 {
+				yok = true // the merged result so far
+				y.v, y.fromVar = map[string]any{}, false
+			}
+			if !xok || !yok {
+				return nil, fmt.Errorf("failed to combine variables, expected dicts but got a '%s' and a '%s'.",
+					pyClassName(x.v, x.fromVar), pyClassName(y.v, y.fromVar))
 			}
 		}
 		// Build the result as an ordered map so merged keys keep base-then-new
 		// insertion order (Ansible's combine preserves it).
-		out, ok := asOMap(in)
-		if !ok {
-			return nil, fmt.Errorf("combine requires dictionaries, got %s", typeName(in))
-		}
-		for _, a := range args {
-			m, ok := asOMap(a)
-			if !ok {
-				return nil, fmt.Errorf("combine arguments must be dictionaries, got %s", typeName(a))
-			}
+		out, _ := asOMap(dicts[0].v)
+		for _, d := range dicts[1:] {
+			m, _ := asOMap(d.v)
 			mergeOMap(out, m, recursive, listMerge)
 		}
 		return out, nil
@@ -541,7 +582,7 @@ func registerAnsibleFilters(e *Engine) {
 	f["from_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
 		if !ok {
-			return nil, fmt.Errorf("from_json requires a string")
+			return nil, fmt.Errorf("the JSON object must be str, bytes or bytearray, not %s", pyClassName(in, false))
 		}
 		// Objects keep their key order and numbers their type, as
 		// Python's json.loads builds them.
@@ -552,9 +593,14 @@ func registerAnsibleFilters(e *Engine) {
 	f["from_yaml"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
 		if !ok {
-			return nil, fmt.Errorf("from_yaml requires a string")
+			return in, nil // anything but a str is returned as is
 		}
-		return yaml.Unmarshal([]byte(s), "<from_yaml>")
+		v, err := yaml.Unmarshal([]byte(s), "<from_yaml>")
+		var ye *yaml.Error
+		if errors.As(err, &ye) {
+			return nil, errors.New(ye.PyYAMLString("<unicode string>"))
+		}
+		return v, err
 	}
 	f["from_yaml_all"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
@@ -778,21 +824,19 @@ func registerAnsibleFilters(e *Engine) {
 	}
 
 	f["abs"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		if n, ok := asInt(in); ok {
-			if _, isBool := in.(bool); !isBool {
-				if n < 0 {
-					return -n, nil
-				}
-				return n, nil
+		if n, ok := asInt(in); ok && n != math.MinInt64 {
+			if n < 0 {
+				return -n, nil
 			}
+			return n, nil
 		}
-		if fv, ok := in.(float64); ok {
-			if fv < 0 {
-				return -fv, nil
-			}
-			return fv, nil
+		if b, ok := asBigInt(in); ok {
+			return normInt(new(big.Int).Abs(b)), nil
 		}
-		return nil, fmt.Errorf("abs requires a number, got %s", typeName(in))
+		if fv, ok := Undeprecate(in).(float64); ok {
+			return math.Abs(fv), nil
+		}
+		return nil, fmt.Errorf("bad operand type for abs(): '%s'", pyClassName(in, ec.fromVar(-1)))
 	}
 
 	f["round"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
@@ -1513,6 +1557,8 @@ func (e *pyJSONEncoder) write(v any, depth int) {
 		b.WriteString(pyJSONQuote(t, e.ensureASCII))
 	case yaml.UnsafeString:
 		b.WriteString(pyJSONQuote(string(t), e.ensureASCII))
+	case *big.Int:
+		b.WriteString(t.String())
 	case int64:
 		b.WriteString(strconv.FormatInt(t, 10))
 	case int:

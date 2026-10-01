@@ -3,6 +3,7 @@ package yaml
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"reflect"
 	"regexp"
 	"sort"
@@ -139,6 +140,8 @@ func (r *representer) represent(v any) (*rnode, error) {
 		return r.scalar(tagBool, strconv.FormatBool(t)), nil
 	case int:
 		return r.scalar(tagInt, strconv.Itoa(t)), nil
+	case *big.Int:
+		return r.scalar(tagInt, t.String()), nil
 	case int64:
 		return r.scalar(tagInt, strconv.FormatInt(t, 10)), nil
 	case float64:

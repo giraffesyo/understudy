@@ -2,6 +2,7 @@ package template
 
 import (
 	"fmt"
+	"math/big"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -42,7 +43,7 @@ func registerTests(e *Engine) {
 	}
 	t["integer"] = func(ec *EvalCtx, in any, args []any) (bool, error) {
 		switch in.(type) {
-		case int64, int:
+		case int64, int, *big.Int:
 			return true, nil
 		}
 		return false, nil

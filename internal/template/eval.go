@@ -2,6 +2,8 @@ package template
 
 import (
 	"fmt"
+	"math"
+	"math/big"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -101,8 +103,11 @@ func (ec *EvalCtx) eval(e Expr) (any, error) {
 			}
 			return nil, ec.errf(t.off, "bad operand type for unary +: %s", typeName(x))
 		}
-		if i, ok := asInt(x); ok {
+		if i, ok := asInt(x); ok && i != math.MinInt64 {
 			return -i, nil
+		}
+		if b, ok := asBigInt(x); ok {
+			return normInt(new(big.Int).Neg(b)), nil
 		}
 		if f, ok := x.(float64); ok {
 			return -f, nil
@@ -531,7 +536,14 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 	// (to_json all of them, dict2items the values); those it passes on
 	// stay deprecated.
 	ec.filterReads(t.name, in, args, kwargs)
+	saved := ec.filterVars
+	ec.filterVars = make([]bool, 1+len(t.args))
+	ec.filterVars[0] = ec.isVarRef(t.x)
+	for i, a := range t.args {
+		ec.filterVars[i+1] = ec.isVarRef(a)
+	}
 	out, err := fn(ec, in, args, kwargs)
+	ec.filterVars = saved
 	if err != nil {
 		if _, ok := err.(*TemplateError); ok {
 			return nil, err

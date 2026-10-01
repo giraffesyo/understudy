@@ -2,7 +2,7 @@ package template
 
 import (
 	"fmt"
-	"strconv"
+	"math/big"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -50,14 +50,15 @@ func registerFilters(e *Engine) {
 	}
 
 	f["int"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		def := int64(0)
+		// Jinja's do_int(value, default=0, base=10): int(value) (with the
+		// base for a str), else int(float(value)), else the default as
+		// given. Ints have no size limit.
+		var def any = int64(0)
 		if len(args) > 0 {
-			if d, ok := asInt(args[0]); ok {
-				def = d
-			}
+			def = args[0]
+		} else if d, ok := kwargs["default"]; ok {
+			def = d
 		}
-		// Ansible: int(value, default=0, base=10) — base is positional or a
-		// kwarg.
 		base := int64(10)
 		if len(args) > 1 {
 			if bi, ok := asInt(args[1]); ok {
@@ -69,8 +70,20 @@ func registerFilters(e *Engine) {
 				base = bi
 			}
 		}
+		in = Undeprecate(in)
+		if s, ok := asString(in); ok {
+			if v, ok := pyParseInt(s, base); ok {
+				return v, nil
+			}
+			if f, ok := pyParseFloat(s); ok {
+				if v, ok := floatToInt(f); ok {
+					return v, nil
+				}
+			}
+			return def, nil
+		}
 		switch t := in.(type) {
-		case int64:
+		case int64, *big.Int:
 			return t, nil
 		case int:
 			return int64(t), nil
@@ -80,37 +93,31 @@ func registerFilters(e *Engine) {
 			}
 			return int64(0), nil
 		case float64:
-			return int64(t), nil
-		case string, yaml.UnsafeString:
-			s, _ := asString(t)
-			s = strings.TrimSpace(s)
-			// Python's int(s, base) accepts the matching radix prefix.
-			s = stripRadixPrefix(s, base)
-			if v, err := strconv.ParseInt(s, int(base), 64); err == nil {
+			if v, ok := floatToInt(t); ok {
 				return v, nil
 			}
-			// Python's int() rejects floats-in-strings, Ansible's filter
-			// truncates them.
-			if fv, err := strconv.ParseFloat(s, 64); err == nil {
-				return int64(fv), nil
-			}
-			return def, nil
 		}
 		return def, nil
 	}
 
 	f["float"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		def := 0.0
+		// Jinja's do_float(value, default=0.0): float(value), else the
+		// default as given.
+		var def any = 0.0
 		if len(args) > 0 {
-			if d, ok := asFloat(args[0]); ok {
-				def = d
-			}
+			def = args[0]
+		} else if d, ok := kwargs["default"]; ok {
+			def = d
+		}
+		in = Undeprecate(in)
+		if b, ok := in.(*big.Int); ok {
+			return bigToFloat(b) // OverflowError is not caught
 		}
 		if v, ok := asFloat(in); ok {
 			return v, nil
 		}
 		if s, ok := asString(in); ok {
-			if v, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
+			if v, ok := pyParseFloat(s); ok {
 				return v, nil
 			}
 		}
@@ -487,29 +494,6 @@ func wordWrap(s string, width int, breakLong bool, wrapstring string) string {
 	return strings.Join(lines, wrapstring)
 }
 
-// stripRadixPrefix removes a 0x/0o/0b prefix when it matches the requested
-// base, mirroring Python's int(s, base) which tolerates the prefix.
-func stripRadixPrefix(s string, base int64) string {
-	if len(s) < 2 || s[0] != '0' {
-		return s
-	}
-	switch base {
-	case 16:
-		if s[1] == 'x' || s[1] == 'X' {
-			return s[2:]
-		}
-	case 8:
-		if s[1] == 'o' || s[1] == 'O' {
-			return s[2:]
-		}
-	case 2:
-		if s[1] == 'b' || s[1] == 'B' {
-			return s[2:]
-		}
-	}
-	return s
-}
-
 // filterDefault implements default/d: replace Undefined (or, with the
 // second arg true, any falsy value).
 func filterDefault(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
@@ -544,7 +528,7 @@ func pyTypeName(v any) string {
 		return "NoneType"
 	case bool:
 		return "bool"
-	case int64, int:
+	case int64, int, *big.Int:
 		return "int"
 	case float64:
 		return "float"

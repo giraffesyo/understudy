@@ -3,6 +3,7 @@ package template
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"reflect"
 	"sort"
 	"strconv"
@@ -34,6 +35,8 @@ func truthy(v any) bool {
 		return false
 	case bool:
 		return t
+	case *big.Int:
+		return t.Sign() != 0
 	case int64:
 		return t != 0
 	case int:
@@ -86,6 +89,8 @@ func toStrIn(v any, active map[cycleID]bool) string {
 			return "True"
 		}
 		return "False"
+	case *big.Int:
+		return bigIntStr(t)
 	case int64:
 		return strconv.FormatInt(t, 10)
 	case int:
@@ -266,6 +271,10 @@ func asFloat(v any) (float64, bool) {
 	if i, ok := asInt(v); ok {
 		return float64(i), true
 	}
+	if b, ok := v.(*big.Int); ok {
+		f, _ := new(big.Float).SetInt(b).Float64()
+		return f, true
+	}
 	if f, ok := v.(float64); ok {
 		return f, true
 	}
@@ -332,12 +341,17 @@ func arith(op tokKind, a, b any) (any, error) {
 			return repeatString(s, n)
 		}
 	}
+	return numArith(op, a, b)
+}
 
-	ai, aInt := asInt(a)
-	bi, bInt := asInt(b)
-	af, aNum := asFloat(a)
-	bf, bNum := asFloat(b)
-	if !aNum || !bNum {
+// numArith is Python's arithmetic on ints (arbitrary precision) and
+// floats.
+func numArith(op tokKind, a, b any) (any, error) {
+	ab, aInt := asBigInt(a)
+	bb, bInt := asBigInt(b)
+	af, aFloat := Undeprecate(a).(float64)
+	bf, bFloat := Undeprecate(b).(float64)
+	if !(aInt || aFloat) || !(bInt || bFloat) {
 		if at := typeName(a); op == tokAdd && (at == "str" || at == "list") {
 			return nil, fmt.Errorf("can only concatenate %s (not \"%s\") to %s", at, typeName(b), at)
 		}
@@ -345,34 +359,71 @@ func arith(op tokKind, a, b any) (any, error) {
 	}
 
 	if aInt && bInt {
+		ai, aSmall := asInt(a)
+		bi, bSmall := asInt(b)
 		switch op {
 		case tokAdd:
-			return ai + bi, nil
+			if aSmall && bSmall {
+				if r, ok := addInt64(ai, bi); ok {
+					return r, nil
+				}
+			}
+			return bigArith(op, ab, bb)
 		case tokSub:
-			return ai - bi, nil
+			if aSmall && bSmall {
+				if r, ok := subInt64(ai, bi); ok {
+					return r, nil
+				}
+			}
+			return bigArith(op, ab, bb)
 		case tokMul:
-			return ai * bi, nil
+			if aSmall && bSmall {
+				if r, ok := mulInt64(ai, bi); ok {
+					return r, nil
+				}
+			}
+			return bigArith(op, ab, bb)
 		case tokDiv: // true division is always float
-			if bf == 0 {
+			return bigTrueDiv(ab, bb)
+		case tokFloorDiv, tokMod:
+			if bb.Sign() == 0 {
 				return nil, fmt.Errorf("division by zero")
 			}
-			return af / bf, nil
-		case tokFloorDiv:
-			if bi == 0 {
-				return nil, fmt.Errorf("division by zero")
+			if aSmall && bSmall && !(ai == math.MinInt64 && bi == -1) {
+				if op == tokMod {
+					return pyModInt(ai, bi), nil
+				}
+				return pyFloorDivInt(ai, bi), nil
 			}
-			return pyFloorDivInt(ai, bi), nil
-		case tokMod:
-			if bi == 0 {
-				return nil, fmt.Errorf("division by zero")
-			}
-			return pyModInt(ai, bi), nil
+			return bigArith(op, ab, bb)
 		case tokPow:
-			if bi >= 0 {
-				return intPow(ai, bi), nil
+			if bb.Sign() >= 0 {
+				// Bounded (a 4 GiB result), where Python would run out of
+				// memory.
+				if n := int64(ab.BitLen()); n > 1 && (!bb.IsInt64() || bb.Int64() > (1<<35)/n) {
+					return nil, fmt.Errorf("MemoryError")
+				}
+				return bigArith(op, ab, bb)
 			}
-			return math.Pow(af, bf), nil
+			// A negative exponent: float(a) ** float(b).
+			if ab.Sign() == 0 {
+				return nil, fmt.Errorf("zero to a negative power")
+			}
 		}
+	}
+	if aInt {
+		f, err := bigToFloat(ab)
+		if err != nil {
+			return nil, err
+		}
+		af = f
+	}
+	if bInt {
+		f, err := bigToFloat(bb)
+		if err != nil {
+			return nil, err
+		}
+		bf = f
 	}
 	switch op {
 	case tokAdd:
@@ -401,6 +452,9 @@ func arith(op tokKind, a, b any) (any, error) {
 		}
 		return m, nil
 	case tokPow:
+		if af == 0 && bf < 0 {
+			return nil, fmt.Errorf("zero to a negative power")
+		}
 		return math.Pow(af, bf), nil
 	}
 	return nil, fmt.Errorf("unknown operator %s", opName(op))
@@ -444,18 +498,6 @@ func pyModInt(a, b int64) int64 {
 	return m
 }
 
-func intPow(base, exp int64) int64 {
-	result := int64(1)
-	for exp > 0 {
-		if exp&1 == 1 {
-			result *= base
-		}
-		base *= base
-		exp >>= 1
-	}
-	return result
-}
-
 func opName(op tokKind) string {
 	switch op {
 	case tokAdd:
@@ -485,7 +527,7 @@ func typeName(v any) string {
 		return "None"
 	case bool:
 		return "bool"
-	case int64, int:
+	case int64, int, *big.Int:
 		return "int"
 	case float64:
 		return "float"
@@ -509,16 +551,8 @@ func typeName(v any) string {
 // incomparable types (Python 3 raises on e.g. int < str).
 func compare(a, b any) (int, error) {
 	a, b = Undeprecate(a), Undeprecate(b)
-	if af, ok := asFloat(a); ok {
-		if bf, ok := asFloat(b); ok {
-			switch {
-			case af < bf:
-				return -1, nil
-			case af > bf:
-				return 1, nil
-			}
-			return 0, nil
-		}
+	if c, isNum := compareNumbers(a, b); isNum {
+		return c, nil
 	}
 	if as, ok := asString(a); ok {
 		if bs, ok := asString(b); ok {
@@ -542,7 +576,7 @@ func compare(a, b any) (int, error) {
 			return 0, nil
 		}
 	}
-	return 0, fmt.Errorf("'<' not supported between instances of %s and %s", typeName(a), typeName(b))
+	return 0, fmt.Errorf("'<' not supported between instances of '%s' and '%s'", pyClassName(a, false), pyClassName(b, false))
 }
 
 // equal implements Python ==: cross-type numeric comparison works; other
@@ -555,11 +589,12 @@ func equal(a, b any) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	if af, ok := asFloat(a); ok {
-		if bf, ok := asFloat(b); ok {
-			return af == bf
+	if isNumber(a) {
+		if !isNumber(b) {
+			return false
 		}
-		return false
+		c, _ := compareNumbers(a, b)
+		return c == 0 && !isNaN(a) && !isNaN(b)
 	}
 	if as, ok := asString(a); ok {
 		if bs, ok := asString(b); ok {
