@@ -49,12 +49,11 @@ jobs:
       - id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
-          # A PR opened with the default GITHUB_TOKEN does not trigger CI, so
-          # with required status checks on canary the release PR could not be
-          # merged. RELEASE_PLEASE_TOKEN (a fine-grained PAT or GitHub App
-          # token: contents, pull requests and issues read/write on this
-          # repo) makes CI run on it; without it the GITHUB_TOKEN is used.
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          # The workflow's own token: a release PR it opens does not trigger
+          # CI (GitHub's rule for GITHUB_TOKEN events), so required status
+          # checks on canary would block merging it. The artifacts job below
+          # runs in this workflow, so publishing needs no other trigger.
+          token: ${{ github.token }}
           # Releases are cut from canary, the repository's default branch.
           target-branch: canary
           config-file: release-please-config.json
