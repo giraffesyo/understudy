@@ -46,6 +46,15 @@
       group_by:
         key: ""
       ignore_errors: true
+    - name: raw params that are no mapping
+      add_host: z7 groups=x
+      ignore_errors: true
+    - name: a template giving a list
+      add_host: "{{ [1] }}"
+      ignore_errors: true
+    - name: group_by with raw params
+      group_by: z7
+      ignore_errors: true
     - debug:
         msg: "{{ groups }} {{ hostvars['e2'] is defined }}"
 - hosts: all

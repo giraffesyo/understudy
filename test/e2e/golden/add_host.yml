@@ -54,6 +54,11 @@
     - name: delegated
       add_host: name=dl1
       delegate_to: localhost
+    - name: raw params, a template giving the arguments
+      add_host: "{{ item }} groups=rawg"
+      loop:
+        - {name: r1, v: 1, groups: ignored}
+        - {name: r2, v: 2}
     - name: with a templated name and variables
       add_host:
         name: "t-{{ inventory_hostname }}"
@@ -64,11 +69,11 @@
   tasks:
     - debug:
         msg: "{{ inventory_hostname }} {{ color | default('-') }} {{ nested | default('-') }} {{ group | default('-') }} {{ group_names }}"
-- hosts: x:y:f1:dl1:t-h1:s1
+- hosts: x:y:f1:dl1:t-h1:s1:rawg
   gather_facts: false
   tasks:
     - debug:
-        msg: "{{ inventory_hostname }} {{ ansible_ssh_port | default('-') }} {{ from_host | default('-') }} {{ role_of_first | default('-') }} {{ group_names }} {{ inventory_file }} {{ inventory_dir }}"
+        msg: "{{ inventory_hostname }} {{ ansible_ssh_port | default('-') }} {{ from_host | default('-') }} {{ v | default('-') }} {{ role_of_first | default('-') }} {{ group_names }} {{ inventory_file }} {{ inventory_dir }}"
 - hosts: all
   gather_facts: false
   tasks:

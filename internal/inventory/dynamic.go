@@ -6,6 +6,7 @@ import (
 
 	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/vars"
+	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
 // dynamicHost is one add_host change (ansible-core's AddHost).
@@ -64,6 +65,13 @@ func (inv *Inventory) addDynamicHost(d dynamicHost) (bool, []string, error) {
 		combined[k] = finalValue(v)
 	}
 	if varsChanged {
+		// The host's other variables keep their origins; add_host's
+		// values have none.
+		origins := yaml.ChildOrigins(h.Vars)
+		for _, k := range d.keys {
+			delete(origins, k)
+		}
+		yaml.SetChildOrigins(combined, origins)
 		h.Vars = combined
 		changed = true
 	}
