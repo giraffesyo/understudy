@@ -129,6 +129,10 @@ type Options struct {
 	FactCache factcache.Settings
 	// Gathering is DEFAULT_GATHERING ("" = implicit).
 	Gathering string
+	// PluginOption reads a plugin option from the environment and
+	// ansible.cfg (env names, then "section.key" ini entries; nil: the
+	// environment only).
+	PluginOption func(env, ini []string) (value, origin string, ok bool)
 }
 
 // Runner executes playbooks.
@@ -2310,6 +2314,15 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 					req.PythonInterpreter = disc.path
 				}
 			}
+			req.RemoteTmp = r.remoteTmp(vctx)
+			if r.pipelined(vctx, task, inProcess, b, req.Background) {
+				// No temporary directory: the module makes its own under
+				// remote_tmp when it needs one.
+				req.Pipelined = true
+				if req.ModuleRemoteTmp == "" {
+					req.ModuleRemoteTmp = req.RemoteTmp
+				}
+			}
 			res, err := r.runModule(ctx, host, target, kw, inProcess, b, task, envKeys, env, req, payload)
 			if len(disc.warnings) > 0 {
 				if err == nil && res != nil {
@@ -2783,6 +2796,9 @@ func (r *Runner) runModule(ctx context.Context, host, target string, kw connecti
 			req.Args = m
 		}
 		if become == nil {
+			if !req.Pipelined {
+				ensureLocalRemoteTmp(req.RemoteTmp)
+			}
 			res := modules.RunContext(ctx, req, payload)
 			res.Origin = moduleOrigin(res)
 			return res, nil

@@ -370,6 +370,7 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		TaskTimeout:             cfg.TaskTimeout,
 		FactCache:               factCacheSettings(cfg),
 		Gathering:               cfg.Gathering,
+		PluginOption:            cfg.PluginOption,
 	}
 	if cfg.Source != "" {
 		if abs, err := filepath.Abs(cfg.Source); err == nil {
@@ -382,6 +383,7 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		HostKeyChecking: cfg.HostKeyChecking,
 		Timeout:         timeout,
 		RemoteTmp:       cfg.RemoteTmp,
+		Pipelining:      configPipelining(cfg),
 		Shell: connection.ShellOptions{
 			AdminUsers: cfg.AdminUsers, SystemTmpdirs: cfg.SystemTmpdirs,
 			CommonRemoteGroup: cfg.CommonRemoteGroup, WorldReadableTemp: cfg.WorldReadableTemp,
@@ -617,6 +619,22 @@ func loadInventory(p *parsedArgs, playbookDir string) (*inventory.Inventory, err
 	inv.PatternMismatch = cfg.HostPatternMismatch
 	inv.TransformGroupChars = cfg.TransformInvalidGroupChars
 	return inv, nil
+}
+
+// configPipelining is the pipelining the configuration and environment
+// set (ANSIBLE_PIPELINING, ANSIBLE_SSH_PIPELINING, the defaults,
+// connection and ssh_connection sections).
+func configPipelining(cfg *config.Config) bool {
+	v, _, ok := cfg.PluginOption([]string{"ANSIBLE_PIPELINING", "ANSIBLE_SSH_PIPELINING"},
+		[]string{"defaults.pipelining", "connection.pipelining", "ssh_connection.pipelining"})
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "y", "yes", "on", "1", "true", "t", "1.0":
+		return true
+	}
+	return false
 }
 
 // factCacheSettings is the fact cache's configuration.

@@ -65,6 +65,13 @@ type TaskRequest struct {
 	// PkgShim: package managers the module's commands run take the
 	// host-wide package lock (a command in a parallel block).
 	PkgShim bool `json:"pkg_shim,omitempty"`
+
+	// Pipelined (control plane only): the module is pipelined, with no
+	// temporary directory made for it (ModuleRemoteTmp is set).
+	Pipelined bool `json:"-"`
+	// RemoteTmp (control plane only) is the login user's remote_tmp,
+	// which running a module that is not pipelined makes.
+	RemoteTmp string `json:"-"`
 }
 
 // StagedPayload is the name the login user stages an unprivileged become

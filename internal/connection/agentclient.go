@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
@@ -25,6 +26,9 @@ type AgentClient struct {
 	// Login is the login user (from the bootstrap probe), nil when
 	// unknown.
 	Login *LoginInfo
+
+	tmpMu   sync.Mutex
+	tmpMade map[string]bool // remote_tmp values made (as _make_tmp_path does)
 }
 
 // stagingModules are the modules whose payload is a file the action
@@ -44,10 +48,25 @@ func (c *AgentClient) Run(ctx context.Context, req *agentproto.TaskRequest, payl
 		req.LoginHome, req.LoginUID, req.LoginGID = c.Login.Home, c.Login.UID, c.Login.GID
 		req.DiscoveryPath = c.Login.Path
 	}
-	if res := c.unreadableAsAdmin(ctx, req, become); res != nil {
-		return res, nil
+	if !req.Pipelined {
+		if res := c.unreadableAsAdmin(ctx, req, become); res != nil {
+			return res, nil
+		}
+		if !becomeUnprivileged(become) {
+			c.makeRemoteTmp(ctx, req.RemoteTmp)
+		}
 	}
-	if becomeUnprivileged(become) {
+	if req.Pipelined && become != nil && !c.agentReadableBy(become) {
+		// A pipelined module needs no files made readable to the become
+		// user, but the agent must still run as it: from a copy no other
+		// file of the task's is next to (the frame comes on stdin).
+		dir, err := c.publicAgent(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Conn.Exec(context.WithoutCancel(ctx), "rm -f -r "+ShellQuote(dir)+" > /dev/null 2>&1", ExecOptions{})
+		agentPath = ShellQuote(dir + "/agent")
+	} else if becomeUnprivileged(become) && !req.Pipelined {
 		// An unprivileged become user cannot reach the login user's
 		// files: like a module's AnsiballZ payload, the agent runs from a
 		// system temp dir made readable to it (the shell reports the dir
@@ -106,6 +125,52 @@ func (c *AgentClient) Run(ctx context.Context, req *agentproto.TaskRequest, payl
 		return nil, fmt.Errorf("agent exited with rc=%d: %s", res.RC, strings.TrimSpace(string(res.Stderr)))
 	}
 	return agentproto.ParseResult(res.Stdout)
+}
+
+// makeRemoteTmp makes remote_tmp as the login user, as _make_tmp_path
+// does for every module that is not pipelined (once per value here).
+func (c *AgentClient) makeRemoteTmp(ctx context.Context, remoteTmp string) {
+	if remoteTmp == "" {
+		return
+	}
+	c.tmpMu.Lock()
+	defer c.tmpMu.Unlock()
+	if c.tmpMade[remoteTmp] {
+		return
+	}
+	cmd := "( umask 77 && mkdir -p \"`echo " + remoteTmp + "`\" )"
+	if res, err := c.Conn.Exec(ctx, cmd, ExecOptions{}); err == nil && res.RC == 0 {
+		if c.tmpMade == nil {
+			c.tmpMade = map[string]bool{}
+		}
+		c.tmpMade[remoteTmp] = true
+	}
+}
+
+// agentReadableBy reports whether the become user can run the cached
+// agent (root, or the login user).
+func (c *AgentClient) agentReadableBy(b *BecomeSpec) bool {
+	user := b.user()
+	if user == "root" || user == "0" || (b.Shell != nil && user == b.Shell.RemoteUser) {
+		return true
+	}
+	return c.Login != nil && user == c.Login.User
+}
+
+// publicAgent copies the agent to a new directory any user can read
+// (the agent is no secret: the task comes on its stdin).
+func (c *AgentClient) publicAgent(ctx context.Context) (string, error) {
+	cmd := `d=$(mktemp -d "${TMPDIR:-/tmp}/understudy-XXXXXX") && chmod 755 "$d" && cp ` + ShellQuote(c.AgentPath) +
+		` "$d/agent" && chmod 755 "$d/agent" && echo "$d"`
+	res, err := c.Conn.Exec(ctx, cmd, ExecOptions{})
+	if err != nil {
+		return "", err
+	}
+	dir := strings.TrimSpace(string(res.Stdout))
+	if res.RC != 0 || dir == "" {
+		return "", fmt.Errorf("could not stage the agent for the become user: %s", strings.TrimSpace(string(res.Stderr)))
+	}
+	return dir, nil
 }
 
 // unreadableAsAdmin is a become user listed in admin_users that is

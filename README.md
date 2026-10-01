@@ -341,9 +341,17 @@ module gets no temporary directory of its own: it makes one under
 with ansible's "Module remote_tmp ... did not exist" warning. A become
 user wrongly listed in `admin_users` cannot read the module staged in
 the login user's `remote_tmp`, and the task fails with ansible's
-"Module result deserialization failed" and Python's output. Pipelining
-is not modeled: temporary files behave as with ansible's default
-(`pipelining = False`).
+"Module result deserialization failed" and Python's output. A module
+that is not pipelined makes `remote_tmp` (as the login user) as
+ansible's temporary directory for it would. With pipelining
+(`pipelining` in `[defaults]`, `[connection]` or `[ssh_connection]`,
+`ANSIBLE_PIPELINING`, `ansible_pipelining`; not for async tasks, through
+`su`, or with `-t` among the ssh arguments) a module gets no temporary
+directory: one that needs a temp file makes `remote_tmp` itself (with
+the warning above), and an unprivileged become user needs no files made
+readable to it (nor fails when they cannot be), while an action that
+transfers files (`copy`, `template`, `unarchive`, `script`, `uri`) still
+stages them as without pipelining.
 
 ## Architecture
 

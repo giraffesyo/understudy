@@ -1,0 +1,44 @@
+# Pipelining: a pipelined module gets no temporary directory, so one that
+# needs a temp file makes its own under remote_tmp, creating remote_tmp
+# with a warning; a module that is not pipelined, and an action that
+# transfers files, make remote_tmp silently (_make_tmp_path).
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: a pipelined module that writes a temp file
+      lineinfile: {path: "{{ workdir }}/lines.txt", line: one, create: true}
+      vars: {ansible_pipelining: true, ansible_remote_tmp: "{{ workdir }}/rt1"}
+    - stat: {path: "{{ workdir }}/rt1"}
+      register: st
+    - debug: {msg: "{{ st.stat.isdir }} {{ st.stat.mode }}"}
+
+    - name: again, remote_tmp there now
+      lineinfile: {path: "{{ workdir }}/lines.txt", line: two}
+      vars: {ansible_pipelining: true, ansible_remote_tmp: "{{ workdir }}/rt1"}
+
+    - name: a pipelined module that needs no temp file
+      command: "true"
+      vars: {ansible_pipelining: true, ansible_remote_tmp: "{{ workdir }}/rt2"}
+    - stat: {path: "{{ workdir }}/rt2"}
+      register: st
+    - debug: {msg: "{{ st.stat.exists }}"}
+
+    - name: a module that is not pipelined
+      command: "true"
+      vars: {ansible_remote_tmp: "{{ workdir }}/rt3/nested"}
+    - stat: {path: "{{ workdir }}/rt3/nested"}
+      register: st
+    - debug: {msg: "{{ st.stat.isdir }} {{ st.stat.mode }}"}
+
+    - name: pipelining off by a false value
+      lineinfile: {path: "{{ workdir }}/lines.txt", line: three}
+      vars: {ansible_pipelining: "no", ansible_remote_tmp: "{{ workdir }}/rt4"}
+    - stat: {path: "{{ workdir }}/rt4"}
+      register: st
+    - debug: {msg: "{{ st.stat.isdir }}"}
+
+    - name: async tasks are not pipelined
+      command: "true"
+      async: 10
+      poll: 1
+      vars: {ansible_pipelining: true, ansible_remote_tmp: "{{ workdir }}/rt5"}
