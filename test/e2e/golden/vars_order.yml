@@ -1,0 +1,45 @@
+---
+# The vars variable lists a task's variables in the order get_vars
+# combines them (inventory, facts, play, role, block and task variables,
+# include_vars, set_fact and registered values, extra vars, the magic
+# variables, environment, then itself), and environment and
+# ansible_play_name are variables.
+- hosts: localhost
+  gather_facts: false
+  environment:
+    PLAY_ENV: "{{ zeta }}"
+  vars:
+    zeta: 1
+    alpha: 2
+  tasks:
+    - set_fact:
+        mid: 3
+    - include_vars:
+        file: vars/order.yml
+    - register: reg
+      debug:
+        msg: "{{ vars | list }}"
+    - block:
+        - debug:
+            msg: "{% for k in vars %}{{ k }} {% endfor %}"
+          vars:
+            task_b: 1
+            task_a: 2
+          environment:
+            TASK_ENV: x
+      vars:
+        block_v: 1
+    - debug:
+        msg: "{{ vars.keys() | list | length }} {{ 'vars' in vars.vars }} {{ vars.environment }} {{ environment }} {{ ansible_play_name }}"
+
+- hosts: localhost
+  gather_facts: false
+  vars:
+    play_v: 1
+  roles:
+    - varsorder
+  tasks:
+    - include_role:
+        name: varsorder
+      vars:
+        inc_v: 1

@@ -94,6 +94,15 @@ func (e *Engine) EvalConditional(cond string, vars VarGetter, pos Position) (boo
 			return false, err
 		}
 		exprPos = originPos
+		if _, isStr := v.(string); isStr {
+			// The text is evaluated only from a trusted source.
+			if trusted, at := e.TemplateTrust(expr, vars, pos); !trusted {
+				if at.File == "" {
+					at = pos
+				}
+				return false, &UntrustedError{Pos: at}
+			}
+		}
 		if s, isStr := v.(string); isStr {
 			if strings.TrimSpace(s) == "" {
 				ok, err := e.emptyConditional(pos)
@@ -245,6 +254,9 @@ type OriginRef struct {
 	// Inherit: items come from Pos too (a JSON file's values, a CLI
 	// option's).
 	Inherit bool
+	// Untrusted: the value (without its raw text) was computed, not
+	// written in a trusted source (a set_fact value a template made).
+	Untrusted bool
 }
 
 // OriginSource is a VarGetter that knows where its variables' values

@@ -71,17 +71,23 @@ func runDebug(_ context.Context, actx *Context, args map[string]any, _ string) *
 	}
 	if varName, ok := args["var"].(string); ok {
 		pos := actx.ArgPos["var"]
-		if raw, isStr := actx.RawArgs["var"].(string); isStr && template.HasTemplate(raw) && !template.IsVariableTemplate(raw) {
+		if raw, isStr := actx.RawArgs["var"].(string); isStr && template.HasTemplate(raw) {
 			// A template's output is not trusted as an expression (only
-			// a variable's own value, passed through, is).
-			inner := "Error while resolving `var` expression."
-			res := agentproto.Fail("Task failed: %s", strings.TrimSuffix(inner, ".")+": "+untrustedExpression)
-			res.Origin = "verbatim"
-			res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: inner,
-				InnerFile: pos.File, InnerLine: pos.Line, InnerCol: pos.Col,
-				Root: &agentproto.ErrorChain{Inner: untrustedExpression, Help: untrustedHelp,
-					InnerFile: pos.File, InnerLine: pos.Line, InnerCol: pos.Col}}
-			return res
+			// a trusted value passed through variables is), and fails
+			// where that output came from.
+			if trusted, at := actx.Vars.At(pos).TemplateTrust(raw); !trusted {
+				if at.File == "" {
+					at = pos
+				}
+				inner := "Error while resolving `var` expression."
+				res := agentproto.Fail("Task failed: %s", strings.TrimSuffix(inner, ".")+": "+untrustedExpression)
+				res.Origin = "verbatim"
+				res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: inner,
+					InnerFile: at.File, InnerLine: at.Line, InnerCol: at.Col,
+					Root: &agentproto.ErrorChain{Inner: untrustedExpression, Help: untrustedHelp,
+						InnerFile: at.File, InnerLine: at.Line, InnerCol: at.Col}}
+				return res
+			}
 		}
 		// debug var= evaluates the NAME as an expression against host
 		// vars, an undefined value rendered in place and warned about.
@@ -212,6 +218,12 @@ func runAssert(_ context.Context, actx *Context, args map[string]any, _ string) 
 					InnerFile: pos.File, InnerLine: pos.Line, InnerCol: pos.Col}
 				if be, broken := template.IsBrokenConditional(err); broken {
 					res.ErrorChain.Help = be.Help
+				}
+				var ut *template.UntrustedError
+				if errors.As(err, &ut) {
+					// At the untrusted text's origin.
+					res.ErrorChain.Help = template.UntrustedHelp
+					res.ErrorChain.InnerFile, res.ErrorChain.InnerLine, res.ErrorChain.InnerCol = ut.Pos.File, ut.Pos.Line, ut.Pos.Col
 				}
 				return res
 			}

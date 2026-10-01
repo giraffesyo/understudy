@@ -129,6 +129,7 @@ type Task struct {
 	Become       BecomeFields
 	Vars         map[string]any
 	VarOrigins   []template.KeyOrigin // where its (and its blocks') vars: named reserved variables
+	VarOrder     []string             // its blocks' vars names, then its own, as written
 	Environment  []any                // environment entries, enclosing blocks' and role's first
 	Timeout      any                  // timeout keyword, raw: an int or a template (nil = inherit)
 	Notify       []string

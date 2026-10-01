@@ -400,7 +400,9 @@ type Context struct {
 	conn map[string]any
 	// nameOrder is the order Names lists variables in (nil: by name).
 	nameOrder []string
-	noConn    bool
+	// taskVars: the variables are a task's (vars lists itself).
+	taskVars bool
+	noConn   bool
 }
 
 // NewContext builds a variable context for one host and task.
@@ -545,8 +547,65 @@ func (s *Store) HostLayerOrder(host string) (inventory, rest []string) {
 	return inventory, rest
 }
 
+// LayerOrder is the variable names of layers, in order, for a host: each
+// layer's global names, then the host's, in the order they were set.
+func (s *Store) LayerOrder(host string, layers ...Layer) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []string
+	for _, l := range layers {
+		out = append(out, s.order[l][""]...)
+		if host != "" {
+			out = append(out, s.order[l][host]...)
+		}
+	}
+	return out
+}
+
+// KeyOrder is the keys of a mapping decoded from YAML in the order they
+// were written (those without an origin after them, by name).
+func KeyOrder(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	pos := make(map[string][3]int, len(m))
+	files := make(map[string]string, len(m))
+	for _, k := range keys {
+		if file, line, col, ok := yaml.ChildOrigin(m, k); ok {
+			pos[k] = [3]int{1, line, col}
+			files[k] = file
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := keys[i], keys[j]
+		pa, pb := pos[a], pos[b]
+		if pa[0] != pb[0] {
+			return pa[0] > pb[0]
+		}
+		if files[a] != files[b] {
+			return files[a] < files[b]
+		}
+		if pa != pb {
+			if pa[1] != pb[1] {
+				return pa[1] < pb[1]
+			}
+			return pa[2] < pb[2]
+		}
+		return a < b
+	})
+	return keys
+}
+
 // SetNameOrder sets the order Names lists the variables in.
 func (c *Context) SetNameOrder(order []string) { c.nameOrder = order }
+
+// SetTaskNameOrder is SetNameOrder for a task's variables, which "vars"
+// lists with itself last.
+func (c *Context) SetTaskNameOrder(order []string) {
+	c.nameOrder = order
+	c.taskVars = true
+}
 
 // AsMapping exposes a context as a template.Mapping (GetItem/Keys/Len), so
 // one host's resolved variables can be read from another host — the basis
@@ -565,12 +624,21 @@ func (m *contextMapping) VarOrigin(name string) (template.OriginRef, bool) {
 }
 
 // varsMapping is the "vars" magic variable: the context's variables,
-// without itself.
-type varsMapping struct{ ctx *Context }
+// listing itself last for a task's (get_vars adds it to the variables it
+// copies; inner is that copy, without it).
+type varsMapping struct {
+	ctx   *Context
+	inner bool
+}
 
 func (m *varsMapping) GetItem(key string) (any, bool) {
 	if key == "vars" {
-		return nil, false
+		if m.inner || !m.ctx.taskVars {
+			return nil, false
+		}
+		// A copy of the variables made before it was added (so without
+		// itself).
+		return &varsMapping{ctx: m.ctx, inner: true}, true
 	}
 	c := *m.ctx
 	c.noConn = true
@@ -586,6 +654,9 @@ func (m *varsMapping) Keys() []string {
 		if n != "vars" && n != "omit" && n != "ansible_search_path" && !strings.HasPrefix(n, "__understudy") {
 			out = append(out, n)
 		}
+	}
+	if !m.inner && m.ctx.taskVars {
+		out = append(out, "vars")
 	}
 	return out
 }
@@ -956,7 +1027,14 @@ func (c *Context) EvalWhen(exprs []string) (ok bool, err error) {
 // VarOrigin implements template.OriginSource: the raw value of a
 // variable, with where it came from.
 func (c *Context) VarOrigin(name string) (template.OriginRef, bool) {
-	if _, ok := c.magic[name]; ok {
+	if v, ok := c.magic[name]; ok {
+		// A magic variable's text written in the playbook (the play's
+		// name) comes from there.
+		if s, isStr := v.(string); isStr {
+			if file, line, col, ok := yaml.Origin(s); ok {
+				return template.OriginRef{Raw: s, HasRaw: true, Pos: template.Position{File: file, Line: line, Col: col}}, true
+			}
+		}
 		return template.OriginRef{}, false
 	}
 	var raw any
@@ -993,6 +1071,43 @@ func (c *Context) VarOrigin(name string) (template.OriginRef, bool) {
 	return ref, true
 }
 
+// TemplateTrust reports whether the text the template src renders here
+// comes from a trusted source, and else where it came from (zero:
+// unknown).
+func (c *Context) TemplateTrust(src string) (trusted bool, at template.Position) {
+	defer func() {
+		if recover() != nil {
+			trusted, at = true, template.Position{}
+		}
+	}()
+	return c.store.engine.TemplateTrust(src, c, c.pos)
+}
+
+// UntrustedVar implements template.TrustSource: a variable holding a
+// gathered fact.
+func (c *Context) UntrustedVar(name string) bool {
+	if _, ok := c.magic[name]; ok {
+		return false
+	}
+	if _, ok := c.store.extraVar(name); ok {
+		return false
+	}
+	if _, ok := c.overlay[name]; ok {
+		return false
+	}
+	// A gathered fact (set_fact and registered values, which may hold
+	// the playbook's own text, are taken as trusted).
+	c.store.mu.RLock()
+	defer c.store.mu.RUnlock()
+	for _, l := range []Layer{LIncludeVars, LHostFacts} {
+		if _, ok := c.store.layers[l][c.host][name]; ok {
+			return false
+		}
+	}
+	_, fact := c.store.layers[LFacts][c.host][name]
+	return fact
+}
+
 // ValueOrigin is where the raw value raw, written at pos, comes from once
 // templated here: what set_fact records for a fact.
 func (c *Context) ValueOrigin(raw any, pos template.Position) template.OriginRef {
@@ -1000,7 +1115,11 @@ func (c *Context) ValueOrigin(raw any, pos template.Position) template.OriginRef
 	if file, line, col, ok := yaml.ValueOrigin(raw); ok {
 		ref.Pos = template.Position{File: file, Line: line, Col: col}
 	}
-	return c.store.engine.ResolveOrigin(ref, c)
+	out := c.store.engine.ResolveOrigin(ref, c)
+	if !out.HasRaw && !c.store.engine.RefTrust(ref, c) {
+		out.Untrusted = true
+	}
+	return out
 }
 
 // EvalExprReplacing evaluates a bare expression as debug's var= does:

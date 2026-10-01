@@ -771,6 +771,7 @@ func parseInheritable(node *yaml.Node, file string) (*Task, error) {
 				err = checkVarNames(val, file)
 			}
 			inh.VarOrigins = taskVarOrigins(val, file)
+			inh.VarOrder = val.MapKeys()
 		case "tags":
 			inh.Tags = decodeStringList(val)
 		case "environment":
@@ -900,6 +901,9 @@ func applyBlockInheritance(t *Task, inh *Task) {
 			merged[k] = v
 		}
 		t.Vars = merged
+	}
+	if len(inh.VarOrder) > 0 {
+		t.VarOrder = append(append([]string{}, inh.VarOrder...), t.VarOrder...)
 	}
 	if len(inh.VarOrigins) > 0 {
 		t.VarOrigins = append(append([]template.KeyOrigin{}, inh.VarOrigins...), t.VarOrigins...)
@@ -1202,6 +1206,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			}
 			task.Vars = m
 			task.VarOrigins = taskVarOrigins(val, file)
+			task.VarOrder = val.MapKeys()
 		case "environment":
 			v, err := decodeEnvironment(val)
 			if err != nil {

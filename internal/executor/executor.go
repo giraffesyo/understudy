@@ -5,6 +5,7 @@ package executor
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -1565,6 +1566,56 @@ func (r *Runner) refreshInventory(play *playbook.Play, playHosts []string) error
 	return nil
 }
 
+// roleUUIDs are the role loads' role_uuid values.
+var roleUUIDs sync.Map
+
+// roleUUID is the role_uuid of a task's role load: a random UUID, one
+// per load (per role name outside a load).
+func roleUUID(task *playbook.Task) string {
+	var key any = task.RoleName
+	if task.Role != nil {
+		key = task.Role
+	}
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	fresh := fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+	v, _ := roleUUIDs.LoadOrStore(key, fresh)
+	return v.(string)
+}
+
+// taskVarOrder is the order of a task's variable names as get_vars
+// combines them (the order the vars variable lists them in): role
+// defaults, the host's inventory variables and facts, the play's and
+// roles' variables, the task's, include_vars, set_fact and registered
+// values, include parameters, extra vars, then the magic variables.
+func (r *Runner) taskVarOrder(host string, task *playbook.Task, override map[string]any) []string {
+	order := r.Store.LayerOrder(host, vars.LRoleDefaults)
+	for _, m := range task.ScopeDefaults {
+		order = append(order, vars.KeyOrder(m)...)
+	}
+	order = append(order, r.Store.LayerOrder(host, vars.LInventoryGroupVars, vars.LGroupVarsAll, vars.LGroupVars,
+		vars.LInventoryHostVars, vars.LHostVars)...)
+	order = append(order, "inventory_hostname", "inventory_hostname_short", "group_names", "ansible_facts")
+	order = append(order, r.Store.LayerOrder(host, vars.LFacts, vars.LPlayVars, vars.LPlayVarsFiles, vars.LRoleVars)...)
+	for _, m := range task.ScopeVars {
+		order = append(order, vars.KeyOrder(m)...)
+	}
+	// The blocks' variables, then the task's, as written.
+	order = append(order, task.VarOrder...)
+	order = append(order, vars.KeyOrder(task.Vars)...)
+	order = append(order, r.Store.LayerOrder(host, vars.LTaskVars, vars.LIncludeVars, vars.LHostFacts)...)
+	order = append(order, vars.KeyOrder(override)...)
+	order = append(order, r.Store.LayerOrder(host, vars.LExtraVars)...)
+	return append(order, "playbook_dir", "ansible_playbook_python", "ansible_config_file",
+		"ansible_role_names", "ansible_play_role_names", "ansible_dependent_role_names", "role_names",
+		"ansible_play_name", "role_name", "role_path", "role_uuid", "ansible_collection_name", "ansible_role_name",
+		"groups", "ansible_play_hosts_all", "ansible_play_hosts", "ansible_play_batch", "play_hosts",
+		"ansible_version", "ansible_check_mode", "ansible_diff_mode", "ansible_forks", "ansible_inventory_sources",
+		"ansible_limit", "ansible_skip_tags", "ansible_run_tags", "ansible_verbosity", "hostvars", "environment")
+}
+
 // hostVars is the lazy `hostvars` magic variable.
 type hostVars struct {
 	r         *Runner
@@ -1703,6 +1754,41 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 	}
 }
 
+// taskContext is a task's variables on a host, as get_vars gives them:
+// the play's, the role's private ones, the task's (and its blocks'),
+// include parameters (override), the environment and the role's magic
+// variables, listed in get_vars' order.
+func (r *Runner) taskContext(play *playbook.Play, task *playbook.Task, host string, pos template.Position, playHosts []string, override map[string]any) *vars.Context {
+	c := r.newHostContext(host, pos, playHosts).WithRoleScope(task.ScopeDefaults, task.ScopeVars)
+	if len(task.Vars) > 0 {
+		c = c.WithOverlay(task.Vars)
+	}
+	if len(override) > 0 {
+		c = c.WithOverlay(override)
+	}
+	// The environment variable: the task's environment entries, the
+	// play's first, as get_vars sets it (templated where it is read).
+	var env []any
+	if play != nil {
+		env = append(env, play.Environment...)
+	}
+	env = append(env, task.Environment...)
+	if env == nil {
+		env = []any{}
+	}
+	c = c.WithOverlay(map[string]any{"environment": env})
+	if task.RoleName != "" {
+		// A role's task: the role's magic variables.
+		c.SetMagic("role_name", task.RoleName)
+		c.SetMagic("role_path", task.SrcDir)
+		c.SetMagic("role_uuid", roleUUID(task))
+		c.SetMagic("ansible_collection_name", nil)
+		c.SetMagic("ansible_role_name", task.RoleName)
+	}
+	c.SetTaskNameOrder(r.taskVarOrder(host, task, override))
+	return c
+}
+
 // execTaskOnHost runs one task (all loop items) on a host and returns the
 // result to record, with the per-item results for loops, and the task with
 // its templated keywords resolved for this host.
@@ -1714,13 +1800,7 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 	ctx = context.WithValue(ctx, discoveredCtxKey{}, new(string))
 	pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
 	r.warnReservedFor(host, task)
-	base := r.newHostContext(host, pos, playHosts).WithRoleScope(task.ScopeDefaults, task.ScopeVars)
-	if len(task.Vars) > 0 {
-		base = base.WithOverlay(task.Vars)
-	}
-	if len(override) > 0 {
-		base = base.WithOverlay(override)
-	}
+	base := r.taskContext(play, task, host, pos, playHosts, override)
 	// ansible_search_path: the role (if any) then the task's directory;
 	// file lookups search it (DataLoader.path_dwim_relative_stack).
 	var search []any
@@ -1778,7 +1858,9 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 			if ref, ok := base.ItemOrigin(task.Loop, loopPos, i); ok {
 				return &ref
 			}
-			return nil
+			// An item the loop's template computed: no origin, and
+			// not trusted.
+			return &template.OriginRef{Untrusted: true}
 		}
 	}
 
@@ -1793,14 +1875,7 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 		// Rebuild the per-item context from the store each iteration so a
 		// set_fact from an earlier item is visible to later ones (Ansible's
 		// accumulate-in-a-loop pattern).
-		itemCtx := r.newHostContext(host, pos, playHosts).WithRoleScope(task.ScopeDefaults, task.ScopeVars)
-		if len(task.Vars) > 0 {
-			itemCtx = itemCtx.WithOverlay(task.Vars)
-		}
-		if len(override) > 0 {
-			itemCtx = itemCtx.WithOverlay(override)
-		}
-		itemCtx = itemCtx.WithOverlay(lc.vars(i))
+		itemCtx := r.taskContext(play, task, host, pos, playHosts, override).WithOverlay(lc.vars(i))
 		res := r.runOnce(ctx, play, task, host, itemCtx, item)
 		stop := r.breakWhen(task, itemCtx, res)
 		if !res.Failed {
@@ -3219,6 +3294,17 @@ func (e *conditionalError) chain(outer string) *agentproto.ErrorChain {
 		}
 		ec.Inner = fmt.Sprintf("%s '%s' expression failed.", article, e.keyword)
 		ec.Root = brokenConditionalChain(be)
+	} else if ut, ok := e.err.(*template.UntrustedError); ok {
+		// Text from an untrusted source: the conditional fails where
+		// that text came from.
+		article := "A"
+		if e.keyword == "until" {
+			article = "An"
+		}
+		ec.Inner = fmt.Sprintf("%s '%s' expression failed.", article, e.keyword)
+		ec.InnerFile, ec.InnerLine, ec.InnerCol = ut.Pos.File, ut.Pos.Line, ut.Pos.Col
+		ec.Root = &agentproto.ErrorChain{Inner: ut.Error(), Help: template.UntrustedHelp,
+			InnerFile: ut.Pos.File, InnerLine: ut.Pos.Line, InnerCol: ut.Pos.Col}
 	} else if ie, ok := e.err.(*template.IndirectConditionalError); ok {
 		// The expression a template made fails where its text came from.
 		article := "A"
