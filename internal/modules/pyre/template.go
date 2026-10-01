@@ -25,7 +25,7 @@ func ParseTemplate(p *Pattern, repl string) (parts []TemplatePart, err error) {
 			parts, err = nil, e
 		}
 	}()
-	s := newTokenizer([]rune(repl))
+	s := newTokenizer([]rune(repl), p.bytes)
 	var lit strings.Builder
 	addLiteral := func() {
 		parts = append(parts, TemplatePart{Lit: lit.String(), Group: -1})

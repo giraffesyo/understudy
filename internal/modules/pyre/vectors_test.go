@@ -20,6 +20,7 @@ type vectors struct {
 	Compile []struct {
 		Pattern string `json:"pattern"`
 		Flags   Flag   `json:"flags"`
+		Bytes   bool   `json:"bytes"`
 		Result  struct {
 			pyExc
 			Groups     int            `json:"groups"`
@@ -30,6 +31,7 @@ type vectors struct {
 	Match []struct {
 		Pattern   string  `json:"pattern"`
 		Flags     Flag    `json:"flags"`
+		Bytes     bool    `json:"bytes"`
 		Subject   string  `json:"subject"`
 		Search    []int   `json:"search"`
 		Match     []int   `json:"match"`
@@ -46,6 +48,7 @@ type vectors struct {
 	} `json:"match"`
 	TemplateErrors []struct {
 		Pattern string `json:"pattern"`
+		Bytes   bool   `json:"bytes"`
 		Repl    string `json:"repl"`
 		Result  string `json:"result"`
 		Error   *pyExc `json:"error"`
@@ -101,7 +104,7 @@ func excOf(err error) pyExc {
 func TestVectorsCompile(t *testing.T) {
 	v := loadVectors(t)
 	for _, c := range v.Compile {
-		p, err := compile(c.Pattern, c.Flags)
+		p, err := compile(c.Pattern, c.Flags, c.Bytes)
 		if c.Result.Exc != "" {
 			if err == nil {
 				t.Errorf("compile(%q): no error, want %s: %s", c.Pattern, c.Result.Exc, c.Result.Msg)
@@ -144,12 +147,12 @@ func findAllAny(p *Pattern, s string) []any {
 func TestVectorsMatch(t *testing.T) {
 	v := loadVectors(t)
 	for _, c := range v.Match {
-		p, err := Compile(c.Pattern, c.Flags)
+		p, err := cachedCompile(c.Pattern, c.Flags, c.Bytes)
 		if err != nil {
 			t.Errorf("compile(%q): %v", c.Pattern, err)
 			continue
 		}
-		name := fmt.Sprintf("%q flags=%d on %q", c.Pattern, c.Flags, c.Subject)
+		name := fmt.Sprintf("%q flags=%d bytes=%v on %q", c.Pattern, c.Flags, c.Bytes, c.Subject)
 		if got := p.Search(c.Subject, 0, -1); !reflect.DeepEqual(got, c.Search) {
 			t.Errorf("%s: search %v, want %v", name, got, c.Search)
 		}
@@ -184,7 +187,10 @@ func TestVectorsMatch(t *testing.T) {
 func TestVectorsTemplates(t *testing.T) {
 	v := loadVectors(t)
 	for _, c := range v.TemplateErrors {
-		p := MustCompile(c.Pattern, 0)
+		p, err := cachedCompile(c.Pattern, 0, c.Bytes)
+		if err != nil {
+			t.Fatal(err)
+		}
 		r, _, err := p.Sub(c.Repl, "xab", 0)
 		if c.Error != nil {
 			if err == nil || excOf(err) != *c.Error {

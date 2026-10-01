@@ -643,11 +643,16 @@ than silently diverging. Known boundaries:
   match iteration, replacement templates and `re.error` messages, checked
   against vectors CPython generates. Shell patterns (`fileglob`, `find`,
   `unarchive`, host patterns, `setup`'s `filter`) translate as
-  `fnmatch.translate` does. Not modeled: `\N{...}` knows the Latin,
-  Greek, punctuation, symbol, CJK and Hangul names but not all of
-  Unicode's; bytes patterns (`wait_for`'s `search_regex`, inventory
-  ignore patterns) run as `re.ASCII` str patterns over the bytes, which
-  accepts the `\u`/`\U`/`\N` escapes a bytes pattern rejects.
+  `fnmatch.translate` does. `\N{...}` looks up every name, alias and
+  algorithmic name (Hangul syllables, CJK unified and Tangut ideographs)
+  Python 3.14's `unicodedata.lookup` knows, as it does (case-insensitive;
+  named sequences rejected), from a table generated from it
+  (`testdata/gen_tables.py`). Bytes patterns (`wait_for`'s
+  `search_regex`, inventory ignore patterns) parse as `re` parses bytes:
+  no `\u`/`\U`/`\N` escapes, no `(?u)`, `(?L)` and `LOCALE` allowed,
+  ASCII-only error messages, ASCII `\w`/`\d`/`\s`/case folding. Not
+  modeled: `LOCALE` uses the C library's locale for bytes 128-255; here
+  it means ASCII, as in the C and UTF-8 locales on Linux.
 - **Documented divergences**: a task that hits
   its `timeout` has the processes its module started killed — each command
   a module runs leads its own process group, so its background jobs and
