@@ -495,7 +495,7 @@ func (s *pepSpecifierSet) String() string {
 // asked whether a version that is not PEP 440 is contained.
 type errInvalidVersion struct{ version string }
 
-func (e errInvalidVersion) Error() string { return "Invalid version: " + pyStrRepr(e.version) }
+func (e errInvalidVersion) Error() string { return "Invalid version: '" + e.version + "'" }
 
 // contains is SpecifierSet.contains(item, prereleases=True), the pip
 // module's is_satisfied_by.

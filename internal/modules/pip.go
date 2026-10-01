@@ -3,6 +3,7 @@ package modules
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -406,11 +407,10 @@ func pipFail(cmd []string, out, errOut string) *agentproto.Result {
 	return &agentproto.Result{Failed: true, Msg: msg, Extra: map[string]any{"cmd": anyList(cmd)}}
 }
 
-// pipModuleCrash is the module dying on an exception it does not catch.
+// pipModuleCrash is the module dying on an exception it does not catch
+// (ansible-core reports its message).
 func pipModuleCrash(err error) *agentproto.Result {
-	return &agentproto.Result{Failed: true, Msg: "MODULE FAILURE: No start of json char found\nSee stdout/stderr for the exact error",
-		Extra: map[string]any{"module_stdout": "", "module_stderr": "Traceback (most recent call last):\n" +
-			"packaging.version.InvalidVersion: " + err.Error() + "\n", "rc": int64(1)}}
+	return &agentproto.Result{Failed: true, Msg: "Task failed: Module failed: " + err.Error()}
 }
 
 // command is module.run_command(argv, cwd=..., path_prefix=...,
@@ -508,10 +508,8 @@ func (r *pipRun) resolvePackageNames(packages []*pipPackage, pip []string, pyBin
 	}
 	dep, ok := r.packageInfo("pip", pyBin)
 	if !ok {
-		return nil, &agentproto.Result{Failed: true,
-			Msg: "MODULE FAILURE: No start of json char found\nSee stdout/stderr for the exact error",
-			Extra: map[string]any{"module_stdout": "", "rc": int64(1), "module_stderr": "Traceback (most recent call last):\n" +
-				"AttributeError: 'NoneType' object has no attribute 'split'\n"}}
+		// pip_dep.split on None.
+		return nil, pipModuleCrash(errors.New("'NoneType' object has no attribute 'split'"))
 	}
 	if _, installed, _ := strings.Cut(dep, "=="); looseVersionLess(installed, "24.1") {
 		r.warnings = append(r.warnings, "Using check mode with packages from vcs urls, file paths, or archives will not behave as expected when using pip versions <24.1.")

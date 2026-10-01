@@ -438,10 +438,11 @@ than silently diverging. Known boundaries:
     parse are resolved with `pip install --dry-run --report` where pip is
     24.1 or later, as the module does. A virtual environment's Python
     sees only its own site-packages unless it includes the system's.
-    Not modeled: packaging 22.x's short-lived quirks, and the module's
-    crashes (a non-PEP 440 installed version under packaging 22-25, a
-    marker string Python cannot unescape), which understudy treats as no
-    match or an invalid requirement.
+    The module's crashes on a non-PEP 440 installed version (packaging
+    22-25) and on a pip it cannot ask its version are reproduced. Not
+    modeled: packaging 22.x's short-lived quirks, and the SyntaxError a
+    marker string Python cannot unescape raises before 26.3 (treated as
+    an invalid requirement).
   - Errors that quote `sys.version` (`apt` and `dnf5` without their
     bindings): CPython assembles it from strings compiled into the
     interpreter or its libpython (`PY_VERSION`, the build date and time,
