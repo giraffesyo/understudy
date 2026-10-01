@@ -57,44 +57,53 @@ func addRoutingDeprecation(task *playbook.Task, res *agentproto.Result) {
 // origin, a short name routed through ansible.builtin at an unknown one.
 // The first is preceded by the "can be disabled" hint.
 func RoutingDeprecationWarnings(plays []*playbook.Play) []string {
-	var out []string
-	seen := map[string]bool{}
+	var tasks []*playbook.Task
 	for _, pl := range plays {
 		for _, list := range [][]*playbook.Task{pl.PreTasks, pl.Tasks, pl.PostTasks, pl.Handlers} {
-			for _, t := range list {
-				for _, d := range t.LoadDeprecations {
-					a := d.Pos
-					msg := fmt.Sprintf("[DEPRECATION WARNING]: %s This feature will be removed from ansible-core version %s.\n"+
-						"Origin: %s:%d:%d\n\n%s\n%s\n\n", d.Msg, d.Version, a.File, a.Line, a.Col, playbook.SourceContext(a.File, a.Line, a.Col), d.Help)
-					if !seen[msg] {
-						seen[msg] = true
-						out = append(out, DeprecationHint()+msg)
-					}
-				}
-				d, ok := routingDeprecations[t.Module]
-				if !ok {
-					continue
-				}
-				old := d.collection + "." + t.Module
-				head := "[DEPRECATION WARNING]: " + old + " has been deprecated. Use " + d.redirectTo +
-					" instead. This feature will be removed from collection '" + d.collection + "' version " + d.version + ".\n"
-				var msg string
-				switch t.Action {
-				case old:
-					msg = fmt.Sprintf("%sOrigin: %s:%d:%d\n\n%s\n", head, t.Src.File, t.Src.Line, t.Src.Col,
-						playbook.SourceContext(t.Src.File, t.Src.Line, t.Src.Col))
-				case t.Module, "ansible.legacy." + t.Module:
-					msg = head + "Origin: <unknown>\n\n" + old + "\n\n"
-				default:
-					continue
-				}
-				if seen[msg] {
-					continue
-				}
+			tasks = append(tasks, list...)
+		}
+	}
+	return TaskDeprecationWarnings(tasks)
+}
+
+// TaskDeprecationWarnings are the deprecation warnings loading and
+// resolving tasks raises, in their order (those a playbook's load began
+// before it failed print before its error).
+func TaskDeprecationWarnings(tasks []*playbook.Task) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, t := range tasks {
+		for _, d := range t.LoadDeprecations {
+			a := d.Pos
+			msg := fmt.Sprintf("[DEPRECATION WARNING]: %s This feature will be removed from ansible-core version %s.\n"+
+				"Origin: %s:%d:%d\n\n%s\n%s\n\n", d.Msg, d.Version, a.File, a.Line, a.Col, playbook.SourceContext(a.File, a.Line, a.Col), d.Help)
+			if !seen[msg] {
 				seen[msg] = true
 				out = append(out, DeprecationHint()+msg)
 			}
 		}
+		d, ok := routingDeprecations[t.Module]
+		if !ok {
+			continue
+		}
+		old := d.collection + "." + t.Module
+		head := "[DEPRECATION WARNING]: " + old + " has been deprecated. Use " + d.redirectTo +
+			" instead. This feature will be removed from collection '" + d.collection + "' version " + d.version + ".\n"
+		var msg string
+		switch t.Action {
+		case old:
+			msg = fmt.Sprintf("%sOrigin: %s:%d:%d\n\n%s\n", head, t.Src.File, t.Src.Line, t.Src.Col,
+				playbook.SourceContext(t.Src.File, t.Src.Line, t.Src.Col))
+		case t.Module, "ansible.legacy." + t.Module:
+			msg = head + "Origin: <unknown>\n\n" + old + "\n\n"
+		default:
+			continue
+		}
+		if seen[msg] {
+			continue
+		}
+		seen[msg] = true
+		out = append(out, DeprecationHint()+msg)
 	}
 	return out
 }

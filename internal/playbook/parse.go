@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -183,6 +185,28 @@ var blockAttributes = map[string]bool{
 	"name": true, "no_log": true, "notify": true, "port": true, "remote_user": true,
 	"rescue": true, "run_once": true, "tags": true, "throttle": true, "timeout": true,
 	"vars": true, "when": true,
+}
+
+// loadState records the tasks a playbook load has begun, in order.
+type loadState struct{ tasks []*Task }
+
+// loading is the playbook load in progress (LoadFileTasks), if any.
+var (
+	loading   atomic.Pointer[loadState]
+	loadingMu sync.Mutex
+)
+
+// LoadFileTasks is LoadFile that also returns the tasks it loaded (all
+// that it began, when it fails): ansible-core reports each task's load
+// deprecations as it loads it, before a later load error.
+func LoadFileTasks(path string) ([]*Play, []*Task, error) {
+	loadingMu.Lock()
+	defer loadingMu.Unlock()
+	st := &loadState{}
+	loading.Store(st)
+	defer loading.Store(nil)
+	plays, err := LoadFile(path)
+	return plays, st.tasks, err
 }
 
 // LoadFile parses a playbook file into plays.
@@ -890,6 +914,9 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 		LoopVar: "item",
 		Poll:    -1, // unset; 0 means fire-and-forget
 		Src:     Pos{File: file, Line: node.Line, Col: node.Column},
+	}
+	if l := loading.Load(); l != nil {
+		l.tasks = append(l.tasks, task)
 	}
 
 	// Task.preprocess_data: a with_<lookup> after loop: or another

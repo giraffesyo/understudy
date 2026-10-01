@@ -1,0 +1,21 @@
+---
+# The tasks a playbook's load began report their deprecations as they
+# load, before a later task's load error ends the run.
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: hi
+      args:
+    - action:
+        module: debug
+        msg: x
+    - ansible.builtin.debug: msg=fine
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - action:
+        module: debug
+        msg: again
+    - debug: msg=x
+      not_a_keyword: 1
