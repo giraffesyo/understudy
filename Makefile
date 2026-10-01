@@ -6,13 +6,13 @@ LDFLAGS  := -s -w
 
 # VERSION is stamped into `understudy version`. Release builds get the tag
 # (v1.2.3); dev builds get `git describe` output. Override: make VERSION=x.
-VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.1.0-dev)
+VERSION  ?= $(shell git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo 0.1.0-dev)
 VERSION_LDFLAGS := -X github.com/giraffesyo/understudy/internal/cli.version=$(VERSION)
 
 # Control-binary release targets (the embedded agents are always linux).
 RELEASE_PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
-.PHONY: build agents test test-e2e test-golden depcheck cross release clean
+.PHONY: build agents test test-e2e test-golden depcheck cross release sbom clean
 
 build: agents
 	$(GO) build -trimpath -ldflags="$(VERSION_LDFLAGS)" -o $(BIN)/understudy ./cmd/understudy
@@ -61,6 +61,25 @@ release: agents
 		rm -rf $(DIST)/$$name; \
 	done
 	cd $(DIST) && { command -v sha256sum >/dev/null && sha256sum *.tar.gz || shasum -a 256 *.tar.gz; } > checksums.txt
+	cat $(DIST)/checksums.txt
+
+# CycloneDX SBOMs for `make release`'s tarballs (run it first, with the same
+# VERSION): dist/understudy_<version>_<os>_<arch>.sbom.cdx.json, read from
+# each binary's embedded build info (modules and the Go standard library),
+# then checksums.txt again over the tarballs and SBOMs. The generator runs
+# with `go run module@version`, so it never enters go.mod.
+CYCLONEDX_GOMOD := github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
+
+sbom:
+	@set -e; tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	for t in $(DIST)/understudy_$(VERSION)_*.tar.gz; do \
+		name=$$(basename $$t .tar.gz); \
+		echo "sbom $$name"; \
+		tar -C $$tmp -xzf $$t $$name/understudy; \
+		$(GO) run $(CYCLONEDX_GOMOD) bin -json -std -version $(VERSION) \
+			-output $(DIST)/$$name.sbom.cdx.json $$tmp/$$name/understudy; \
+	done
+	cd $(DIST) && { command -v sha256sum >/dev/null && sha256sum *.tar.gz *.sbom.cdx.json || shasum -a 256 *.tar.gz *.sbom.cdx.json; } > checksums.txt
 	cat $(DIST)/checksums.txt
 
 clean:
