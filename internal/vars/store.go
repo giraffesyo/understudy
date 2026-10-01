@@ -144,6 +144,17 @@ func (s *Store) SetFacts(host string, facts map[string]any) {
 	s.set(LFacts, host, final)
 }
 
+// Fact is one of a host's gathered facts (as SetFacts recorded it).
+func (s *Store) Fact(host, name string) (any, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	v, ok := s.layers[LFacts][host][name]
+	if f, isFinal := v.(Final); isFinal {
+		return f.V, ok
+	}
+	return v, ok
+}
+
 // ClearFacts drops a host's gathered facts (meta: clear_facts); set_fact
 // values are not cached facts and survive, as in Ansible.
 func (s *Store) ClearFacts(host string) {

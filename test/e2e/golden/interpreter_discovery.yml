@@ -1,0 +1,48 @@
+---
+# Python interpreter discovery (interpreter_python auto): the first module
+# a host runs reports ansible_facts.discovered_interpreter_python until a
+# task's result keeps it as a fact (a failed task's does not; a loop's
+# first item discovers for the rest; a delegated task keeps it only with
+# delegate_facts); modules ansible runs without Python never discover.
+- name: discovery
+  hosts: all
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: auto
+  tasks:
+    - raw: "true"
+    - command: "false"
+      ignore_errors: true
+    - command: echo {{ item }}
+      loop: [1, 2]
+    - debug: var=ansible_facts
+    - command: echo again
+    - meta: clear_facts
+    - name: delegated without delegate_facts
+      command: echo delegated
+      delegate_to: localhost
+    - command: echo kept
+    - meta: clear_facts
+    - name: delegated with delegate_facts
+      command: echo delegated
+      delegate_to: localhost
+      delegate_facts: true
+    - debug: var=ansible_facts.discovered_interpreter_python
+- name: silent discovery and gathered facts
+  hosts: all
+  gather_facts: true
+  vars:
+    ansible_python_interpreter: auto_silent
+  tasks:
+    - debug: var=ansible_facts.discovered_interpreter_python
+    - meta: clear_facts
+    - setup:
+        gather_subset: min
+      register: s
+    - debug: var=s.ansible_facts.discovered_interpreter_python
+- name: an explicit interpreter does not discover
+  hosts: all
+  gather_facts: false
+  tasks:
+    - meta: clear_facts
+    - command: echo explicit

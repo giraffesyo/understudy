@@ -374,7 +374,8 @@ than silently diverging. Known boundaries:
   task's `ansible_python_interpreter`, else `ANSIBLE_PYTHON_INTERPRETER`,
   else discovery's `python3.14` ... `python3.9`, `/usr/bin/python3`
   order, or `ansible_interpreter_python_fallback`, searched in the login
-  user's PATH) and names it as that Python reports `sys.executable`
+  user's PATH; discovery reports the `discovered_interpreter_python` fact
+  and its warnings as ansible's does) and names it as that Python reports `sys.executable`
   (macOS's `/usr/bin/python3` shim is the developer directory's python3,
   Homebrew's Pythons their `opt` link) wherever ansible's messages do:
   `missing_required_lib` errors, `pip`'s `python -m pip` command and
@@ -419,8 +420,7 @@ than silently diverging. Known boundaries:
     (check mode, `install_python_apt: false`); understudy does not install
     python3-apt itself. `dnf` fails without the dnf Python package, and
     `dnf5` without libdnf5 first runs `dnf install -y python3-libdnf5`,
-    as ansible's modules do. The discovered interpreter is not reported
-    as a `discovered_interpreter_python` fact.
+    as ansible's modules do.
 - **`dnf` results**: the transaction runs through the dnf CLI, and
   `results` lists it as the modules do (`Installed: <nevra>`,
   `Removed: <nevra>`). dnf4's module iterates a set, so for multi-package
@@ -475,13 +475,15 @@ under **Verbose output** left out). It
 needs the `ansible` package (the corpus uses a few `community.general`
 plugins) and `passlib`, e.g. `pip install ansible passlib`, with the
 matching `ansible-core` release. Set `ANSIBLE_PYTHON_INTERPRETER` to that
-Python (CI does), or the output picks up interpreter-discovery warnings.
+Python (CI does): the harnesses pin it so most output does not depend on
+which Python discovery finds (`interpreter_discovery.yml` sets
+`ansible_python_interpreter: auto` to cover discovery itself).
 With Docker available, `test/e2e/golden/linux/*.yml` (modules that need
 root or a real Linux target: `user`, `hostname`, `alternatives`, `dnf`,
 package parameters, git over ssh, uri's Python-dependent output, and on a
 booted systemd Rocky container `systemd`, `firewalld` and `selinux`) also
 run at `-v` against fresh Ubuntu, Alpine and Rocky Linux containers, one
-per tool, and must match byte for byte.
+per tool, discovering each target's Python, and must match byte for byte.
 
 CI (`.github/workflows/ci.yml`) runs gofmt, `go vet`, `make depcheck`, the
 unit suite on Linux and macOS, the cross-compile check, the golden suite

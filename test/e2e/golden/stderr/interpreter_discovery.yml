@@ -1,0 +1,28 @@
+---
+# Interpreter discovery's warnings: the interpreter discovered (once per
+# distinct warning), none found among the fallbacks, and none with
+# auto_silent.
+- hosts: all
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: auto
+  tasks:
+    - command: echo one
+    - meta: clear_facts
+    - command: echo two
+- hosts: all
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: auto
+    ansible_interpreter_python_fallback: [no-such-python-understudy]
+  tasks:
+    - meta: clear_facts
+    - ping:
+- hosts: all
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: auto_silent
+    ansible_interpreter_python_fallback: [no-such-python-understudy-2]
+  tasks:
+    - meta: clear_facts
+    - ping:

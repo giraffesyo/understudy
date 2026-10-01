@@ -1378,6 +1378,8 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 	// One TaskExecutor (and connection) per task and host, loop items
 	// included.
 	ctx = context.WithValue(ctx, connectedKey{}, new(string))
+	// Discovery updates the task's variables for its later loop items.
+	ctx = context.WithValue(ctx, discoveredCtxKey{}, new(string))
 	pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
 	r.warnReservedFor(host, task)
 	base := r.newHostContext(host, pos, playHosts)
@@ -1812,6 +1814,7 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		return nil, target, err
 	}
 	connecting := r.connectingNote(ctx, inProcess, vctx, host, target)
+	disc := &discovery{}
 	return &actions.Context{
 		Host:          host,
 		Vars:          vctx,
@@ -1844,7 +1847,23 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 			}
 			connecting()
 			r.displayModuleRedirect(task, req.Module)
-			return r.runModule(ctx, host, target, kw, inProcess, b, task, envKeys, env, req, payload)
+			python := !noPythonModules[req.Module]
+			if python {
+				r.discoverInterpreter(ctx, disc, host, target, task, vctx, conn)
+				if req.PythonInterpreter == "" {
+					req.PythonInterpreter = disc.path
+				}
+			}
+			res, err := r.runModule(ctx, host, target, kw, inProcess, b, task, envKeys, env, req, payload)
+			if err == nil && res != nil && python && disc.report {
+				// _execute_module propagates the discovery to the
+				// controller as a fact in its result.
+				if res.AnsibleFacts == nil {
+					res.AnsibleFacts = map[string]any{}
+				}
+				res.AnsibleFacts[discoveredKey] = disc.path
+			}
+			return res, err
 		},
 		Connecting: connecting,
 		SetFact: func(name string, value any) {
@@ -2396,21 +2415,18 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	// Only a successful result's facts are kept (a failed task's are
 	// reported but not applied).
 	if len(res.AnsibleFacts) > 0 && task.Module != "set_fact" && !res.Failed {
-		target := host
-		if res.DelegatedTo != "" {
-			target = res.DelegatedTo
-		}
-		stripped := make(map[string]any, len(res.AnsibleFacts))
-		for k, v := range res.AnsibleFacts {
-			if k == "ansible_local" {
-				stripped[k] = v // namespace_facts keeps ansible_local as-is
+		r.applyFacts(host, res.DelegatedTo, task, res.AnsibleFacts)
+	}
+	if loopItems != nil && task.Module != "set_fact" {
+		// A loop's facts are its items' (each item that did not fail).
+		for _, it := range loopItems {
+			m, ok := asStringMap(it)
+			if !ok || m["failed"] == true {
 				continue
 			}
-			stripped[strings.TrimPrefix(k, "ansible_")] = v
-		}
-		for _, h := range r.factHosts(host, target, task) {
-			r.Store.SetFacts(h, r.deprecatedFacts(res.AnsibleFacts))
-			r.Store.SetFacts(h, map[string]any{"ansible_facts": stripped})
+			if facts, ok := asStringMap(m["ansible_facts"]); ok && len(facts) > 0 {
+				r.applyFacts(host, res.DelegatedTo, task, facts)
+			}
 		}
 	}
 	if res.Failed && !ignored && r.catchInRescue(host, task) {
@@ -2729,6 +2745,35 @@ func setFactOrigins(task *playbook.Task) []template.KeyOrigin {
 		return a.Col - b.Col
 	})
 	return out
+}
+
+// applyFacts records a result's facts for the hosts they belong to, both
+// prefixed at top level (inject_facts_as_vars) and under ansible_facts,
+// updating the facts already cached (host_cache |= facts).
+func (r *Runner) applyFacts(host, delegatedTo string, task *playbook.Task, facts map[string]any) {
+	target := host
+	if delegatedTo != "" {
+		target = delegatedTo
+	}
+	stripped := make(map[string]any, len(facts))
+	for k, v := range facts {
+		if k == "ansible_local" {
+			stripped[k] = v // namespace_facts keeps ansible_local as-is
+			continue
+		}
+		stripped[strings.TrimPrefix(k, "ansible_")] = v
+	}
+	for _, h := range r.factHosts(host, target, task) {
+		r.Store.SetFacts(h, r.deprecatedFacts(facts))
+		merged := stripped
+		if old, ok := r.Store.Fact(h, "ansible_facts"); ok {
+			if m, ok := asStringMap(old); ok {
+				merged = maps.Clone(m)
+				maps.Copy(merged, stripped)
+			}
+		}
+		r.Store.SetFacts(h, map[string]any{"ansible_facts": merged})
+	}
 }
 
 // warnReserved shows warn_if_reserved's warning for each variable named
