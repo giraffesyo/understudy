@@ -41,7 +41,7 @@ func runBecome(t *testing.T, port, hostVars, playbookSrc string) (string, int) {
 	t.Helper()
 	bin, _ := filepath.Abs("../../bin/understudy")
 	if _, err := os.Stat(bin); err != nil {
-		t.Skip("bin/understudy not built (run: make build)")
+		missingPrereq(t, "bin/understudy not built (run: make build)")
 	}
 	dir := t.TempDir()
 	pb := filepath.Join(dir, "play.yml")

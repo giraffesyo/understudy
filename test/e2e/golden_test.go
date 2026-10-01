@@ -28,7 +28,7 @@ func ansiblePlaybookBin(t *testing.T) string {
 	}
 	p, err := exec.LookPath("ansible-playbook")
 	if err != nil {
-		t.Skip("ansible-playbook not on PATH (set UNDERSTUDY_ANSIBLE_PLAYBOOK)")
+		missingPrereq(t, "ansible-playbook not on PATH (set UNDERSTUDY_ANSIBLE_PLAYBOOK)")
 	}
 	return p
 }
@@ -58,7 +58,7 @@ func goldenPackagingEnv(ansible string) []string {
 func understudyBin(t *testing.T) string {
 	bin, _ := filepath.Abs("../../bin/understudy")
 	if _, err := os.Stat(bin); err != nil {
-		t.Skip("bin/understudy not built (run: make build)")
+		missingPrereq(t, "bin/understudy not built (run: make build)")
 	}
 	return bin
 }

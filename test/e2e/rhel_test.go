@@ -57,7 +57,7 @@ func runRHEL(t *testing.T, port, dir string) (string, int) {
 	t.Helper()
 	bin, _ := filepath.Abs("../../bin/understudy")
 	if _, err := os.Stat(bin); err != nil {
-		t.Skip("bin/understudy not built (run: make build)")
+		missingPrereq(t, "bin/understudy not built (run: make build)")
 	}
 	inv := filepath.Join(dir, "hosts")
 	os.WriteFile(inv, []byte(fmt.Sprintf(
