@@ -1,0 +1,4 @@
+---
+- name: role task notifies its handler
+  command: echo role
+  notify: rh

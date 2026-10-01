@@ -92,6 +92,10 @@ type Result struct {
 	ErrorFile           string `json:"-"`
 	ErrorLine, ErrorCol int    `json:"-"`
 
+	// Notify is the notifications the result carries: its task's notify
+	// templated for it, one list per result (a loop's items that ran).
+	Notify [][]string `json:"-"`
+
 	// Control-plane display hints; never cross the agent wire.
 	Origin        string `json:"-"` // "action" (control-side) or "module"
 	VerboseAlways bool   `json:"-"` // shown with its JSON even at -v0 (debug, assert)

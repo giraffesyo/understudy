@@ -128,6 +128,7 @@ type Task struct {
 	Environment    []any                // environment entries, enclosing blocks' and role's first
 	Timeout        any                  // timeout keyword, raw: an int or a template (nil = inherit)
 	Notify         []string
+	Listen         []string // a handler's listen topics
 	Tags           []string
 	NoLog          bool
 	Delegate       string

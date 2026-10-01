@@ -83,11 +83,16 @@ func ResolveRoles(plays []*Play, baseDir string, rolesPath []string) error {
 		for _, ref := range play.Roles {
 			play.PlayRoleNames = append(play.PlayRoleNames, ref.Name)
 		}
+		// The roles' handlers come before the play's own
+		// (compile_roles_handlers() + handlers).
+		own := play.Handlers
+		play.Handlers = nil
 		for _, ref := range play.Roles {
 			if err := resolveRoleRef(play, ref, baseDir, rolesPath, seen, &roleTasks, &notes, 0); err != nil {
 				return err
 			}
 		}
+		play.Handlers = append(play.Handlers, own...)
 		play.LoadNotes = append(notes, play.LoadNotes...)
 		play.Tasks = append(roleTasks, play.Tasks...)
 		play.Roles = nil // consumed

@@ -1,0 +1,11 @@
+---
+# A handler notifying a handler that does not exist fails the run too.
+- hosts: all
+  gather_facts: false
+  tasks:
+    - command: echo hi
+      notify: real
+  handlers:
+    - name: real
+      command: echo h
+      notify: nope

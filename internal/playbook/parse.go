@@ -1128,7 +1128,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			if !handler {
 				return nil, errAt(file, val, "'listen' is only valid on handlers")
 			}
-			task.Notify = nil // listen topics resolved at flush time (M5)
+			task.Listen = decodeStringList(val)
 		case "tags":
 			task.Tags = decodeStringList(val)
 		case "no_log":

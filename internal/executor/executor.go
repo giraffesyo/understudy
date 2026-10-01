@@ -133,14 +133,16 @@ type Runner struct {
 	stats          map[string]*HostStats
 	order          []string
 	failed         map[string]bool
-	notified       map[string]map[string]bool // handler name -> hosts to run on
-	notifyOrder    map[string][]string        // host -> notifications saved, in order
-	inHandlers     bool                       // a handler flush is running
-	blockFailed    map[string]map[int]bool    // host -> block ID -> failure caught by rescue
-	nextBlockID    int                        // fresh IDs for blocks of included files
-	failedIn       map[string]map[int]bool    // host -> blocks it was inside when it failed hard
-	ended          map[string]bool            // meta: end_host (per play)
-	runOnceHosts   []string                   // hosts a running run_once task fans out to
+	notified       map[*playbook.Task]map[string]bool // handler -> hosts to run on
+	notifyOrder    map[string][]string                // host -> notifications saved, in order
+	handlerNames   map[*playbook.Task]*string         // templated handler names (nil: unusable)
+	fatalErr       error                              // an error raised processing results: ends the run
+	inHandlers     bool                               // a handler flush is running
+	blockFailed    map[string]map[int]bool            // host -> block ID -> failure caught by rescue
+	nextBlockID    int                                // fresh IDs for blocks of included files
+	failedIn       map[string]map[int]bool            // host -> blocks it was inside when it failed hard
+	ended          map[string]bool                    // meta: end_host (per play)
+	runOnceHosts   []string                           // hosts a running run_once task fans out to
 	curPlay        *playbook.Play
 	warned         map[string]bool
 	freeSem        *turnstile   // free strategy: forks shared fairly across hosts
@@ -281,6 +283,9 @@ func (r *Runner) RunPlaybooks(ctx context.Context, books [][]*playbook.Play) (in
 		for _, play := range plays {
 			if err := r.runPlay(ctx, play); err != nil {
 				return 1, err
+			}
+			if r.fatalErr != nil {
+				return 1, r.fatalErr
 			}
 			if r.quitRequested() {
 				return r.quitCode, nil
@@ -786,6 +791,12 @@ func (r *Runner) runTaskAcrossHosts(ctx context.Context, play *playbook.Play, ta
 				r.freeSem.acquire(host)
 				defer r.freeSem.release()
 			}
+			r.mu.Lock()
+			stopped := r.fatalErr != nil
+			r.mu.Unlock()
+			if stopped {
+				return nil // a result raised: no host starts after it
+			}
 			r.runTaskOnHost(gctx, play, task, host, playHosts)
 			return nil
 		})
@@ -921,78 +932,208 @@ func (r *Runner) catchInRescue(host string, task *playbook.Task) bool {
 func (r *Runner) resetNotified() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.notified = map[string]map[string]bool{}
+	r.notified = map[*playbook.Task]map[string]bool{}
 	r.notifyOrder = map[string][]string{}
+	r.handlerNames = nil
 }
 
-// notifyHandlers marks handlers notified by one host (called on change).
-// announce counts the host's own results that notified them (0 for a
-// run_once fan-out): outside a flush each result's notifications are
-// saved ("Notification for handler ... has been saved." at -vv); during
-// one, a handler that notifies another queues it at once
-// (v2_playbook_on_notify).
-func (r *Runner) notifyHandlers(host string, names []string, announce int) {
+// notifyHandlers saves one host's notifications (called on change): each
+// of lists is one result's notify list (a loop's items that ran each
+// carry theirs), announced ("Notification for handler ... has been
+// saved." at -vv) when announce is set (not for a run_once fan-out).
+// During a flush, a handler that notifies others queues them at once
+// (v2_playbook_on_notify). A notification no handler answers, by name or
+// listen topic, ends the run with ansible-core's error; it reports false.
+func (r *Runner) notifyHandlers(host string, lists [][]string, announce bool) bool {
 	r.mu.Lock()
 	inHandlers := r.inHandlers
-	var queued []string
-	for _, name := range names {
-		if r.notified[name] == nil {
-			r.notified[name] = map[string]bool{}
-		}
-		fresh := !r.notified[name][host]
-		r.notified[name][host] = true
-		if inHandlers {
-			if fresh {
-				queued = append(queued, name)
-			}
-			continue
-		}
-		if !slices.Contains(r.notifyOrder[host], name) {
-			r.notifyOrder[host] = append(r.notifyOrder[host], name)
-		}
-	}
 	r.mu.Unlock()
-	for range announce {
+	for _, names := range lists {
 		for _, name := range names {
-			r.mu.Lock()
-			h := r.handlerNamed(name)
-			r.mu.Unlock()
-			if h == nil {
+			matches := r.searchHandlers(name)
+			if len(matches) == 0 {
+				r.fatal(fmt.Errorf("The requested handler '%s' was not found in either the main handlers list nor in the listening handlers list", name))
+				return false
+			}
+			if inHandlers {
+				for _, h := range matches {
+					if r.notifyHost(h, host) {
+						r.forwardNotified(h, host)
+					}
+				}
 				continue
 			}
-			if !inHandlers {
+			r.mu.Lock()
+			if !slices.Contains(r.notifyOrder[host], name) {
+				r.notifyOrder[host] = append(r.notifyOrder[host], name)
+			}
+			r.mu.Unlock()
+			if announce {
 				r.displayVerbose(2, fmt.Sprintf("Notification for handler %s has been saved.", name))
-			} else if slices.Contains(queued, name) {
-				ForwardHandlerNotified(r.Callback, h, host)
-				queued = slices.DeleteFunc(queued, func(q string) bool { return q == name })
 			}
 		}
 	}
+	return true
 }
 
-// handlerNamed is the current play's handler a notification names.
-func (r *Runner) handlerNamed(name string) *playbook.Task {
-	if r.curPlay == nil {
-		return nil
+// forwardNotified is v2_playbook_on_notify, naming the handler as its
+// name was templated.
+func (r *Runner) forwardNotified(h *playbook.Task, host string) {
+	if name, ok := r.handlerName(h); ok && name != h.Name {
+		c := *h
+		c.Name = name
+		h = &c
 	}
-	for _, h := range r.curPlay.Handlers {
-		if h.Name == name {
-			return h
+	ForwardHandlerNotified(r.Callback, h, host)
+}
+
+// notifyHost marks handler h to run on host, reporting whether that is
+// new (Handler.notify_host).
+func (r *Runner) notifyHost(h *playbook.Task, host string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.notified[h] == nil {
+		r.notified[h] = map[string]bool{}
+	}
+	if r.notified[h][host] {
+		return false
+	}
+	r.notified[h][host] = true
+	return true
+}
+
+// fatal ends the run at once with err (an AnsibleError raised while
+// processing results): no recap, exit 1.
+func (r *Runner) fatal(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fatalErr == nil {
+		r.fatalErr = err
+	}
+	r.aborted, r.playEnded = true, true
+}
+
+// searchHandlers is search_handlers_by_notification: the play's handlers
+// are searched block by block from the last loaded one; a handler whose
+// (templated) name, or role-qualified name, is the notification answers
+// alone, else every handler listening to it does (one per name).
+func (r *Runner) searchHandlers(notification string) []*playbook.Task {
+	r.mu.Lock()
+	play := r.curPlay
+	var handlers []*playbook.Task
+	if play != nil {
+		handlers = handlerSearchOrder(play.Handlers)
+	}
+	r.mu.Unlock()
+	var listening []*playbook.Task
+	seen := map[string]bool{}
+	for _, h := range handlers {
+		name, ok := r.handlerName(h)
+		if !ok {
+			continue
+		}
+		if name != "" && (notification == name || (h.RoleName != "" && notification == h.RoleName+" : "+name)) {
+			return []*playbook.Task{h}
 		}
 	}
-	return nil
+	for _, h := range handlers {
+		if !slices.Contains(h.Listen, notification) {
+			continue
+		}
+		name, _ := r.handlerName(h)
+		if name != "" && seen[name] {
+			continue
+		}
+		seen[name] = true
+		listening = append(listening, h)
+	}
+	return listening
+}
+
+// handlerSearchOrder lists handlers block by block, the last block first
+// (the last handler loaded with a name wins): consecutive handlers from
+// one file and top-level block form a block.
+func handlerSearchOrder(handlers []*playbook.Task) []*playbook.Task {
+	type group struct{ list []*playbook.Task }
+	var groups []*group
+	key := func(h *playbook.Task) string {
+		k := h.Src.File
+		if len(h.Blocks) > 0 {
+			k += fmt.Sprintf("#%d", h.Blocks[0].ID)
+		}
+		return k
+	}
+	last := ""
+	for _, h := range handlers {
+		if k := key(h); len(groups) == 0 || k != last {
+			groups = append(groups, &group{})
+			last = k
+		}
+		g := groups[len(groups)-1]
+		g.list = append(g.list, h)
+	}
+	var out []*playbook.Task
+	for i := len(groups) - 1; i >= 0; i-- {
+		out = append(out, groups[i].list...)
+	}
+	return out
+}
+
+// handlerName is a handler's name, templated once with the play's
+// variables; false when it cannot be (the handler is then unusable by
+// name, as ansible-core warns when it has no listen topics either).
+func (r *Runner) handlerName(h *playbook.Task) (string, bool) {
+	if !strings.Contains(h.Name, "{{") && !strings.Contains(h.Name, "{%") {
+		return h.Name, true
+	}
+	r.mu.Lock()
+	if r.handlerNames == nil {
+		r.handlerNames = map[*playbook.Task]*string{}
+	}
+	cached, ok := r.handlerNames[h]
+	r.mu.Unlock()
+	if ok {
+		if cached == nil {
+			return "", false
+		}
+		return *cached, true
+	}
+	ctx := r.Store.NewContext("", template.Position{File: h.Src.File, Line: h.Src.Line, Col: h.Src.Col})
+	v, err := ctx.TemplateString(h.Name)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err != nil {
+		r.handlerNames[h] = nil
+		if len(h.Listen) == 0 {
+			msg := err.Error()
+			if cause, ok := template.Cause(err); ok {
+				msg = cause
+			}
+			r.mu.Unlock()
+			r.warn(fmt.Sprintf("Handler '%s' is unusable because it has no listen topics and the name could not be templated "+
+				"(host-specific variables are not supported in handler names). The error: %s", h.Name, msg))
+			r.mu.Lock()
+		}
+		return "", false
+	}
+	name := fmt.Sprint(v)
+	r.handlerNames[h] = &name
+	return name, true
 }
 
 // announceNotified is flush_handlers expanding a host's saved
-// notifications into its handlers: a NOTIFIED HANDLER line for each.
+// notifications into the handlers they name: a NOTIFIED HANDLER line for
+// each newly notified.
 func (r *Runner) announceNotified(host string) {
 	r.mu.Lock()
 	names := r.notifyOrder[host]
 	delete(r.notifyOrder, host)
 	r.mu.Unlock()
 	for _, name := range names {
-		if h := r.handlerNamed(name); h != nil {
-			ForwardHandlerNotified(r.Callback, h, host)
+		for _, h := range r.searchHandlers(name) {
+			if r.notifyHost(h, host) {
+				r.forwardNotified(h, host)
+			}
 		}
 	}
 }
@@ -1019,10 +1160,12 @@ func (r *Runner) flushHandlers(ctx context.Context, play *playbook.Play, playHos
 		r.mu.Unlock()
 	}()
 	for _, handler := range handlers {
-		key := handler.Name
+		if r.playEnded {
+			return nil
+		}
 		r.mu.Lock()
-		hosts := r.notified[key]
-		delete(r.notified, key)
+		hosts := r.notified[handler]
+		delete(r.notified, handler)
 		r.mu.Unlock()
 		if len(hosts) == 0 {
 			continue
@@ -1046,7 +1189,7 @@ func (r *Runner) flushHandlers(ctx context.Context, play *playbook.Play, playHos
 			// A handler skipped at the step prompt did not run: its hosts
 			// stay notified for the next flush.
 			r.mu.Lock()
-			r.notified[key] = hosts
+			r.notified[handler] = hosts
 			r.mu.Unlock()
 			continue
 		}
@@ -1279,6 +1422,7 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 
 	// Loop: aggregate per-item results Ansible-style.
 	var itemResults []any
+	var notify [][]string
 	anyChanged, anyFailed, allSkipped := false, false, true
 	for i, item := range items {
 		if i > 0 && lc.pause > 0 {
@@ -1297,6 +1441,9 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 		itemCtx = itemCtx.WithOverlay(lc.vars(i))
 		res := r.runOnce(ctx, play, task, host, itemCtx, item)
 		stop := r.breakWhen(task, itemCtx, res)
+		if !res.Failed {
+			notify = append(notify, res.Notify...)
+		}
 		// Per-item results carry the loop variable(s), as Ansible's do.
 		if res.Extra == nil {
 			res.Extra = map[string]any{}
@@ -1315,7 +1462,9 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 	if itemResults == nil {
 		itemResults = []any{}
 	}
-	return loopResult(itemResults, anyChanged, anyFailed, allSkipped), itemResults, task
+	agg := loopResult(itemResults, anyChanged, anyFailed, allSkipped)
+	agg.Notify = notify
+	return agg, itemResults, task
 }
 
 // loopResult is a loop's aggregate result (build_loop_result): the
@@ -1546,7 +1695,25 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 	}
 	res.DelegatedTo = delegated
 	res.ShowDiff = r.effectiveDiff(play, task)
+	if len(task.Notify) > 0 && !res.Failed && !res.Skipped {
+		res.Notify = [][]string{templateNotify(task, vctx)}
+	}
 	return res
+}
+
+// templateNotify is the task's notify list templated for one run (a loop
+// item's notify may name its item).
+func templateNotify(task *playbook.Task, vctx *vars.Context) []string {
+	out := make([]string, 0, len(task.Notify))
+	for _, n := range task.Notify {
+		if strings.Contains(n, "{{") || strings.Contains(n, "{%") {
+			if v, err := vctx.TemplateString(n); err == nil {
+				n = fmt.Sprint(v)
+			}
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 // applyChangedFailedWhen lets changed_when / failed_when override the
@@ -2198,32 +2365,14 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 		p := task.KeywordPos["register"]
 		r.warnReserved([]template.KeyOrigin{{Name: task.Register, File: p.File, Line: p.Line, Col: p.Col}})
 	}
-	if res.Changed && !res.Failed && !res.Skipped && len(task.Notify) > 0 {
+	if res.Changed && !res.Failed && !res.Skipped && len(res.Notify) > 0 {
 		// Notifications are saved before the result prints, once per
-		// result that carries them: a loop's item results that ran.
-		times := 1
-		if loopItems != nil {
-			times = 0
-			list, _ := res.Extra["results"].([]any)
-			for _, it := range list {
-				var skipped any
-				switch m := it.(type) {
-				case *yaml.OMap:
-					skipped = m.Get("skipped")
-				case map[string]any:
-					skipped = m["skipped"]
-				}
-				if skipped != true {
-					times++
-				}
-			}
-		}
+		// result that carries them (its notify templated for it): a
+		// loop's item results that ran.
 		for _, h := range r.fanOut(host, task) {
-			n := 0
-			if h == host {
-				n = times
+			if !r.notifyHandlers(h, res.Notify, h == host) {
+				return // the run ends here, before the result prints
 			}
-			r.notifyHandlers(h, task.Notify, n)
 		}
 	}
 	if loopItems == nil {
