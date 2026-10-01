@@ -101,6 +101,9 @@ type Task struct {
 	LoopLabel      any            // loop_control.label (raw template); nil = show the item
 	LoopExtended   any            // loop_control.extended as written (nil = unset)
 	LoopAllItems   any            // loop_control.extended_allitems as written (nil = true)
+	LoopPause      any            // loop_control.pause as written (nil = no pause)
+	BreakWhen      []string       // loop_control.break_when conditions
+	BreakWhenPos   map[string]Pos // source position of each break_when condition
 	Async          int            // async timeout seconds (0 = synchronous)
 	Poll           int            // poll interval; -1 = unset, 0 = fire-and-forget
 	CheckMode      *bool          // per-task check_mode override (nil = inherit run)

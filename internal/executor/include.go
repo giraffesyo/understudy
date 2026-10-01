@@ -7,6 +7,7 @@ import (
 	"maps"
 	"path/filepath"
 	"reflect"
+	"time"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/playbook"
@@ -80,9 +81,10 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 		var lc *loopControl
 		if isLoop {
 			if lc, err = newLoopControl(task, base, items); err != nil {
-				r.recordFailure(host, task, agentproto.Fail("%v", err))
+				r.recordFailure(host, task, loopControlFailure(err))
 				continue
 			}
+			r.checkLoopControl(task, base)
 		} else {
 			items = []any{nil}
 		}
@@ -90,6 +92,9 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 		var lastSkip *agentproto.Result
 		var itemResults []any
 		for i, item := range items {
+			if isLoop && i > 0 && lc.pause > 0 {
+				time.Sleep(lc.pause)
+			}
 			ictx := base
 			var loopVars map[string]any
 			if isLoop {
@@ -98,14 +103,18 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 			}
 			skip, err := whenSkip(ictx, task.When, task.WhenPos)
 			if err != nil {
-				r.record(host, task, agentproto.Fail("The conditional check failed: %v", err), nil)
+				r.record(host, task, whenFailure(err), nil)
 				continue
 			}
 			if skip != nil {
 				if isLoop {
+					stop := r.breakWhen(task, ictx, skip)
 					lc.annotate(skip.Extra, i)
 					r.Callback.HostResult(host, task, shown(task, skip), false, lc.label(ictx, i))
 					itemResults = append(itemResults, orderedResult(task, task.Module, skip.ToVars()))
+					if stop {
+						break
+					}
 				} else {
 					lastSkip = skip
 				}
@@ -131,8 +140,15 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 				u.item, u.index, u.label = item, i, lc.label(ictx, i)
 				// An inclusion is an ok result for its item.
 				ok := &agentproto.Result{Extra: map[string]any{}}
+				stop := r.breakWhen(task, ictx, ok)
 				lc.annotate(ok.Extra, i)
 				itemResults = append(itemResults, orderedResult(task, task.Module, ok.ToVars()))
+				addUnit(u, host)
+				included++
+				if stop {
+					break
+				}
+				continue
 			}
 			addUnit(u, host)
 			included++

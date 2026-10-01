@@ -1263,13 +1263,17 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 
 	lc, err := newLoopControl(task, base, items)
 	if err != nil {
-		return agentproto.Fail("%v", err), nil, task
+		return loopControlFailure(err), nil, task
 	}
+	r.checkLoopControl(task, base)
 
 	// Loop: aggregate per-item results Ansible-style.
 	var itemResults []any
 	anyChanged, anyFailed, allSkipped := false, false, true
 	for i, item := range items {
+		if i > 0 && lc.pause > 0 {
+			time.Sleep(lc.pause)
+		}
 		// Rebuild the per-item context from the store each iteration so a
 		// set_fact from an earlier item is visible to later ones (Ansible's
 		// accumulate-in-a-loop pattern).
@@ -1282,6 +1286,7 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 		}
 		itemCtx = itemCtx.WithOverlay(lc.vars(i))
 		res := r.runOnce(ctx, play, task, host, itemCtx, item)
+		stop := r.breakWhen(task, itemCtx, res)
 		// Per-item results carry the loop variable(s), as Ansible's do.
 		if res.Extra == nil {
 			res.Extra = map[string]any{}
@@ -1293,6 +1298,9 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 		anyChanged = anyChanged || res.Changed
 		anyFailed = anyFailed || res.Failed
 		allSkipped = allSkipped && res.Skipped
+		if stop {
+			break
+		}
 	}
 	if itemResults == nil {
 		itemResults = []any{}
@@ -1368,7 +1376,7 @@ func (r *Runner) resolveLoop(task *playbook.Task, vctx *vars.Context) ([]any, bo
 func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, vctx *vars.Context, item any) *agentproto.Result {
 	// when: gate.
 	if skip, err := whenSkip(vctx, task.When, task.WhenPos); err != nil {
-		return agentproto.Fail("The conditional check failed: %v", err)
+		return whenFailure(err)
 	} else if skip != nil {
 		return skip
 	}
@@ -2481,7 +2489,7 @@ func whenSkip(vctx *vars.Context, when []string, pos map[string]template.Positio
 		}
 		ok, err := vctx.At(pos[cond]).EvalWhen([]string{cond})
 		if err != nil {
-			return nil, err
+			return nil, &condError{pos: pos[cond], err: err}
 		}
 		if !ok {
 			var failed any = cond
@@ -2495,6 +2503,37 @@ func whenSkip(vctx *vars.Context, when []string, pos map[string]template.Positio
 		}
 	}
 	return nil, nil
+}
+
+// condError is a conditional that failed to evaluate, at its origin.
+type condError struct {
+	pos template.Position
+	err error
+}
+
+func (e *condError) Error() string { return e.err.Error() }
+
+// conditionalMessage is the message of a conditional's evaluation error.
+func conditionalMessage(err error) string {
+	if cause, ok := template.Cause(err); ok {
+		return "Error while evaluating conditional: " + cause
+	}
+	return err.Error()
+}
+
+// whenFailure is the task result for a when: condition that failed to
+// evaluate: the task's error caused by the expression's.
+func whenFailure(err error) *agentproto.Result {
+	ce, ok := err.(*condError)
+	if !ok {
+		return agentproto.Fail("The conditional check failed: %v", err)
+	}
+	inner := "A 'when' expression failed: " + conditionalMessage(ce.err)
+	res := agentproto.Fail("Task failed: %s", inner)
+	res.Origin = "verbatim"
+	res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: inner,
+		InnerFile: ce.pos.File, InnerLine: ce.pos.Line, InnerCol: ce.pos.Col}
+	return res
 }
 
 // isUnreachable reports whether a host has an unreachable result.

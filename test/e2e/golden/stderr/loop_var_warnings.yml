@@ -1,0 +1,42 @@
+---
+# A loop or index variable that shadows a variable the task already sees,
+# is reserved, or is named twice is warned about, once per distinct
+# warning (the default loop_var has no origin).
+- hosts: all
+  gather_facts: false
+  vars:
+    item: preset
+    x: 1
+  tasks:
+    - debug: msg="{{ item }}"
+      loop: [1, 2]
+    - debug: msg="{{ item }}"
+      loop: [1]
+    - debug: msg="{{ x }}"
+      loop: [1, 2]
+      loop_control:
+        loop_var: x
+    - debug: msg=hi
+      loop: [1]
+      loop_control:
+        loop_var: inventory_hostname
+    - debug: msg=hi
+      loop: [1]
+      loop_control:
+        loop_var: ansible_loop
+    - debug: msg=hi
+      loop: [1]
+      loop_control:
+        loop_var: ansible_user
+    - debug: msg="{{ i }}"
+      loop: [1, 2]
+      loop_control:
+        loop_var: i
+        index_var: i
+    - debug: msg=hi
+      loop: [1]
+      loop_control:
+        loop_var: j
+        index_var: x
+    - include_tasks: ../includes/inc_a.yml
+      loop: [1]

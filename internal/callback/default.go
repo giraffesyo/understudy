@@ -239,6 +239,12 @@ func (d *Default) LoopResult(host string, task *playbook.Task, res *agentproto.R
 	defer d.mu.Unlock()
 	switch {
 	case res.Failed:
+		if task.Module == "debug" {
+			// _clean_results keeps only a debug result's msg, dropping
+			// the loop's results: the summary prints as a task failure.
+			d.display(cRed, fmt.Sprintf("fatal: [%s]: FAILED! => %s", host,
+				template.PyJSON(map[string]any{"msg": res.Msg}, d.indent(false), true, false)))
+		}
 		if ignored {
 			d.display(cCyan, "...ignoring")
 		}
@@ -452,19 +458,25 @@ func (d *Default) taskError(task *playbook.Task, res *agentproto.Result) {
 		d.taskErrorChain(task, ec)
 		return
 	}
-	switch res.Origin {
-	case "verbatim":
+	file, line, col := task.Src.File, task.Src.Line, task.Src.Col
+	switch {
+	case res.ErrorText != "":
+		fmt.Fprintf(&b, "[ERROR]: %s\n", res.ErrorText)
+		if res.ErrorFile != "" {
+			file, line, col = res.ErrorFile, res.ErrorLine, res.ErrorCol
+		}
+	case res.Origin == "verbatim":
 		fmt.Fprintf(&b, "[ERROR]: %s\n", res.Msg)
-	case "action":
+	case res.Origin == "action":
 		fmt.Fprintf(&b, "[ERROR]: Task failed: Action failed: %s\n", res.ErrorMessage())
-	case "raised":
+	case res.Origin == "raised":
 		fmt.Fprintf(&b, "[ERROR]: Task failed: %s\n", res.ErrorMessage())
 	default:
 		fmt.Fprintf(&b, "[ERROR]: Task failed: Module failed: %s\n", res.ErrorMessage())
 	}
-	if task.Src.File != "" && task.Src.Line > 0 {
-		fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n", task.Src.File, task.Src.Line, task.Src.Col)
-		b.WriteString(d.excerpt(task.Src.File, task.Src.Line, task.Src.Col))
+	if file != "" && line > 0 {
+		fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n", file, line, col)
+		b.WriteString(d.excerpt(file, line, col))
 	}
 	// Display.display turns Windows newlines into Unix ones.
 	block := strings.ReplaceAll(b.String(), "\r\n", "\n")
@@ -491,9 +503,13 @@ func (d *Default) taskErrorChain(task *playbook.Task, ec *agentproto.ErrorChain)
 		}
 	}
 	b.WriteString("[ERROR]: " + brief + "\n\n" + ec.Outer + "\n")
-	if task.Src.File != "" && task.Src.Line > 0 {
-		fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n", task.Src.File, task.Src.Line, task.Src.Col)
-		b.WriteString(strings.TrimRight(d.excerpt(task.Src.File, task.Src.Line, task.Src.Col), "\n") + "\n")
+	file, line, col := task.Src.File, task.Src.Line, task.Src.Col
+	if ec.OuterFile != "" {
+		file, line, col = ec.OuterFile, ec.OuterLine, ec.OuterCol
+	}
+	if file != "" && line > 0 {
+		fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n", file, line, col)
+		b.WriteString(strings.TrimRight(d.excerpt(file, line, col), "\n") + "\n")
 	}
 	if ec.Mid != "" {
 		b.WriteString("\n<<< caused by >>>\n\n" + ec.Mid + "\n")

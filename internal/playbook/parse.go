@@ -984,7 +984,17 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 				task.LoopLabel = label
 			}
 			if pause, ok := m["pause"]; ok {
-				_ = pause // accepted; understudy does not pace loop items
+				task.LoopPause = pause
+			}
+			if bw := val.MapGet("break_when"); bw != nil && !bw.IsNull() {
+				task.BreakWhen, task.BreakWhenPos = decodeExprList(bw), exprPositions(bw, file)
+			}
+			// loop_control's own fields are origins of their errors
+			// and warnings.
+			for _, k := range []string{"loop_var", "index_var", "pause"} {
+				if n := val.MapGet(k); n != nil {
+					task.KeywordPos["loop_control."+k] = Pos{File: file, Line: n.Line, Col: n.Column}
+				}
 			}
 			if v, ok := m["extended"]; ok {
 				task.LoopExtended = v
