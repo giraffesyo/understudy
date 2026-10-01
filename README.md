@@ -504,11 +504,24 @@ than silently diverging. Known boundaries:
   A redo after `update_task` on a task with `register` ends the run as
   ansible-core 2.21's crashing worker does (`A worker was found in a dead
   state`, exit 1), without the Python traceback it prints.
-- **`dig` lookup**: community.general's `dig` is built on dnspython's
-  resolver and record presentation; understudy's covers A, AAAA, CNAME,
-  MX, NS, TXT, PTR and SRV on Go's resolver and is not yet byte-compared
-  with it (its options, dict results and other record types are not
-  ported).
+- **`dig` lookup**: community.general's `dig` runs on a port of the
+  dnspython 2.8 it is built on (`internal/dnspy`): its stub resolver
+  (`/etc/resolv.conf` nameservers, search list or the host's domain,
+  `ndots`, `timeout`, `rotate`; EDNS with DO; UDP with the TCP retry on
+  truncation; per-server timeouts, backoff and the 5 second lifetime;
+  SERVFAIL retries; CNAME chains) and the presentation of every record
+  type dnspython implements (others in the generic `\# len hex` form).
+  The plugin's options as keywords and as terms (`qtype`, `flat=0`
+  dicts with each type's fields, `retry_servfail`, `fail_on_error`,
+  `real_empty`, `tcp`, `port`, `class`, `@server`, `name/TYPE`, PTR
+  reversal) and its NXDOMAIN, NoAnswer, NoNameservers, timeout and
+  option-validation errors read as ansible-core's, checked against the
+  real plugin with a test DNS server (`golden/dig`). Not modeled:
+  dnspython's DNS-over-HTTPS nameservers, and full IDNA 2008/UTS 46
+  mapping of non-ASCII names (they are lowercased and punycoded). The
+  lookup machinery's `wantlist` and `errors` arguments apply to every
+  lookup, and text holding undecodable bytes is displayed with each run
+  of them as `?`, after ansible-core's warning.
 - **Output that depends on the target's Python**: understudy never runs
   Python, but some of ansible's output comes from the Python that runs its
   modules. understudy identifies that interpreter as ansible would (the
@@ -640,11 +653,16 @@ than silently diverging. Known boundaries:
   match iteration, replacement templates and `re.error` messages, checked
   against vectors CPython generates. Shell patterns (`fileglob`, `find`,
   `unarchive`, host patterns, `setup`'s `filter`) translate as
-  `fnmatch.translate` does. Not modeled: `\N{...}` knows the Latin,
-  Greek, punctuation, symbol, CJK and Hangul names but not all of
-  Unicode's; bytes patterns (`wait_for`'s `search_regex`, inventory
-  ignore patterns) run as `re.ASCII` str patterns over the bytes, which
-  accepts the `\u`/`\U`/`\N` escapes a bytes pattern rejects.
+  `fnmatch.translate` does. `\N{...}` looks up every name, alias and
+  algorithmic name (Hangul syllables, CJK unified and Tangut ideographs)
+  Python 3.14's `unicodedata.lookup` knows, as it does (case-insensitive;
+  named sequences rejected), from a table generated from it
+  (`testdata/gen_tables.py`). Bytes patterns (`wait_for`'s
+  `search_regex`, inventory ignore patterns) parse as `re` parses bytes:
+  no `\u`/`\U`/`\N` escapes, no `(?u)`, `(?L)` and `LOCALE` allowed,
+  ASCII-only error messages, ASCII `\w`/`\d`/`\s`/case folding. Not
+  modeled: `LOCALE` uses the C library's locale for bytes 128-255; here
+  it means ASCII, as in the C and UTF-8 locales on Linux.
 - **Documented divergences**: a task that hits
   its `timeout` has the processes its module started killed — each command
   a module runs leads its own process group, so its background jobs and

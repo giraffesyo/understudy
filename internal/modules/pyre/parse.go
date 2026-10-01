@@ -214,16 +214,18 @@ func (p *subPattern) getwidth() width {
 	return *p.width
 }
 
-// tokenizer is _parser.Tokenizer over code points.
+// tokenizer is _parser.Tokenizer over code points (a bytes pattern's
+// bytes decoded as latin-1, as Tokenizer decodes them).
 type tokenizer struct {
 	str   []rune
 	index int
 	next  string
 	has   bool // next is not None
+	bytes bool // not istext: a bytes pattern
 }
 
-func newTokenizer(s []rune) *tokenizer {
-	t := &tokenizer{str: s}
+func newTokenizer(s []rune, bytes bool) *tokenizer {
+	t := &tokenizer{str: s, bytes: bytes}
 	t.advance()
 	return t
 }
@@ -312,11 +314,38 @@ func (t *tokenizer) seek(index int) {
 	t.advance()
 }
 
+// error is Tokenizer.error: a bytes pattern's messages are ASCII, other
+// characters backslash-escaped.
 func (t *tokenizer) error(msg string, offset int) *Error {
+	if t.bytes {
+		msg = backslashReplace(msg)
+	}
 	return &Error{Msg: msg, pattern: t.str, Pos: t.tell() - offset}
 }
 
+// backslashReplace is s.encode('ascii', 'backslashreplace').
+func backslashReplace(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r < 0x80:
+			b.WriteRune(r)
+		case r <= 0xff:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case r <= 0xffff:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			fmt.Fprintf(&b, `\U%08x`, r)
+		}
+	}
+	return b.String()
+}
+
 func (t *tokenizer) checkgroupname(name string, offset int) {
+	if t.bytes && strings.IndexFunc(name, func(r rune) bool { return r >= 0x80 }) >= 0 {
+		// %a: the name's ascii() (backslashreplace of its repr).
+		panic(t.error("bad character in group name "+pyRepr(name), len([]rune(name))+offset))
+	}
 	if !isIdentifier(name) {
 		panic(t.error("bad character in group name "+pyRepr(name), len([]rune(name))+offset))
 	}
@@ -383,6 +412,9 @@ type escapeCode struct {
 
 func commonEscape(src *tokenizer, escape string) (escapeCode, bool) {
 	c := escape[1]
+	if src.bytes && (c == 'u' || c == 'U' || c == 'N') {
+		return escapeCode{}, false // a bytes pattern's \u, \U and \N: bad escapes
+	}
 	switch c {
 	case 'x':
 		escape += src.getwhile(2, hexdigits)
@@ -987,8 +1019,11 @@ func parseFlags(src *tokenizer, state *parseState, char string) (add, del Flag, 
 	if char != "-" {
 		for {
 			flag := flagChars[char[0]]
-			if char == "L" {
+			if char == "L" && !src.bytes {
 				panic(src.error("bad inline flags: cannot use 'L' flag with a str pattern", 0))
+			}
+			if char == "u" && src.bytes {
+				panic(src.error("bad inline flags: cannot use 'u' flag with a bytes pattern", 0))
 			}
 			add |= flag
 			if flag&typeFlags != 0 && add&typeFlags != flag {
@@ -1058,7 +1093,7 @@ func parseFlags(src *tokenizer, state *parseState, char string) (add, del Flag, 
 }
 
 // parse is _parser.parse for a str pattern.
-func parse(pattern []rune, flags Flag) (p *subPattern, err error) {
+func parse(pattern []rune, flags Flag, bytes bool) (p *subPattern, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			e, ok := r.(*Error)
@@ -1068,7 +1103,7 @@ func parse(pattern []rune, flags Flag) (p *subPattern, err error) {
 			p, err = nil, e
 		}
 	}()
-	src := newTokenizer(pattern)
+	src := newTokenizer(pattern, bytes)
 	state := &parseState{
 		flags:            flags,
 		groupdict:        map[string]int{},
@@ -1080,12 +1115,17 @@ func parse(pattern []rune, flags Flag) (p *subPattern, err error) {
 	p = parseSub(src, state, flags&VERBOSE != 0, 0)
 	// fix_flags
 	f := state.flags
-	if f&LOCALE != 0 {
+	switch {
+	case bytes && f&UNICODE != 0:
+		return nil, &Error{Msg: "cannot use UNICODE flag with a bytes pattern", Pos: -1, Exc: "ValueError"}
+	case bytes && f&LOCALE != 0 && f&ASCII != 0:
+		return nil, &Error{Msg: "ASCII and LOCALE flags are incompatible", Pos: -1, Exc: "ValueError"}
+	case bytes:
+	case f&LOCALE != 0:
 		return nil, &Error{Msg: "cannot use LOCALE flag with a str pattern", Pos: -1, Exc: "ValueError"}
-	}
-	if f&ASCII == 0 {
+	case f&ASCII == 0:
 		f |= UNICODE
-	} else if f&UNICODE != 0 {
+	case f&UNICODE != 0:
 		return nil, &Error{Msg: "ASCII and UNICODE flags are incompatible", Pos: -1, Exc: "ValueError"}
 	}
 	state.flags = f

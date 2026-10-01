@@ -85,6 +85,15 @@ func (ec *EvalCtx) storableIn(v any, active map[cycleID]bool) (any, bool, error)
 			ec.engine.Warning(pos, "Type 'Markup' is unsupported in variable storage, converting to 'str'.")
 		}
 		return string(t), true, nil
+	case IntEnum:
+		if ec.engine.Warning != nil {
+			pos := ec.pos
+			if pos.ContainerFile != "" {
+				pos = Position{File: pos.ContainerFile, Line: pos.ContainerLine, Col: pos.ContainerCol}
+			}
+			ec.engine.Warning(pos, "Type '"+t.Class+"' is unsupported in variable storage, converting to 'int'.")
+		}
+		return int(t.Value), true, nil
 	case pyDatetime:
 		// Stored, it carries tags.
 		if !t.Tagged {

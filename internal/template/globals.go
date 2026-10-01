@@ -1,6 +1,7 @@
 package template
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -115,9 +116,45 @@ func registerGlobals(e *Engine) {
 			if ec.engine.Lookup == nil {
 				return nil, fmt.Errorf("lookup plugin %q is not available in this context", name)
 			}
+			// wantlist and errors are the lookup machinery's, not the
+			// plugin's.
+			wantList := wantList
+			errorsMode := "strict"
+			if _, ok := kwargs["wantlist"]; ok || kwargs["errors"] != nil {
+				kw := make(map[string]any, len(kwargs))
+				for k, v := range kwargs {
+					kw[k] = v
+				}
+				if v, ok := kw["wantlist"]; ok {
+					wantList = wantList || truthy(v)
+					delete(kw, "wantlist")
+				}
+				if v, ok := kw["errors"]; ok {
+					errorsMode = toStr(v)
+					delete(kw, "errors")
+				}
+				kwargs = kw
+			}
 			out, err := ec.engine.Lookup(ec, name, args[1:], kwargs)
 			if err != nil {
-				return nil, err
+				cause := err.Error()
+				var le *LookupError
+				if errors.As(err, &le) {
+					err = ec.lookupPluginError(name, le)
+				}
+				switch errorsMode {
+				case "warn":
+					if ec.engine.Warning != nil {
+						ec.engine.Warning(Position{}, "An error occurred while running the lookup plugin "+pyStrRepr(name)+": "+cause)
+					}
+				case "ignore":
+				default:
+					return nil, err
+				}
+				if wantList {
+					return []any{}, nil
+				}
+				return nil, nil
 			}
 			list, isList := out.([]any)
 			if !isList {

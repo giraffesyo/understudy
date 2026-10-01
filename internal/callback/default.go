@@ -72,7 +72,7 @@ func New(verbosity int) *Default {
 			cols = w - 1
 		}
 	}
-	return &Default{Out: os.Stdout, Err: os.Stderr, Verbosity: verbosity, NoColor: NoColor(), Columns: cols}
+	return &Default{Out: &utf8Display{w: os.Stdout, warn: os.Stderr, once: &nonUTF8Once}, Err: os.Stderr, Verbosity: verbosity, NoColor: NoColor(), Columns: cols}
 }
 
 // NoColor reports whether stdout output goes uncolored: not a terminal, or

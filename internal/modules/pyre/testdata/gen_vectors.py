@@ -145,6 +145,10 @@ MATCH = [
     (r"[\101]", "", ["A"], [r"-"]),
     (r"\101\x41\u0041\U00000041\N{LATIN CAPITAL LETTER A}", "", ["AAAAA"], [r"-"]),
     (r"\N{EM DASH}\N{em dash}", "", ["——"], [r"-"]),
+    (r"\N{LATIN CAPITAL LETTER GHA}\N{nul}\N{byte order mark}\N{TANGUT IDEOGRAPH-17000}\N{cjk unified ideograph-4e00}"
+     r"\N{hangul syllable gagg}\N{KHITAN SMALL SCRIPT CHARACTER-18b00}\N{Space}\N{CJK COMPATIBILITY IDEOGRAPH-F900}",
+     "", ["\u01a2\x00\ufeff\U00017000\u4e00\uac02\U00018b00 \uf900"], [r"-"]),
+    (r"[\N{EM DASH}-\N{HORIZONTAL BAR}\N{TANGUT IDEOGRAPH-18D08}]+", "", ["a\u2014\u2015\U00018d08b"], [r"-"]),
     (r"\0\07\177", "", ["\0\x07\x7f"], [r"-"]),
     (r"\a\f\n\r\t\v\\", "", ["\a\f\n\r\t\v\\"], [r"-"]),
     (r"\d+", "", ["a123b٣٤", "x"], [r"-"]),
@@ -274,7 +278,9 @@ ERRORS = [
     "*", "a**", "a*{2}", "+", "?", "{1}", "(?", "(?P", "(?P<", "(?P<>a)", "(?P<1a>x)", "(?P<a>x)(?P<a>y)",
     "(?P=a)", "(?P<a>(?P=a))", "(", ")", "a)", "(a", "((a)", "[a", "[a-", "[", "[]", "[^]", "[b-a]",
     "[\\d-z]", "[a-\\d]", "\\", "a\\", "\\q", "[\\q]", "\\1", "(a)\\2", "(a\\1)", "\\x", "\\x4", "\\u12",
-    "\\U1234567", "\\U00110000", "\\N", "\\N{", "\\N{}", "\\N{NO SUCH NAME}", "\\400", "[\\400]",
+    "\\U1234567", "\\U00110000", "\\N", "\\N{", "\\N{}", "\\N{NO SUCH NAME}", "\\N{KEYCAP DIGIT ONE}", "[\\N{KEYCAP ASTERISK}]", "\\N{CJK UNIFIED IDEOGRAPH-04E00}",
+    "\\N{CJK UNIFIED IDEOGRAPH-323B0}", "\\N{TANGUT IDEOGRAPH-18800}", "\\N{HANGUL SYLLABLE}", "\\N{HANGUL SYLLABLE KKA}",
+    "\\N{LATIN SMALL LETTER \u00c0}", "\\N{ LATIN SMALL LETTER A}", "\\N{LATIN_SMALL_LETTER_A}", "\\400", "[\\400]",
     "\\8", "[\\8]", "(?<=a+)b", "(?<=a|bc)d", "(?<=a*)b", "(?<!x{1,2})y", "(?<=(?P<a>x)(?P=a))",
     "(?<x)", "(?<", "(?Px)", "(?z)", "(?i", "(?i-", "(?i-:a)", "(?-:a)", "(?--i:a)", "(?ii-i:a)",
     "(?L)a", "(?au)a", "(?a-a:x)", "(?-u:x)", "a(?i)b", "(?i)(?m)a", "a|(?i)b", "(?x)(?i)a",
@@ -293,6 +299,34 @@ TEMPLATE_ERRORS = [
                       r"\9", r"\400", r"\q", "\\", r"\g<a b>", r"\g<99999999999999999999>", r"\00", r"\08",
                       r"\777", r"\1a", r"\g<0>\g<01>", r"\g<n>\g<2>", r"\w", r"\d"]),
     (r"x", [r"\1", r"\g<1>", r"\0", r"\g<0>", r"\\", r"\é"]),
+]
+
+# Bytes patterns: their own escapes, inline flags, flags and messages
+# (cases are latin-1 decoded in the JSON, as the Go API takes them).
+BYTES_ERRORS = [
+    rb"\u0041", rb"[\u0041]", rb"\U00000041", rb"[\U00000041]", rb"\N{EM DASH}", rb"[\N{EM DASH}]", rb"\N",
+    rb"(?u)a", rb"(?au)a", rb"(?La)a", rb"(?aL)a", b"(?P<\xe9>x)", b"(?<\xe9", b"[\xe9-a]", b"(?P<a>x)(?P=\xe9)",
+    b"(?(\xe9)a)", b"(?\xe9)", b"\\q", rb"\x4", rb"a{2,1}", b"\xe9**", b"(?i\xe9)", b"x\n(?P<\xff>y)",
+    rb"(?L)a", rb"(?a)a", rb"a", b"(?i)\xe9",
+]
+
+BYTES_FLAGS = [(rb"a", re.U), (rb"a", re.L | re.A), (rb"a", re.L), (rb"(?L)a", re.A), (rb"(?a)a", re.L),
+               (rb"a", re.A), (rb"(?i)a", re.L)]
+
+BYTES_MATCH = [
+    (rb"\w+", "", [b"caf\xe9 ok", b"\xe9\xc9"], [rb"<\g<0>>"]),
+    (b"(?i)caf\xc9", "", [b"CAF\xc9", b"caf\xe9", b"CAF\xe9"], [rb"-"]),
+    (rb"(?i)[a-z]+", "", [b"AbC\xe9"], [rb"-"]),
+    (rb"[\x80-\xff]+", "", [b"a\x80\xffb"], [rb"[\g<0>]"]),
+    (rb"\d\s\b.", "", [b"1 a", b"\xb2\xa0x"], [rb"-"]),
+    (rb"(\w)\s(\w)", "", [b"a b \xe9 c"], [rb"\2\1", rb"\x41\g<1>\101\n"]),
+    (rb"\x41\101\0", "", [b"AA\x00"], [rb"-"]),
+    (b"\xe9|\\\xe9", "", [b"\xe9"], [rb"-"]),
+    (rb"(?a)\W", "", [b"a\xe9"], [rb"-"]),
+]
+
+BYTES_TEMPLATE_ERRORS = [
+    (rb"(a)(?P<n>b)", [b"\\g<\xe9>", rb"\g<nope>", rb"\u0041", rb"\N{EM DASH}", rb"\3", b"\\\xe9"]),
 ]
 
 SPLIT = [
@@ -415,6 +449,51 @@ def main():
                     except Exception as e:  # noqa: BLE001
                         case["subs"].append({"repl": t, "count": count, "error": exc(e)})
             out["match"].append(case)
+    for pat in BYTES_ERRORS:
+        out["compile"].append({"pattern": pat.decode("latin-1"), "flags": 0, "bytes": True,
+                               "result": compile_case(pat, 0)})
+    for pat, fl in BYTES_FLAGS:
+        out["compile"].append({"pattern": pat.decode("latin-1"), "flags": int(fl), "bytes": True,
+                               "result": compile_case(pat, fl)})
+    for pat, fs, subjects, templates in BYTES_MATCH:
+        fl = flagval(fs)
+        res = compile_case(pat, fl)
+        out["compile"].append({"pattern": pat.decode("latin-1"), "flags": fl, "bytes": True, "result": res})
+        p = re.compile(pat, fl)
+        for b in subjects:
+            s = b.decode("latin-1")
+            def lat(m):
+                return spans(s, m)
+            def dec(x):
+                if isinstance(x, tuple):
+                    return [y.decode("latin-1") for y in x]
+                return x.decode("latin-1")
+            case = {
+                "pattern": pat.decode("latin-1"), "flags": fl, "bytes": True, "subject": s,
+                "search": lat(p.search(b)),
+                "match": lat(p.match(b)),
+                "fullmatch": lat(p.fullmatch(b)),
+                "finditer": [lat(m) for m in p.finditer(b)],
+                "findall": [dec(x) for x in p.findall(b)],
+                "subs": [],
+            }
+            for t in templates:
+                for count in (0, 1):
+                    try:
+                        r, n = p.subn(t, b, count=count)
+                        case["subs"].append({"repl": t.decode("latin-1"), "count": count, "result": r.decode("latin-1"), "n": n})
+                    except Exception as e:  # noqa: BLE001
+                        case["subs"].append({"repl": t.decode("latin-1"), "count": count, "error": exc(e)})
+            out["match"].append(case)
+    for pat, reps in BYTES_TEMPLATE_ERRORS:
+        p = re.compile(pat)
+        for t in reps:
+            entry = {"pattern": pat.decode("latin-1"), "repl": t.decode("latin-1"), "bytes": True}
+            try:
+                entry["result"] = p.sub(t, b"xab").decode("latin-1")
+            except Exception as e:  # noqa: BLE001
+                entry["error"] = exc(e)
+            out["template_errors"].append(entry)
     for pat, reps in TEMPLATE_ERRORS:
         p = re.compile(pat)
         for t in reps:
