@@ -1,32 +1,140 @@
 name: Release
 
-# Pushing a tag like v1.2.3 builds the release tarballs with `make release`
-# (plain Go cross-compilation, version stamped from the tag) and publishes
-# them, with checksums.txt, as a GitHub release.
+# The one release path. On every push to main, release-please opens (or
+# updates) a release PR from the Conventional Commits since the last
+# release: CHANGELOG.md plus the version in .release-please-manifest.json.
+# Merging that PR makes release-please tag vX.Y.Z and create the GitHub
+# release; the `artifacts` job then builds the tarballs from that tag with
+# `make release VERSION=vX.Y.Z` (the tag is stamped into `understudy
+# version`), writes SBOMs and checksums.txt, attests build provenance and
+# the SBOMs, and uploads it all to the release.
+#
+# workflow_dispatch (re)builds and uploads the artifacts of an existing
+# release, e.g. after a failed run.
+
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to (re)build and upload artifacts for (vX.Y.Z)
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
-  release:
+  release-please:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # tags, releases, the release PR's branch
+      pull-requests: write # the release PR
+      issues: write # the release PR's "autorelease" labels
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
-          go-version-file: go.mod
+          egress-policy: audit
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          # A PR opened with the default GITHUB_TOKEN does not trigger CI, so
+          # with required status checks on main the release PR could not be
+          # merged. RELEASE_PLEASE_TOKEN (a fine-grained PAT or GitHub App
+          # token: contents, pull requests and issues read/write on this
+          # repo) makes CI run on it; without it the GITHUB_TOKEN is used.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          # The repository's default branch is canary; releases cut from main.
+          target-branch: main
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  artifacts:
+    needs: release-please
+    if: >-
+      !cancelled() &&
+      (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write # upload release assets
+      id-token: write # sigstore signing of the attestations
+      attestations: write # store the attestations
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - name: check the tag
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::not a release tag: $TAG"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-key: release
+          # Release builds do not restore caches other runs wrote.
+          cache: "false"
       - name: unit tests
         run: make build test
       - name: build tarballs
-        run: make release VERSION="${GITHUB_REF_NAME}"
-      - name: publish
+        run: make release VERSION="$TAG"
+      - name: check the stamped version
+        run: |
+          dir=$(mktemp -d)
+          tar -C "$dir" -xzf "dist/understudy_${TAG}_linux_amd64.tar.gz"
+          got=$("$dir/understudy_${TAG}_linux_amd64/understudy" version)
+          echo "$got"
+          [ "$got" = "understudy $TAG" ] || { echo "::error::version is '$got', want 'understudy $TAG'"; exit 1; }
+      - name: SBOMs and checksums
+        run: make sbom VERSION="$TAG"
+      - name: attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+      # One SBOM attestation per tarball, with that platform's SBOM (one step
+      # per entry of RELEASE_PLATFORMS in the Makefile).
+      - name: attest SBOM (linux/amd64)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/understudy_${{ env.TAG }}_linux_amd64.tar.gz
+          sbom-path: dist/understudy_${{ env.TAG }}_linux_amd64.sbom.cdx.json
+      - name: attest SBOM (linux/arm64)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/understudy_${{ env.TAG }}_linux_arm64.tar.gz
+          sbom-path: dist/understudy_${{ env.TAG }}_linux_arm64.sbom.cdx.json
+      - name: attest SBOM (darwin/amd64)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/understudy_${{ env.TAG }}_darwin_amd64.tar.gz
+          sbom-path: dist/understudy_${{ env.TAG }}_darwin_amd64.sbom.cdx.json
+      - name: attest SBOM (darwin/arm64)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/understudy_${{ env.TAG }}_darwin_arm64.tar.gz
+          sbom-path: dist/understudy_${{ env.TAG }}_darwin_arm64.sbom.cdx.json
+      - name: upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          flags=()
-          case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt \
-            --title "$GITHUB_REF_NAME" --generate-notes --verify-tag "${flags[@]}"
+          gh release view "$TAG" > /dev/null
+          gh release upload "$TAG" --clobber \
+            dist/*.tar.gz dist/*.sbom.cdx.json dist/checksums.txt
