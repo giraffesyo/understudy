@@ -1,24 +1,28 @@
 name: Conventional Commits
 
 # release-please versions releases and writes CHANGELOG.md from Conventional
-# Commits on main. A squash merge lands the PR title as the commit; a merge
-# commit (e.g. canary -> main) lands every commit of the PR, so both are
-# checked. See CONTRIBUTING.md.
+# Commits on canary. A squash merge lands the PR title as the commit; a merge
+# commit lands every commit of the PR, so both are checked. Commits pushed
+# straight to canary are checked after the push (this reports a bad subject;
+# it cannot reject the push). See CONTRIBUTING.md.
 
 on:
   pull_request:
     types: [opened, edited, reopened, synchronize]
+  push:
+    branches: [canary]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
   title:
     name: PR title
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -37,6 +41,7 @@ jobs:
 
   commits:
     name: commit subjects
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -52,3 +57,22 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: .github/scripts/conventional-commits.sh range "$BASE..$HEAD"
+
+  pushed:
+    name: pushed commit subjects
+    if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: check each non-merge commit in the push
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: .github/scripts/conventional-commits.sh range "$BEFORE..$AFTER"

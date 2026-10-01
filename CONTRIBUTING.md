@@ -2,17 +2,16 @@
 
 ## Branches
 
-- `canary` is the development branch (and the repository's default): work
-  lands there.
-- `main` is the release branch. Merging `canary` into `main` makes
-  [release-please](https://github.com/googleapis/release-please) open or
-  update a release PR; merging the release PR publishes the release (see
+- `canary` is the only long-lived branch (and the repository's default):
+  work lands there, and releases are cut from it. Each push to `canary`
+  makes [release-please](https://github.com/googleapis/release-please) open
+  or update a release PR; merging the release PR publishes the release (see
   [Releases](README.md#releases)).
 
 ## Commit messages: Conventional Commits
 
 release-please computes the next version and writes
-[CHANGELOG.md](CHANGELOG.md) from the commit subjects on `main`, so they
+[CHANGELOG.md](CHANGELOG.md) from the commit subjects on `canary`, so they
 follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
