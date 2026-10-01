@@ -261,6 +261,13 @@ func (ec *EvalCtx) getItem(x, idx any, off int) (any, error) {
 		return stringIndex(ec, t, idx, off)
 	case yaml.UnsafeString:
 		return stringIndex(ec, string(t), idx, off)
+	case Markup:
+		// Markup's items are markup.
+		v, err := stringIndex(ec, string(t), idx, off)
+		if s, isStr := v.(string); isStr && err == nil {
+			return Markup(s), nil
+		}
+		return v, err
 	case *rangeValue:
 		i, ok := asInt(idx)
 		if !ok {
@@ -383,7 +390,7 @@ func (ec *EvalCtx) evalSlice(t *sliceExpr) (any, error) {
 	switch v := x.(type) {
 	case []any:
 		return sliceList(v)
-	case string, yaml.UnsafeString:
+	case string, yaml.UnsafeString, Markup:
 		s, _ := asString(v)
 		runes := []rune(s)
 		items := make([]any, len(runes))
@@ -398,7 +405,7 @@ func (ec *EvalCtx) evalSlice(t *sliceExpr) (any, error) {
 		for _, r := range out {
 			b.WriteString(r.(string))
 		}
-		return b.String(), nil
+		return asMarkupOf(v, b.String()), nil
 	}
 	return nil, ec.errf(t.off, "%s object is not sliceable", typeName(x))
 }
@@ -465,6 +472,24 @@ func (ec *EvalCtx) evalBin(t *binExpr) (any, error) {
 
 	if t.op == tokTilde {
 		return toStr(l) + toStr(r), nil
+	}
+	if t.op == tokMod {
+		if s, ok := asString(l); ok {
+			// printf-style formatting: a tuple literal is the
+			// arguments, a mapping the keys' values, anything else the
+			// one argument.
+			var args []any
+			if le, isList := t.r.(*listExpr); isList && le.tuple {
+				args, _ = Undeprecate(r).([]any)
+			} else {
+				args = []any{r}
+			}
+			out, err := percentFormat(l, s, args)
+			if err != nil {
+				return nil, ec.errf(t.off, "%s", err)
+			}
+			return out, nil
+		}
 	}
 	v, err := arith(t.op, l, r)
 	if err != nil {

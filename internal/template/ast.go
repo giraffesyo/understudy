@@ -101,6 +101,7 @@ type condExpr struct {
 type listExpr struct {
 	off   int
 	items []Expr
+	tuple bool // a tuple literal ((a, b), ()), which evaluates as a list
 }
 
 type dictExpr struct {

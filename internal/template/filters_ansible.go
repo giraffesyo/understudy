@@ -833,9 +833,9 @@ func registerAnsibleFilters(e *Engine) {
 		}
 		s, _ := softStr(in)
 		if len(kwargs) > 0 {
-			return pyPercentFormat(s, nil, kwargs)
+			return percentFormat(in, s, []any{kwargs})
 		}
-		return pyPercentFormat(s, args, nil)
+		return percentFormat(in, s, args)
 	}
 
 	f["quote"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {

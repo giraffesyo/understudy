@@ -73,6 +73,9 @@ func (ec *EvalCtx) storableIn(v any, active map[cycleID]bool) (any, bool, error)
 	}
 	switch t := v.(type) {
 	case Markup:
+		if ec.keepMarkup {
+			return v, false, nil
+		}
 		if ec.engine.Warning != nil {
 			// A container's items are converted with the container.
 			pos := ec.pos
