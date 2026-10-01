@@ -223,8 +223,9 @@ understudy vault view group_vars/all/vault.yml --vault-password-file .vault-pass
 ```
 
 `!vault` inline values and whole-file-encrypted `vars_files` /
-`group_vars` / `host_vars` all decrypt automatically. From the Go API, set
-`Options.VaultPasswords`.
+`group_vars` / `host_vars` all decrypt automatically; a value no password
+opens fails where it is used, as ansible-core's undecryptable variable. From
+the Go API, set `Options.VaultPasswords`.
 
 ## What's supported
 
@@ -244,7 +245,8 @@ rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 `sequence`, `dict`, `indexed_items`, `flattened`, `lines`, `fileglob`, ...) with
 `loop_control` (`loop_var`, `index_var`, `label`, `extended`, `pause`,
 `break_when`), `register`,
-`until`/`retries`/`delay`, `changed_when`, `failed_when`, `ignore_errors`,
+`until`/`retries`/`delay`, `changed_when`, `failed_when`, `ignore_errors` (also
+inherited from blocks and plays, the nearest setting winning),
 `become`/`become_user`/`become_method`/`become_flags`/`become_exe`, `vars`,
 `environment` (mappings, templates or a list of them, merged play, role,
 block, task), `timeout`, `no_log`, `check_mode` and `diff` (also inherited from
