@@ -1,7 +1,6 @@
 package template
 
 import (
-	"errors"
 	"reflect"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -104,7 +103,12 @@ func guardRecursion(e *Engine) {
 		}
 		e.Filters[name] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 			if HasCycle(in) {
-				return nil, errors.New(errMaxRecursion)
+				if name == "string" || name == "hash" || name == "checksum" {
+					return nil, &pyTypeError{errMaxRecursion}
+				}
+				// Elsewhere the RecursionError surfaces while handling
+				// another exception.
+				return nil, whileHandling("%s", errMaxRecursion)
 			}
 			return f(ec, in, args, kwargs)
 		}

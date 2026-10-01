@@ -1,0 +1,83 @@
+# Python ints are arbitrary precision: YAML and JSON literals, arithmetic,
+# int(), comparisons, str() and serialization beyond int64.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    big: 123456789012345678901234567890
+    neg: -99999999999999999999
+    maxi: 9223372036854775807
+    mini: -9223372036854775808
+    hexbig: 0xFFFFFFFFFFFFFFFFFFFF
+  tasks:
+    - debug:
+        msg:
+          - "{{ big }}"
+          - "{{ big + 1 }}"
+          - "{{ big - big }}"
+          - "{{ big * 2 }}"
+          - "{{ big // 7 }}"
+          - "{{ big % 7 }}"
+          - "{{ neg // 7 }}"
+          - "{{ neg % 7 }}"
+          - "{{ big / 3 }}"
+          - "{{ 2 ** 100 }}"
+          - "{{ 2 ** 64 }}"
+          - "{{ (-2) ** 63 }}"
+          - "{{ maxi + 1 }}"
+          - "{{ mini - 1 }}"
+          - "{{ mini // -1 }}"
+          - "{{ -mini }}"
+          - "{{ mini | abs }}"
+          - "{{ maxi * maxi }}"
+          - "{{ big | abs }}"
+          - "{{ neg | abs }}"
+          - "{{ big > maxi }}"
+          - "{{ big == big + 0 }}"
+          - "{{ big > 1.5e29 }}"
+          - "{{ big < 1e300 }}"
+          - "{{ big | string }}"
+          - "{{ big | int }}"
+          - "{{ '123456789012345678901234567890' | int }}"
+          - "{{ '-0x1fffffffffffffffffff' | int(base=16) }}"
+          - "{{ 1e20 | int }}"
+          - "{{ '1e20' | int }}"
+          - "{{ '1_000' | int }}"
+          - "{{ big | float }}"
+          - "{{ [big, 1, neg] | max }}"
+          - "{{ [big, 1, neg] | min }}"
+          - "{{ [big, 1, neg] | sort }}"
+          - "{{ [big, 1, neg] | sum }}"
+          - "{{ big | to_json }}"
+          - "{{ {'a': big} | to_nice_json }}"
+          - "{{ big | to_yaml }}"
+          - "{{ '[123456789012345678901234567890, -1e400]' | from_json }}"
+          - "{{ ('{\"a\": ' ~ big ~ '}') | from_json }}"
+          - "{{ hexbig }}"
+          - "{{ big is integer }}"
+          - "{{ big is number }}"
+          - "{{ big ~ '' }}"
+          - "{{ [big] | to_json }}"
+          - "{{ big | bool }}"
+          - "{{ big in [big] }}"
+          - "{{ big | type_debug }}"
+    - debug: var=big
+    - set_fact:
+        computed: "{{ big * big }}"
+    - debug: var=computed
+    - debug:
+        msg: "{{ big + 1.5 }}"
+    - debug:
+        msg: "{{ (10 ** 400) * 1.0 }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ (10 ** 400) / 1 }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ 1 // 0 }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ 0 ** -1 }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ (10 ** 400) | float }}"
+      ignore_errors: true

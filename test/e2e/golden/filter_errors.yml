@@ -1,0 +1,107 @@
+# Filter and test errors worded as the Python exceptions ansible-core's
+# plugins raise ("The filter plugin '...' failed: ..."), with the class
+# names of lazy containers and tagged values for variables.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: {a: 1, b: [1, 2]}
+    l: [1, 2, 3]
+    ld: [{a: 1}, {b: 2}]
+    s: "hello"
+  tasks:
+    - {debug: {msg: "{{ d | combine(5) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | combine(d) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ d | combine(d, foo=1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ d | combine(d, list_merge='bad') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | combine }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'x' | regex_replace('(', 'y') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'x' | regex_replace('[a-', 'y') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'x' | regex_replace('a{2,1}', 'y') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'x' | regex_replace('x', '\\2') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'x' | regex_search('(') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'x' | regex_findall('*') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'x' | regex_search('x', '\\3') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | regex_replace('x', 'y') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'nope' | from_json }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ '{\"a\": 1' | from_json }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ '[1, 2' | from_json }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ '' | from_json }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ '{\"a\": 1}x' | from_json }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | from_json }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ \"{'a': 1}\" | from_json }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a: [' | from_yaml }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | from_yaml }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ d | to_json(foo=1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | dict2items }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | items2dict }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | items2dict }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ ld | items2dict }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'abc' | b64decode }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | b64encode }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | join(5) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | join }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | first }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | length }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | list }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | sort }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ [1, 'a'] | sort }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ [1, 'a'] | max }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ [1, 'a'] | sum }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | unique }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | flatten }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | upper }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | split(',') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | split(5) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | replace(1, 2) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | basename }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | dirname }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | path_join }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | int(base=1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | float }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | round }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | abs }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | log }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ -1 | log }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | pow(2) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | root }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | hash('nope') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | human_to_bytes }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | human_readable }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | ternary }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | zip(5) | list }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | mandatory }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ nope | mandatory }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ nope | mandatory('custom msg') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | batch('x') | list }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | slice('x') | list }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | map('nofilter') | list }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | select('notest') | list }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | map('upper') | list }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ ld | map(attribute='a') | list }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ ld | selectattr('a') | list }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ ld | sum(attribute='a') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | groupby('x') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ d | dictsort(by='x') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | dictsort }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | format(1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ '%d' | format('x') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | truncate('x') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | indent('x') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | center('x') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | wordwrap('x') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | strftime }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ '%Y' | strftime('x') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 | extract(l) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'x' | extract(d) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 1 is version('x', 'nope') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 1 is version('1', '<', strict=true) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s is match('(') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s is divisibleby(0) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 is subset(5) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 is contains(5) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 5 is failed }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | to_yaml(foo=1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | urlsplit('nope') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | default }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | items2dict(key_name='x') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ s | regex_escape(re_type='x') }}"}, ignore_errors: true}

@@ -1,0 +1,86 @@
+# Template syntax errors worded as Jinja's TemplateSyntaxError, and the
+# error chains of conditionals, loops, the template module and the
+# template lookup.
+- name: template syntax errors
+  hosts: all
+  gather_facts: false
+  vars:
+    d: {a: 1}
+    l: [1, 2]
+  tasks:
+    - {debug: {msg: "{{ 1 2 }}"}, ignore_errors: true}
+    - {debug: {msg: "{% foo %}"}, ignore_errors: true}
+    - {debug: {msg: "{% if true %}x"}, ignore_errors: true}
+    - {debug: {msg: "{{ (1 }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ x |  }}"}, ignore_errors: true}
+    - {debug: {msg: "{% for x in %}{% endfor %}"}, ignore_errors: true}
+    - {debug: {msg: "{% endif %}"}, ignore_errors: true}
+    - {debug: {msg: "{% do d.update({}) %}"}, ignore_errors: true}
+    - {debug: {msg: "{% for x in [1] %}{% break %}{% endfor %}"}, ignore_errors: true}
+    - {debug: {msg: "{% set y = 'a\\x' %}{{ y }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | nofilter }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l is notest }}"}, ignore_errors: true}
+    - {debug: {msg: "{% if false %}{{ d | nofilter }}{% endif %}"}, ignore_errors: true}
+    - {debug: {msg: "{% if true %}{{ d | nofilter }}{% endif %}"}, ignore_errors: true}
+    - {debug: {msg: "{{ d if d | nofilter else 2 }}"}, ignore_errors: true}
+    - debug:
+        msg: |
+          first
+          {{ d | }}
+          third
+      ignore_errors: true
+
+- name: undefined chains
+  hosts: all
+  gather_facts: false
+  vars:
+    d: {a: 1}
+  tasks:
+    - {debug: {msg: "{{ d.b.c.d }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ d.a.c }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ undefvar.x }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ [1][3] }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'abc'.nope }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ d.b | upper }}"}, ignore_errors: true}
+
+- name: conditional and loop errors
+  hosts: all
+  gather_facts: false
+  vars:
+    d: {a: 1}
+  tasks:
+    - {debug: {msg: hi}, when: undefvar, ignore_errors: true}
+    - {debug: {msg: hi}, when: d.b.c, ignore_errors: true}
+    - {debug: {msg: hi}, when: "x y", ignore_errors: true}
+    - {debug: {msg: hi}, when: "1 }} 2", ignore_errors: true}
+    - {debug: {msg: hi}, when: "d | nofilter", ignore_errors: true}
+    - {debug: {msg: hi}, when: "{{ x | }}", ignore_errors: true}
+    - debug: {msg: hi}
+      when:
+        - true
+        - "x y"
+      ignore_errors: true
+    - {debug: {msg: hi}, changed_when: "x y", ignore_errors: true}
+    - {debug: {msg: hi}, failed_when: undefvar, ignore_errors: true}
+    - {debug: {msg: hi}, until: "x y", retries: 1, delay: 0, ignore_errors: true}
+    - {debug: {msg: "{{ item }}"}, loop: [1], when: "item y", ignore_errors: true}
+    - {debug: {msg: "{{ item }} {{ undefvar }}"}, loop: [1, 2], ignore_errors: true}
+    - {assert: {that: "x y"}, ignore_errors: true}
+    - {assert: {that: undefvar}, ignore_errors: true}
+    - {debug: {msg: hi}, loop: "{{ [1] | nofilter }}", ignore_errors: true}
+
+- name: template files
+  hosts: all
+  gather_facts: false
+  vars:
+    d: {a: 1}
+  tasks:
+    - {template: {src: err_unclosed_if.j2, dest: "{{ workdir }}/out"}, ignore_errors: true}
+    - {template: {src: err_undefined.j2, dest: "{{ workdir }}/out"}, ignore_errors: true}
+    - {template: {src: err_include.j2, dest: "{{ workdir }}/out"}, ignore_errors: true}
+    - {template: {src: err_filter.j2, dest: "{{ workdir }}/out"}, ignore_errors: true}
+    - {template: {src: err_for.j2, dest: "{{ workdir }}/out"}, ignore_errors: true}
+    - {debug: {msg: "{{ lookup('template', 'err_print.j2') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ lookup('template', 'err_undefined.j2') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ lookup('template', 'err_include.j2') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ lookup('template', 'err_filter.j2') }}"}, ignore_errors: true}
