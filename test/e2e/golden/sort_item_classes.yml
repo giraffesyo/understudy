@@ -1,0 +1,75 @@
+---
+# A plugin's TypeError comparing a list's items (sort, min, max, dictsort)
+# names them as ansible-core's lazy containers give them: a str templated
+# (plain), a container lazy, other values tagged when read from a
+# variable, each item of a list or dict literal by its own expression.
+- hosts: localhost
+  gather_facts: false
+  ignore_errors: true
+  vars:
+    d: 2020-01-01
+    dt: 2020-01-01 10:00:00
+    n: 1
+    s: x
+    l: [1]
+    m: {a: 1}
+    f: 1.5
+    nested: [x, 1, 2020-01-01]
+    t: "{{ 'y' }}"
+  tasks:
+    - debug:
+        msg: "{{ [d, dt] | sort }}"
+    - debug:
+        msg: "{{ [dt, d] | sort }}"
+    - debug:
+        msg: "{{ [n, s] | sort }}"
+    - debug:
+        msg: "{{ [s, n] | sort }}"
+    - debug:
+        msg: "{{ [l, n] | sort }}"
+    - debug:
+        msg: "{{ [m, n] | sort }}"
+    - debug:
+        msg: "{{ [f, s] | sort }}"
+    - debug:
+        msg: "{{ [d, 1] | sort }}"
+    - debug:
+        msg: "{{ [1, d] | sort }}"
+    - debug:
+        msg: "{{ [n, 'x'] | sort }}"
+    - debug:
+        msg: "{{ ['x', n] | max }}"
+    - debug:
+        msg: "{{ [d, dt] | min }}"
+    - debug:
+        msg: "{{ [d, n] | unique | sort }}"
+    - debug:
+        msg: "{{ [[d], [dt]] | sort }}"
+    - debug:
+        msg: "{{ {d: 1, dt: 2} | dictsort }}"
+    - debug:
+        msg: "{{ [d, dt] | sort(attribute='x') }}"
+    - debug:
+        msg: "{{ s | dict2items }}"
+    - debug:
+        msg: "{{ [s] | first | dict2items }}"
+    - debug:
+        msg: "{{ nested[0] | dict2items }}"
+    - debug:
+        msg: "{{ nested | sort }}"
+    - debug:
+        msg: "{{ [nested[0], n] | sort }}"
+    - debug:
+        msg: "{{ [n, nested[2]] | sort }}"
+    - debug:
+        msg: "{{ [t, n] | sort }}"
+    - debug:
+        msg: "{{ [n + 1, s] | sort }}"
+    - debug:
+        msg: "{{ [n | int, s] | sort }}"
+    - debug:
+        msg: "{{ [d | string, n] | sort }}"
+    - debug:
+        msg: "{{ [n, nested] | sort }}"
+    - debug:
+        msg: "{{ [n, [1]] | sort }}"

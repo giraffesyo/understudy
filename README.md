@@ -685,16 +685,28 @@ than silently diverging. Known boundaries:
   arguments, their `str()` in text, their `repr()` in a rendered list, a
   timestamp in `to_yaml`; a time or timezone where PyYAML cannot represent
   it fails), and a timedelta or timezone in a template's result fails as
-  unsupported for variable storage. `rekey_on_member` keys by the
-  member's value (an int or bool key stays itself through `keys()`,
-  indexing, `dict2items`, repr, YAML and `set_fact`); a plugin error
-  about a value shows where the value was written, through the variables
-  passing it along. String literals in `{{ }}` keep their backslashes, as
-  ansible-core's `escape_backslashes` has them. Not modeled: an item of a
-  list literal read from a variable is named by its plain class
-  (`datetime.date`) where ansible-core names the tagged one
-  (`_AnsibleTaggedDate`) in a `sort` error; a date or datetime as a dict
-  key is keyed by its `isoformat()`.
+  unsupported for variable storage; `to_json` and `to_nice_json` refuse
+  a timezone or timedelta as ansible-core's tagless profile does. Dict
+  keys that are not strings (ints, floats, bools, None, dates and times)
+  stay themselves in dict literals, YAML mappings, `dict()`,
+  `items2dict`, `combine`, `rekey_on_member` and variable storage, keys
+  equal in Python (`1`, `1.0`, `True`) being one key, an unhashable one
+  failing as Python's TypeError: through `keys()`, indexing, `in`,
+  `get()`, `dict2items`, `dictsort`, repr and `set_fact`, shown in
+  results as ansible-core's callback shows them, written by `to_json` as
+  JSON's text for them (a date key refused) and by `to_yaml` as
+  themselves. A plugin's TypeError comparing a list's items (`sort`,
+  `min`, `max`, `dictsort`) names them as its lazy container gives them:
+  a str templated (plain `str`), a container lazy, other values tagged
+  when read from a variable, the items of a list or dict literal each by
+  its own expression. A plugin error about a value shows where the value
+  was written, through the variables passing it along. String literals in
+  `{{ }}` keep their backslashes, as ansible-core's `escape_backslashes`
+  has them. Not modeled: a str key and another key of the same text
+  (`{1: 'a', '1': 'b'}`) are one key; a tuple literal evaluates as a list
+  (so it cannot be a dict key); containers a template computes are named
+  by their plain class (`dict`) in a plugin's type errors, where
+  ansible-core names the lazy one.
 - **Lazy containers**: a variable's list or dict templates its items
   when the variable is read, but an item that fails (an undefined value,
   a filter's or Jinja's error) is kept as ansible-core's marker, raising

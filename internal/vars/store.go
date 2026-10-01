@@ -1075,7 +1075,7 @@ func (c *Context) deepTemplateIn(v any, seen map[containerID]any) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			out.Set(k, r)
+			out.SetFrom(t, k, r)
 		}
 		return out, nil
 	default:

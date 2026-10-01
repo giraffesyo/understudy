@@ -372,6 +372,91 @@ type operandError struct {
 	a, b   any
 }
 
+// itemPreservingFilters pass their input's items along as they are (with
+// their tags).
+var itemPreservingFilters = map[string]bool{
+	"list": true, "unique": true, "sort": true, "reverse": true, "shuffle": true, "select": true,
+	"reject": true, "selectattr": true, "rejectattr": true, "first": true, "last": true,
+}
+
+// exprFromVar reports whether the value e evaluates to holds variables'
+// values: a variable read, a list literal of them, or one of those passed
+// through a filter that keeps its items.
+func (ec *EvalCtx) exprFromVar(e Expr) bool {
+	switch t := e.(type) {
+	case *listExpr:
+		for _, item := range t.items {
+			if !ec.exprFromVar(item) {
+				return false
+			}
+		}
+		return len(t.items) > 0
+	case *filterExpr:
+		if itemPreservingFilters[t.name] && builtinPlugin(t.full) {
+			return ec.exprFromVar(t.x)
+		}
+	}
+	return ec.isVarRef(e)
+}
+
+// inputItemsFromVar reports, for each of the n items (or keys) of the
+// running filter's input, whether it was read from a variable: each item
+// of a list literal (each key of a dict literal) by its own expression,
+// else all of them as the input was.
+func (ec *EvalCtx) inputItemsFromVar(n int) []bool {
+	out := make([]bool, n)
+	switch t := ec.filterIn.(type) {
+	case *listExpr:
+		if len(t.items) == n {
+			for i, item := range t.items {
+				out[i] = ec.exprFromVar(item)
+			}
+			return out
+		}
+	case *dictExpr:
+		if len(t.keys) == n {
+			for i, k := range t.keys {
+				out[i] = ec.exprFromVar(k)
+			}
+			return out
+		}
+	}
+	if ec.filterIn != nil && ec.exprFromVar(ec.filterIn) {
+		for i := range out {
+			out[i] = true
+		}
+	}
+	return out
+}
+
+// lazyItemClass is the class of an item a plugin reads from a list, as
+// ansible-core's lazy container gives it: a str comes out templated (a
+// plain str), a container lazy, any other value tagged when it was read
+// from a variable.
+func lazyItemClass(v any, fromVar bool) string {
+	switch Undeprecate(v).(type) {
+	case string:
+		return "str"
+	case []any:
+		return "_AnsibleLazyTemplateList"
+	case map[string]any, *yaml.OMap:
+		return "_AnsibleLazyTemplateDict"
+	}
+	return pyClassName(v, fromVar)
+}
+
+// itemsCompareError is the TypeError comparing two items of a plugin's
+// input (a and b, read from variables as aVar and bVar) raised: the
+// operands it names, the items themselves or (comparing two lists) items
+// of theirs.
+func itemsCompareError(err error, a, b any, aVar, bVar bool) error {
+	var oe *operandError
+	if !errors.As(err, &oe) {
+		return err
+	}
+	return fmt.Errorf(oe.format, lazyItemClass(oe.a, aVar), lazyItemClass(oe.b, bVar))
+}
+
 func newOperandError(format string, a, b any) *operandError {
 	return &operandError{format: format, a: a, b: b}
 }

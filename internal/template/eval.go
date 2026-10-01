@@ -78,21 +78,13 @@ func (ec *EvalCtx) eval(e Expr) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			ks, ok := asString(k)
-			switch d := Undeprecate(k).(type) {
-			case pyDate: // keyed as the JSON output shows it
-				ks, ok = d.Isoformat(), true
-			case pyDatetime:
-				ks, ok = d.Isoformat("T"), true
-			}
-			if !ok {
-				return nil, ec.errf(t.keys[i].exprOff(), "dict keys must be strings, got %s", typeName(k))
-			}
 			v, err := ec.evalItem(t.vals[i])
 			if err != nil {
 				return nil, err
 			}
-			out.Set(ks, v)
+			if err := dictSet(out, k, v); err != nil {
+				return nil, ec.errf(t.keys[i].exprOff(), "%s", err)
+			}
 		}
 		ec.own.mark(out)
 		return out, nil
