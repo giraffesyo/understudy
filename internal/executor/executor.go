@@ -1741,7 +1741,24 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 	// Resolve the loop (nil = run once with no loop var).
 	items, isLoop, err := r.resolveLoop(task, base)
 	if err != nil {
-		return loopFailure(err), nil, task
+		var le *loopTemplateError
+		var ue *template.UndefinedError
+		if task.Delegate == "" || !errors.As(err, &le) || !errors.As(le.err, &ue) {
+			return loopFailure(err), nil, task
+		}
+		// The task runs once with the loop's undefined value as its
+		// error, after delegate_to resolves (without the loop's item),
+		// as TaskExecutor does: a failure there is the error, and the
+		// result names the delegate as written.
+		dpos := task.KeywordPos["delegate_to"]
+		v, derr := base.At(dpos).TemplateString(task.Delegate)
+		if derr != nil {
+			if res := delegateFailure(task, host, dpos, derr); res != nil {
+				return res, nil, task
+			}
+			return loopFailure(err), nil, task
+		}
+		return delegatedLabel(loopFailure(err), host, fmt.Sprint(v)), nil, task
 	}
 
 	if !isLoop {
@@ -1883,7 +1900,14 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 	// arguments, the connection plugin's own for what runs after.
 	connTarget := host
 	if task.Delegate != "" {
-		if v, err := vctx.TemplateString(task.Delegate); err == nil {
+		dpos := task.KeywordPos["delegate_to"]
+		v, err := vctx.At(dpos).TemplateString(task.Delegate)
+		if err != nil {
+			// _calculate_delegate_to fails the task first.
+			if res := delegateFailure(task, host, dpos, err); res != nil {
+				return res
+			}
+		} else {
 			connTarget = fmt.Sprintf("%v", v)
 		}
 	}
@@ -1894,7 +1918,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 
 	// when: gate.
 	if skip, err := whenSkip(vctx, task.When, task.WhenPos); err != nil {
-		return err.result()
+		return delegatedLabel(err.result(), host, connTarget)
 	} else if skip != nil {
 		return skip
 	}
@@ -1908,7 +1932,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 	}
 	args, failed := r.templatedArgs(task, vctx)
 	if failed != nil {
-		return failed
+		return delegatedLabel(failed, host, connTarget)
 	}
 	if args == nil {
 		args = make(map[string]any, len(task.Args))
@@ -1924,7 +1948,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		}
 		v, err := argsCtx.At(argPos(task, k)).Sourced().TemplateValue(raw)
 		if err != nil {
-			return argTemplateError(task, k, argPos(task, k), err)
+			return delegatedLabel(argTemplateError(task, k, argPos(task, k), err), host, connTarget)
 		}
 		if _, isOmit := v.(template.Omit); isOmit {
 			delete(args, k)
@@ -1934,14 +1958,14 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 	}
 	if task.Module == "set_fact" {
 		if bad := invalidSetFactName(task, args); bad != nil {
-			return bad
+			return delegatedLabel(bad, host, connTarget)
 		}
 	}
 	freeForm := task.FreeForm
 	if freeForm != "" {
 		v, err := vctx.At(task.ArgsPos).TemplateString(freeForm)
 		if err != nil {
-			return argTemplateError(task, "_raw_params", task.ArgsPos, err)
+			return delegatedLabel(argTemplateError(task, "_raw_params", task.ArgsPos, err), host, connTarget)
 		}
 		freeForm = ""
 		if v != nil { // a template with no output is None
@@ -1998,6 +2022,10 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		}
 		if !res.Skipped {
 			if fail := applyChangedFailedWhen(task, runCtx, res); fail != nil {
+				fail.DelegatedTo = delegated
+				if target == connTarget {
+					fail.DelegatedAddr = cc.address
+				}
 				return fail
 			}
 		}
@@ -2009,7 +2037,11 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			pos := conditionalPos(task, "until", task.Until)
 			ok, err := runCtx.WithOverlay(registerOverlay(task, res)).At(pos).EvalWhen([]string{task.Until})
 			if err != nil {
-				return (&conditionalError{keyword: "until", pos: pos, err: err}).result()
+				// Raised, it has no delegated variables: the label names
+				// the delegate alone.
+				fail := (&conditionalError{keyword: "until", pos: pos, err: err}).result()
+				fail.DelegatedTo = delegated
+				return fail
 			}
 			done = ok
 		}
@@ -2023,6 +2055,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			if name == "" {
 				name = task.DisplayAction()
 			}
+			res.DelegatedTo = delegated
 			retried := shown(task, res)
 			if task.Loop != nil || task.LoopWith != "" {
 				// A loop item's attempt carries its loop variables.
@@ -3108,9 +3141,15 @@ func loopFailure(err error) *agentproto.Result {
 	var le *loopTemplateError
 	if errors.As(err, &le) {
 		if cause, ok := template.Cause(le.err); ok {
-			if at, elsewhere := template.UndefinedElsewhere(le.err, le.pos); elsewhere {
-				// An undefined value a variable's own template uses:
-				// the task fails, raised where that template is.
+			var ue *template.UndefinedError
+			if errors.As(le.err, &ue) {
+				// An undefined value: TaskExecutor keeps the loop's
+				// error for the task's execution, which fails with it
+				// (raised where the template using the value is).
+				at := le.pos
+				if p, elsewhere := template.UndefinedElsewhere(le.err, le.pos); elsewhere {
+					at = p
+				}
 				res := agentproto.Fail("Task failed: %s", cause)
 				res.Origin = "verbatim"
 				res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: cause,

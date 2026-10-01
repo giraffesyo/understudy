@@ -77,3 +77,51 @@
     - name: names the plugin does not set back stay undefined for debug var
       debug:
         var: ansible_ssh_host
+
+    - name: a failure before the connection names the delegate alone
+      debug:
+        msg: "{{ nope }}"
+      delegate_to: s1
+      ignore_errors: true
+
+    - name: so does a conditional's
+      debug:
+        msg: x
+      delegate_to: s1
+      when: nope
+      ignore_errors: true
+
+    - name: and a delegate_to that does not template, as written
+      debug:
+        msg: x
+      delegate_to: "{{ nope }}"
+      ignore_errors: true
+
+    - name: a loop that does not template
+      debug:
+        msg: x
+      delegate_to: s1
+      loop: "{{ nope }}"
+      ignore_errors: true
+
+    - debug:
+        msg: x
+      delegate_to: "{{ item }}"
+      loop: "{{ nope }}"
+      ignore_errors: true
+
+    - name: a failed_when that fails has the address
+      debug:
+        msg: x
+      delegate_to: s1
+      failed_when: nope
+      ignore_errors: true
+
+    - name: retries name the delegate alone
+      debug:
+        msg: x
+      delegate_to: s1
+      until: false
+      retries: 1
+      delay: 0
+      ignore_errors: true
