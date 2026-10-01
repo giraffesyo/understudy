@@ -3,6 +3,8 @@ package playbook
 import (
 	"fmt"
 	"strings"
+
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 // parseKV splits Ansible's `key=value key2="v 2"` inline argument form.
@@ -25,12 +27,13 @@ func parseKV(s string) (map[string]any, error) {
 func parseKVRaw(s string) (map[string]any, string) {
 	out := map[string]any{}
 	var raw []string
-	for _, word := range pySplitArgs(s) {
+	for _, orig := range pySplitArgs(s) {
+		word := decodeEscapes(orig)
 		if pos := kvSplitPos(word); pos > 0 {
 			out[strings.TrimSpace(word[:pos])] = unquote(strings.TrimSpace(word[pos+1:]))
 			continue
 		}
-		raw = append(raw, word)
+		raw = append(raw, rawParam(orig, word))
 	}
 	return out, pyJoinArgs(raw)
 }
@@ -59,12 +62,18 @@ func splitFreeForm(s, module string) (string, map[string]any) {
 	// join_args).
 	kv := map[string]any{}
 	var raw []string
-	for _, w := range pySplitArgs(s) {
-		if pos := kvSplitPos(w); pos > 0 && knownFreeFormOption(w[:pos]) {
+	for _, orig := range pySplitArgs(s) {
+		w := decodeEscapes(orig)
+		pos := kvSplitPos(w)
+		if pos > 0 && knownFreeFormOption(w[:pos]) {
 			kv[strings.TrimSpace(w[:pos])] = unquote(strings.TrimSpace(w[pos+1:]))
 			continue
 		}
-		raw = append(raw, w)
+		if pos > 0 {
+			raw = append(raw, orig)
+		} else {
+			raw = append(raw, rawParam(orig, w))
+		}
 	}
 	if len(kv) == 0 {
 		kv = nil
@@ -256,4 +265,81 @@ func unquote(s string) string {
 		return s[1 : len(s)-1]
 	}
 	return s
+}
+
+// rawParam is a word parse_kv keeps as a raw parameter: as written, or
+// (decoded) with its \= unescaped when every '=' in it is escaped.
+func rawParam(orig, decoded string) string {
+	if strings.Contains(decoded, "=") {
+		return strings.ReplaceAll(decoded, `\=`, "=")
+	}
+	return orig
+}
+
+// decodeEscapes is splitter._decode_escapes: the \U........, \u...., \x..,
+// \N{name} and single-character escapes (\\ \' \" \a \b \f \n \r \t \v)
+// decoded as unicode-escape decodes them; any other backslash stays.
+func decodeEscapes(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			b.WriteByte(s[i])
+			continue
+		}
+		rest := s[i+2:]
+		switch c := s[i+1]; c {
+		case 'U', 'u', 'x':
+			n := map[byte]int{'U': 8, 'u': 4, 'x': 2}[c]
+			if r, ok := hexRune(rest, n); ok && r <= 0x10FFFF {
+				b.WriteRune(r)
+				i += 1 + n
+				continue
+			}
+		case 'N':
+			if strings.HasPrefix(rest, "{") {
+				if end := strings.IndexByte(rest, '}'); end > 1 {
+					if r, ok := pyre.LookupName(rest[1:end]); ok {
+						b.WriteRune(r)
+						i += 2 + end
+						continue
+					}
+				}
+			}
+		default:
+			if out, ok := singleEscapes[c]; ok {
+				b.WriteString(out)
+				i++
+				continue
+			}
+		}
+		b.WriteByte('\\')
+	}
+	return b.String()
+}
+
+var singleEscapes = map[byte]string{'\\': `\`, '\'': "'", '"': `"`, 'a': "\a", 'b': "\b", 'f': "\f", 'n': "\n", 'r': "\r", 't': "\t", 'v': "\v"}
+
+// hexRune reads n hex digits at the start of t.
+func hexRune(t string, n int) (rune, bool) {
+	if len(t) < n {
+		return 0, false
+	}
+	var r rune
+	for i := 0; i < n; i++ {
+		c := t[i]
+		switch {
+		case c >= '0' && c <= '9':
+			r = r*16 + rune(c-'0')
+		case c >= 'a' && c <= 'f':
+			r = r*16 + rune(c-'a'+10)
+		case c >= 'A' && c <= 'F':
+			r = r*16 + rune(c-'A'+10)
+		default:
+			return 0, false
+		}
+	}
+	return r, true
 }
