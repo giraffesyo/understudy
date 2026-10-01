@@ -1,6 +1,10 @@
 package template
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
 
 // Statement AST nodes. A parsed template is a []tmplNode; control-flow
 // statements nest child node lists.
@@ -349,6 +353,23 @@ type renderOutput struct {
 	// native, when set, counts the output chunks (non-empty text and
 	// {{ }} values) for the native-types rule and keeps the first.
 	native *nativeChunks
+
+	// parts are the text and undefined values a marking render kept in
+	// place (MarkedText), the text up to flushed of b.
+	parts   []any
+	flushed int
+}
+
+// writeMarker keeps an undefined {{ }} value in place in the text.
+func (o *renderOutput) writeMarker(u Undefined) {
+	if o.native != nil {
+		o.native.add(u, true)
+	}
+	if sb, ok := o.b.(*strings.Builder); ok {
+		s := sb.String()
+		o.parts = append(o.parts, s[o.flushed:], u)
+		o.flushed = len(s)
+	}
 }
 
 // nativeChunks is what native Jinja's concat sees (None values are
@@ -397,6 +418,22 @@ func (ec *EvalCtx) execNodes(nodes []tmplNode, out *renderOutput) error {
 			out.writeText(t.text)
 		case outputNode:
 			v, err := ec.eval(t.expr)
+			if ec.markOutput {
+				// An undefined value stays in place, as a marker.
+				var ue *UndefinedError
+				if err != nil && errors.As(err, &ue) {
+					out.writeMarker(Undefined{Name: ue.Name, Err: ue})
+					continue
+				}
+				if u, ok := v.(Undefined); ok && err == nil {
+					if u.Err == nil {
+						// Its marker names this template.
+						u.Err = &UndefinedError{Pos: ec.pos, Name: u.Name}
+					}
+					out.writeMarker(u)
+					continue
+				}
+			}
 			if err != nil {
 				return err
 			}
