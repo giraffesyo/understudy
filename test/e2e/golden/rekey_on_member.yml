@@ -46,10 +46,10 @@
     - debug: msg="{{ fitems | rekey_on_member('id') | string }}"
     - debug: msg="{{ nitems | rekey_on_member('id') }}"
     - debug: msg="{{ litems | rekey_on_member('id') }}"
-    - debug: msg="{{ [{'id': [1]}] | rekey_on_member('id') }}"
+    - debug: msg="{{ [{'id':[1]}] | rekey_on_member('id') }}"
     - debug: msg="{{ missing | rekey_on_member('id') }}"
     - debug: msg="{{ dmissing | rekey_on_member('id') }}"
-    - debug: msg="{{ [{'name': 'a'}] | rekey_on_member('id') }}"
+    - debug: msg="{{ [{'name':'a'}] | rekey_on_member('id') }}"
     - debug: msg="{{ items | rekey_on_member('id') | string }}"
     - set_fact:
         rk: "{{ items | rekey_on_member('id') }}"

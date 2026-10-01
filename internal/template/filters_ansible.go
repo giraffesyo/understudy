@@ -1288,6 +1288,10 @@ func mkSelect(negate, byAttr bool) FilterFunc {
 		var out []any
 		for _, item := range items {
 			subject := item
+			if u, und := item.(Undefined); und && byAttr {
+				// An item that is a marker trips reading its attribute.
+				return nil, u.useError(ec.pos)
+			}
 			if byAttr {
 				subject, err = extractAttr(item, attr)
 				if err != nil {

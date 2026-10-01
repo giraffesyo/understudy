@@ -94,7 +94,7 @@ func (e *Engine) EvalConditional(cond string, vars VarGetter, pos Position) (boo
 			return false, err
 		}
 		exprPos = originPos
-		if _, isStr := v.(string); isStr {
+		if s, isStr := v.(string); isStr && strings.TrimSpace(s) != "" {
 			// The text is evaluated only from a trusted source.
 			if trusted, at := e.TemplateTrust(expr, vars, pos); !trusted {
 				if at.File == "" {
