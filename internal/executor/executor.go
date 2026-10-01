@@ -205,7 +205,7 @@ func NewRunner(inv *inventory.Inventory, cb Callback, opts Options) *Runner {
 		failed:   map[string]bool{},
 	}
 	for _, name := range inv.SortedHostNames() {
-		r.Store.SetInventoryVars(name, inv.EffectiveVars(inv.Hosts[name]))
+		r.Store.SetInventoryVars(name, inv.EffectiveVars(inv.Hosts[name]), inv.EffectiveVarOrder(inv.Hosts[name]))
 	}
 	if opts.ExtraVars != nil {
 		r.Store.SetExtraVars(opts.ExtraVars)
@@ -237,7 +237,7 @@ func (r *Runner) registerImplicit(h *inventory.Host) {
 	defer r.implicitMu.Unlock()
 	if !r.implicitSet {
 		r.implicitSet = true
-		r.Store.SetInventoryVars(h.Name, r.Inv.EffectiveVars(h))
+		r.Store.SetInventoryVars(h.Name, r.Inv.EffectiveVars(h), r.Inv.EffectiveVarOrder(h))
 	}
 }
 
@@ -1485,7 +1485,7 @@ func (r *Runner) newHostContext(host string, pos template.Position, playHosts []
 	}
 	c.SetMagic("playbook_dir", r.Opts.BaseDir)
 	c.SetMagic("ansible_check_mode", r.Opts.CheckMode)
-	r.setRunMagic(c, host, playHosts)
+	r.setRunMagic(c, host, playHosts, true)
 	// hostvars: a lazy mapping from any inventory host to that host's
 	// resolved variable view. Building another host's context is deferred
 	// until hostvars['other'] is actually accessed.
@@ -1541,7 +1541,7 @@ func (r *Runner) refreshInventory(play *playbook.Play, playHosts []string) error
 	r.implicitSet = false
 	r.implicitMu.Unlock()
 	for _, name := range inv.SortedHostNames() {
-		r.Store.SetInventoryVars(name, inv.EffectiveVars(inv.Host(name)))
+		r.Store.SetInventoryVars(name, inv.EffectiveVars(inv.Host(name)), inv.EffectiveVarOrder(inv.Host(name)))
 	}
 	hosts, err := r.resolvePlayHosts(play)
 	if err != nil {
@@ -1584,7 +1584,32 @@ func (h *hostVars) GetItem(host string) (any, bool) {
 		return nil, false
 	}
 	// Build the target host's context on demand and expose it as a mapping.
-	return hostVarsVars{h.r.newHostContext(host, h.pos, h.playHosts).AsMapping()}, true
+	return hostVarsVars{h.r.hostVarsContext(host, h.pos).AsMapping()}, true
+}
+
+// hostVarsContext is a host's variables as hostvars gives them
+// (HostVars.raw_get: get_vars with no play or task): its inventory
+// variables, facts, include_vars, set_fact and registered values, the
+// extra vars and the run's magic variables, in the order get_vars
+// combines them.
+func (r *Runner) hostVarsContext(host string, pos template.Position) *vars.Context {
+	c := r.Store.NewHostVarsContext(host, pos)
+	c.SetMagic("groups", r.Inv.GroupsMap())
+	if h := r.Inv.GetHost(host); h != nil {
+		r.registerImplicit(h)
+		c.SetMagic("group_names", strList(r.Inv.GroupNames(h)))
+	}
+	c.SetMagic("playbook_dir", r.Opts.BaseDir)
+	c.SetMagic("ansible_check_mode", r.Opts.CheckMode)
+	r.setRunMagic(c, host, nil, false)
+	inventory, rest := r.Store.HostLayerOrder(host)
+	order := append(inventory, "inventory_hostname", "inventory_hostname_short", "group_names", "ansible_facts")
+	order = append(order, rest...)
+	order = append(order, "playbook_dir", "ansible_playbook_python", "ansible_config_file", "groups",
+		"ansible_version", "ansible_check_mode", "ansible_diff_mode", "ansible_forks", "ansible_inventory_sources",
+		"ansible_limit", "ansible_skip_tags", "ansible_run_tags", "ansible_verbosity")
+	c.SetNameOrder(order)
+	return c
 }
 
 // hostVarsVars is one host's variables through hostvars: without
@@ -1604,6 +1629,14 @@ func (v hostVarsVars) Keys() []string {
 }
 
 func (v hostVarsVars) Len() int { return len(v.Keys()) }
+
+// VarOrigin is where the host's variable came from.
+func (v hostVarsVars) VarOrigin(name string) (template.OriginRef, bool) {
+	if src, ok := v.Mapping.(template.OriginSource); ok {
+		return src.VarOrigin(name)
+	}
+	return template.OriginRef{}, false
+}
 
 // PyTypeName is the class messages name it by.
 func (hostVarsVars) PyTypeName() string { return "HostVarsVars" }
@@ -1720,6 +1753,17 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 		return loopControlFailure(err), nil, task
 	}
 	r.checkLoopControl(task, base)
+	if task.LoopWith == "" {
+		// A loop's items keep where they came from: the list written
+		// out, or the variable's a template passes along.
+		loopPos := task.KeywordPos["loop"]
+		lc.origin = func(i int) *template.OriginRef {
+			if ref, ok := base.ItemOrigin(task.Loop, loopPos, i); ok {
+				return &ref
+			}
+			return nil
+		}
+	}
 
 	// Loop: aggregate per-item results Ansible-style.
 	var itemResults []any
@@ -2822,10 +2866,10 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	if res.Failed && !ignored && r.landFailure(host, task, 1) {
 		// Rescued: the fatal line printed, but the host stays in the play
 		// and the failure details flow into the rescue section's vars.
-		r.Store.SetHostFact(host, "ansible_failed_result", orderedResult(task, task.Module, res.ToVars()))
 		r.Store.SetHostFact(host, "ansible_failed_task", map[string]any{
 			"name": task.Name, "action": task.Module,
 		})
+		r.Store.SetHostFact(host, "ansible_failed_result", orderedResult(task, task.Module, res.ToVars()))
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.stats[host].Rescued++

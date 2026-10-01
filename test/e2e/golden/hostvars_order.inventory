@@ -1,0 +1,16 @@
+[web]
+h1 zz=1 aa=2 ansible_connection=local
+h2 ansible_connection=local mm=3
+
+[db]
+h1
+
+[web:vars]
+web_var=3
+ansible_python_interpreter=/usr/bin/python3
+
+[db:vars]
+db_var=4
+
+[all:vars]
+all_var=5

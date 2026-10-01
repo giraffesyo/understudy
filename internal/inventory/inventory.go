@@ -586,3 +586,62 @@ func (inv *Inventory) VarsWarnings() []string {
 	inv.varsWarnings = nil
 	return out
 }
+
+// EffectiveVarOrder is the order of EffectiveVars' names as ansible-core's
+// get_vars combines a host's inventory variables: the groups' (all first,
+// then by depth and name) from the inventory sources, then from their
+// group_vars files; the host's own from its source (inventory_file and
+// inventory_dir first, as the source added the host), then from its
+// host_vars files. Within one source, variables are in written order.
+func (inv *Inventory) EffectiveVarOrder(h *Host) []string {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
+	var out []string
+	groups := inv.orderedGroups(h)
+	for _, fromFiles := range []bool{false, true} {
+		for _, g := range groups {
+			out = append(out, writtenOrder(g.Vars, fromFiles)...)
+		}
+	}
+	out = append(out, "inventory_file", "inventory_dir")
+	out = append(out, writtenOrder(h.Vars, false)...)
+	out = append(out, writtenOrder(h.Vars, true)...)
+	out = append(out, writtenOrder(h.fileVars, false)...)
+	out = append(out, writtenOrder(h.fileVars, true)...)
+	return out
+}
+
+// writtenOrder is the names of vars from inventory sources (fromFiles:
+// from group_vars and host_vars files) in the order they were written;
+// those with no known origin count as a source's, after the others, by
+// name.
+func writtenOrder(vars map[string]any, fromFiles bool) []string {
+	origins := yaml.ChildOrigins(vars)
+	var known, unknown []string
+	for k := range vars {
+		o, ok := origins[k]
+		isFile := ok && (strings.Contains(o.File, "/group_vars/") || strings.Contains(o.File, "/host_vars/"))
+		switch {
+		case isFile != fromFiles:
+		case ok:
+			known = append(known, k)
+		default:
+			unknown = append(unknown, k)
+		}
+	}
+	sort.Slice(known, func(i, j int) bool {
+		a, b := origins[known[i]], origins[known[j]]
+		if a.File != b.File {
+			return a.File < b.File
+		}
+		if a.Line != b.Line {
+			return a.Line < b.Line
+		}
+		if a.Col != b.Col {
+			return a.Col < b.Col
+		}
+		return keyRank(vars, known[i]) < keyRank(vars, known[j])
+	})
+	sort.Strings(unknown)
+	return append(known, unknown...)
+}

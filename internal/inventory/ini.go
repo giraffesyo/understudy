@@ -2,8 +2,10 @@ package inventory
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/giraffesyo/understudy/internal/template"
@@ -257,4 +259,40 @@ func setINIOrigins(m map[string]any, keys []string, source string, lineNo int) {
 		origins[k] = yaml.ChildPos{File: source, Line: lineNo}
 	}
 	yaml.SetChildOrigins(m, origins)
+	recordKeyOrder(m, keys)
+}
+
+// keyOrders records, for the variable maps of INI lines, the order their
+// keys were written in on one line (which their origins, line numbers,
+// do not tell apart).
+var keyOrders sync.Map // map pointer -> map[string]int
+
+// recordKeyOrder notes keys, in that order, as written after the keys m
+// already has.
+func recordKeyOrder(m map[string]any, keys []string) {
+	p := reflect.ValueOf(m).Pointer()
+	prev, _ := keyOrders.Load(p)
+	ranks := map[string]int{}
+	if prev != nil {
+		for k, v := range prev.(map[string]int) {
+			ranks[k] = v
+		}
+	}
+	for _, k := range keys {
+		if _, ok := ranks[k]; !ok {
+			ranks[k] = len(ranks)
+		}
+	}
+	keyOrders.Store(p, ranks)
+}
+
+// keyRank is the order k was written in among m's keys of one line (-1:
+// unknown).
+func keyRank(m map[string]any, k string) int {
+	if r, ok := keyOrders.Load(reflect.ValueOf(m).Pointer()); ok {
+		if n, ok := r.(map[string]int)[k]; ok {
+			return n
+		}
+	}
+	return -1
 }

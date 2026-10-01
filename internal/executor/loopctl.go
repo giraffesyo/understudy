@@ -22,6 +22,8 @@ type loopControl struct {
 	extended bool
 	allItems bool
 	pause    time.Duration
+	// origin is where item i came from, when known.
+	origin func(i int) *template.OriginRef
 }
 
 // loopControlError is a loop_control field that failed post-validation:
@@ -104,7 +106,11 @@ func loopFlag(raw any, def bool, key string, vctx *vars.Context) (bool, error) {
 // when extended, ansible_loop.
 func (lc *loopControl) vars(i int) map[string]any {
 	t := lc.task
-	out := map[string]any{t.LoopVar: vars.Final{V: lc.items[i]}, "ansible_loop_var": t.LoopVar}
+	item := vars.Final{V: lc.items[i]}
+	if lc.origin != nil {
+		item.Origin = lc.origin(i)
+	}
+	out := map[string]any{t.LoopVar: item, "ansible_loop_var": t.LoopVar}
 	if t.IndexVar != "" {
 		out["ansible_index_var"] = t.IndexVar
 		out[t.IndexVar] = int64(i)
