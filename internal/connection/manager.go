@@ -172,8 +172,11 @@ func (m *Manager) dial(ctx context.Context, host string, kw Keywords) (Connectio
 		return NewLocal(), true, nil
 	case "ssh":
 		cfg := SSHConfig{
-			Host:            m.strVar(host, "ansible_host", host),
-			Port:            m.intVar(host, "ansible_port", 22),
+			// The ssh plugin's host and port options: the last of their
+			// variables set wins (add_host's "host:port" sets
+			// ansible_ssh_port).
+			Host:            m.strVar(host, "ansible_ssh_host", m.strVar(host, "ansible_host", host)),
+			Port:            m.intVar(host, "ansible_ssh_port", m.intVar(host, "ansible_port", 22)),
 			User:            m.RemoteUser(host, kw),
 			Password:        m.strVar(host, "ansible_password", m.strVar(host, "ansible_ssh_pass", m.Opts.Password)),
 			HostKeyChecking: m.Opts.HostKeyChecking,
@@ -197,7 +200,7 @@ func (m *Manager) dial(ctx context.Context, host string, kw Keywords) (Connectio
 			}
 			cfg.ProxyJump, cfg.ProxyCommand = o.ProxyJump, o.ProxyCommand
 			cfg.PrivateKeys = append(cfg.PrivateKeys, o.IdentityFiles...)
-			if o.Port != 0 && m.intVar(host, "ansible_port", 0) == 0 {
+			if o.Port != 0 && m.intVar(host, "ansible_ssh_port", m.intVar(host, "ansible_port", 0)) == 0 {
 				cfg.Port = o.Port
 			}
 			if o.StrictHostKeys != nil {
