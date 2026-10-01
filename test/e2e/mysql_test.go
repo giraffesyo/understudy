@@ -44,10 +44,10 @@ func myDocker(t *testing.T, args ...string) string {
 func startMySQLEnv(t *testing.T) (port, key string) {
 	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not installed")
+		missingPrereq(t, "docker not installed")
 	}
 	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skip("docker daemon not running")
+		missingPrereq(t, "docker daemon not running")
 	}
 	dir := t.TempDir()
 	dockerfile := `FROM ubuntu:24.04
@@ -159,7 +159,7 @@ func ansibleHasMySQL(ansible string) bool {
 func TestMySQLDifferential(t *testing.T) {
 	bin, _ := filepath.Abs("../../bin/understudy")
 	if _, err := os.Stat(bin); err != nil {
-		t.Skip("bin/understudy not built (run: make build)")
+		missingPrereq(t, "bin/understudy not built (run: make build)")
 	}
 	ansible := os.Getenv("UNDERSTUDY_ANSIBLE_PLAYBOOK")
 	if ansible == "" {

@@ -39,10 +39,10 @@ func TestSSHProxyJumpAndCommand(t *testing.T) {
 
 	bin, _ := filepath.Abs("../../bin/understudy")
 	if _, err := os.Stat(bin); err != nil {
-		t.Skip("bin/understudy not built")
+		missingPrereq(t, "bin/understudy not built")
 	}
 	if _, err := exec.LookPath("nc"); err != nil {
-		t.Skip("nc not available for the ProxyCommand leg")
+		missingPrereq(t, "nc not available for the ProxyCommand leg")
 	}
 	dir := t.TempDir()
 	inv := fmt.Sprintf(`[all:vars]

@@ -134,10 +134,10 @@ func TestLinuxGoldenOutput(t *testing.T) {
 	ansible := ansiblePlaybookBin(t)
 	understudy := understudyBin(t)
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not installed")
+		missingPrereq(t, "docker not installed")
 	}
 	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skip("docker daemon not running")
+		missingPrereq(t, "docker daemon not running")
 	}
 	corpus, err := filepath.Glob("golden/linux/*.yml")
 	if err != nil || len(corpus) == 0 {

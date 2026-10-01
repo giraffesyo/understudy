@@ -38,10 +38,10 @@ func dockerName(base string) string { return base + "-" + dockerRunID }
 func dockerAvailable(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not installed")
+		missingPrereq(t, "docker not installed")
 	}
 	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skip("docker daemon not running")
+		missingPrereq(t, "docker daemon not running")
 	}
 }
 

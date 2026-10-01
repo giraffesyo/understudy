@@ -14,7 +14,7 @@ import (
 func TestExecutableCallbackPlugins(t *testing.T) {
 	bin, _ := filepath.Abs("../../bin/understudy")
 	if _, err := os.Stat(bin); err != nil {
-		t.Skip("bin/understudy not built")
+		missingPrereq(t, "bin/understudy not built")
 	}
 	dir := t.TempDir()
 	plugins := filepath.Join(dir, "callback_plugins")

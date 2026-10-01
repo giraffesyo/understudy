@@ -62,7 +62,7 @@ func runSSH(t *testing.T, port, playbookSrc string, extraArgs ...string) (string
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(bin); err != nil {
-		t.Skip("bin/understudy not built (run: make build)")
+		missingPrereq(t, "bin/understudy not built (run: make build)")
 	}
 	dir := t.TempDir()
 	pb := filepath.Join(dir, "play.yml")
