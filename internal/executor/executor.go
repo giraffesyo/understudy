@@ -3108,6 +3108,15 @@ func loopFailure(err error) *agentproto.Result {
 	var le *loopTemplateError
 	if errors.As(err, &le) {
 		if cause, ok := template.Cause(le.err); ok {
+			if at, elsewhere := template.UndefinedElsewhere(le.err, le.pos); elsewhere {
+				// An undefined value a variable's own template uses:
+				// the task fails, raised where that template is.
+				res := agentproto.Fail("Task failed: %s", cause)
+				res.Origin = "verbatim"
+				res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: cause,
+					InnerFile: at.File, InnerLine: at.Line, InnerCol: at.Col}
+				return res
+			}
 			res := agentproto.Fail("%s", cause)
 			res.Origin = "verbatim"
 			if msg, at, value, ok := template.RenderingCause(le.err); ok {
@@ -3180,6 +3189,16 @@ func (e *conditionalError) chain(outer string) *agentproto.ErrorChain {
 		cause, _ := template.Cause(ie.Err)
 		ec.Inner = fmt.Sprintf("%s '%s' expression failed: Error while evaluating conditional.", article, e.keyword)
 		ec.Root = &agentproto.ErrorChain{Inner: cause, InnerFile: ie.Pos.File, InnerLine: ie.Pos.Line, InnerCol: ie.Pos.Col}
+	} else if at, ok := template.UndefinedElsewhere(e.err, e.pos); ok {
+		// An undefined value a variable's own template uses: raised
+		// where that template is.
+		article := "A"
+		if e.keyword == "until" {
+			article = "An"
+		}
+		cause, _ := template.Cause(e.err)
+		ec.Inner = fmt.Sprintf("%s '%s' expression failed: Error while evaluating conditional.", article, e.keyword)
+		ec.Root = &agentproto.ErrorChain{Inner: cause, InnerFile: at.File, InnerLine: at.Line, InnerCol: at.Col}
 	} else if msg, at, value, ok := template.RenderingCause(e.err); ok {
 		// A value that cannot be stored or decrypted: the rendering
 		// error, caused by it.
