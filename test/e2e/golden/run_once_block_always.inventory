@@ -1,0 +1,3 @@
+[always_only]
+b1 ansible_connection=local
+b2 ansible_connection=local

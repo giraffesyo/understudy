@@ -702,6 +702,7 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 	id := bc.next
 	bc.next++
 	hasRescue := node.MapGet("rescue") != nil
+	hasAlways := node.MapGet("always") != nil
 
 	var out []*Task
 	for _, sec := range []struct {
@@ -717,7 +718,7 @@ func parseBlock(node *yaml.Node, file string, handlers bool, bc *blockCounter, e
 			continue
 		}
 		refs := append(append([]BlockRef{}, enclosing...),
-			BlockRef{ID: id, Section: sec.section, HasRescue: hasRescue,
+			BlockRef{ID: id, Section: sec.section, HasRescue: hasRescue, HasAlways: hasAlways,
 				Parallel: sec.section == SectionBlock && truthyVar(inh.Vars["understudy_parallel"])})
 		tasks, err := parseTaskListIn(secNode, file, handlers, bc, refs)
 		if err != nil {

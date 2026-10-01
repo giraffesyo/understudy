@@ -86,6 +86,7 @@ type BlockRef struct {
 	ID        int
 	Section   int // the section of this block the task sits in
 	HasRescue bool
+	HasAlways bool
 	// Parallel: the block's vars set understudy_parallel (an opt-in that
 	// ansible-playbook ignores): its direct tasks run concurrently.
 	Parallel bool

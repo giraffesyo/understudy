@@ -1,0 +1,17 @@
+---
+# A run_once task that fails in a block with only an always section: the
+# other hosts, failed twice, skip the always too.
+- hosts: always_only
+  gather_facts: false
+  tasks:
+    - block:
+        - fail:
+            msg: boom
+          run_once: true
+      always:
+        - debug:
+            msg: always
+        - debug:
+            msg: always again
+    - debug:
+        msg: after
