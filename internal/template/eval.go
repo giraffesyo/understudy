@@ -56,12 +56,9 @@ func (ec *EvalCtx) eval(e Expr) (any, error) {
 	case *listExpr:
 		out := make([]any, 0, max(len(t.items), 1)) // its own backing array: its identity
 		for _, item := range t.items {
-			v, err := ec.eval(item)
+			v, err := ec.evalItem(item)
 			if err != nil {
 				return nil, err
-			}
-			if u, ok := v.(Undefined); ok {
-				return nil, u.useError(ec.pos)
 			}
 			out = append(out, v)
 		}
@@ -81,7 +78,7 @@ func (ec *EvalCtx) eval(e Expr) (any, error) {
 			if !ok {
 				return nil, ec.errf(t.keys[i].exprOff(), "dict keys must be strings, got %s", typeName(k))
 			}
-			v, err := ec.eval(t.vals[i])
+			v, err := ec.evalItem(t.vals[i])
 			if err != nil {
 				return nil, err
 			}
@@ -185,7 +182,24 @@ func (ec *EvalCtx) getAttr(x any, name string, off int) (any, error) {
 	if m, ok := lookupMethod(x, name); ok {
 		return m, nil
 	}
-	return Undefined{Name: describeOwner(x) + "." + name}, nil
+	return missingItem(x, name), nil
+}
+
+// PyTyped is a Mapping with its own Python class, which messages name
+// (hostvars' HostVars and HostVarsVars).
+type PyTyped interface{ PyTypeName() string }
+
+// MissingItemer is a Mapping whose missing items are undefined values
+// with their own message.
+type MissingItemer interface{ MissingItem(key string) string }
+
+// missingItem is the undefined value of x's missing item key.
+func missingItem(x any, key string) Undefined {
+	name := describeOwner(x) + "." + key
+	if m, ok := x.(MissingItemer); ok {
+		return Undefined{Name: name, Err: &UndefinedError{Name: name, Hint: m.MissingItem(key)}}
+	}
+	return Undefined{Name: name}
 }
 
 // getItem implements a[i] / a['key'].
@@ -218,7 +232,7 @@ func (ec *EvalCtx) getItem(x, idx any, off int) (any, error) {
 		if v, found := t.GetItem(s); found {
 			return ec.ownedChild(x, s, ec.access(v)), nil
 		}
-		return Undefined{Name: describeOwner(x) + "." + s}, nil
+		return missingItem(x, s), nil
 	case []any:
 		i, ok := asInt(idx)
 		if !ok {
@@ -273,6 +287,12 @@ func stringIndex(ec *EvalCtx, s string, idx any, off int) (any, error) {
 
 // describeOwner names the container in chained-undefined paths.
 func describeOwner(x any) string {
+	if Undeprecate(x) == nil {
+		return "NoneType object"
+	}
+	if t, ok := x.(PyTyped); ok {
+		return t.PyTypeName() + " object"
+	}
 	return typeName(x) + " object"
 }
 
@@ -528,12 +548,17 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 		u := in.(Undefined)
 		return nil, u.useError(ec.pos)
 	}
-	args, kwargs, err := ec.evalArgs(t.args, t.kwargs)
+	args, kwargs, err := ec.evalArgsMarkers(t.args, t.kwargs, argsMarkerFilters[t.name] && builtinPlugin(t.full))
 	if err != nil {
 		return nil, err
 	}
 	if err := checkArity(false, t.name, t.full, len(args), t.kwargs); err != nil {
 		return nil, ec.pluginError("filter", t.full, err)
+	}
+	if !markerSafeFilters[t.name] {
+		if err := ec.tripArgs(in, args, kwargs); err != nil {
+			return nil, err
+		}
 	}
 	// The filter reads some of the deprecated values it was given
 	// (to_json all of them, dict2items the values); those it passes on
@@ -608,6 +633,11 @@ func (ec *EvalCtx) evalTest(t *testExpr) (any, error) {
 	if err := checkArity(true, t.name, t.full, len(args), t.kwargs); err != nil {
 		return nil, ec.pluginError("test", t.full, err)
 	}
+	if !markerSafeTests[t.name] {
+		if err := ec.tripArgs(in, args, kwargs); err != nil {
+			return nil, err
+		}
+	}
 	saved := ec.testKwargs
 	ec.testKwargs = kwargs
 	res, err := fn(ec, in, args)
@@ -628,14 +658,29 @@ func (ec *EvalCtx) evalTest(t *testExpr) (any, error) {
 }
 
 func (ec *EvalCtx) evalArgs(argExprs []Expr, kwargExprs []kwarg) ([]any, map[string]any, error) {
+	return ec.evalArgsMarkers(argExprs, kwargExprs, false)
+}
+
+// argsMarkerFilters take undefined arguments (ansible-core's
+// accept_args_markers): default(x.y) is not an error until the default
+// is used.
+var argsMarkerFilters = map[string]bool{
+	"default": true, "d": true, "ternary": true, "mandatory": true, "type_debug": true,
+}
+
+// evalArgsMarkers is evalArgs keeping undefined arguments (markers) when
+// the plugin accepts them.
+func (ec *EvalCtx) evalArgsMarkers(argExprs []Expr, kwargExprs []kwarg, markers bool) ([]any, map[string]any, error) {
 	args := make([]any, 0, len(argExprs))
 	for _, a := range argExprs {
 		v, err := ec.eval(a)
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := ec.rejectUndefined(v, a.exprOff()); err != nil {
-			return nil, nil, err
+		if !markers {
+			if err := ec.rejectUndefined(v, a.exprOff()); err != nil {
+				return nil, nil, err
+			}
 		}
 		args = append(args, v)
 	}
@@ -647,8 +692,10 @@ func (ec *EvalCtx) evalArgs(argExprs []Expr, kwargExprs []kwarg) ([]any, map[str
 			if err != nil {
 				return nil, nil, err
 			}
-			if err := ec.rejectUndefined(v, kw.val.exprOff()); err != nil {
-				return nil, nil, err
+			if !markers {
+				if err := ec.rejectUndefined(v, kw.val.exprOff()); err != nil {
+					return nil, nil, err
+				}
 			}
 			kwargs[kw.name] = v
 		}
@@ -723,4 +770,42 @@ func (ec *EvalCtx) evalCall(t *callExpr) (any, error) {
 		return out, nil
 	}
 	return nil, ec.errf(t.off, "%s object is not callable", typeName(fn))
+}
+
+// evalItem evaluates an item of a list or dict literal: an undefined one
+// stays, an error only where the container's items are used (and one
+// whose evaluation failed is a marker where markers are replaced, as
+// debug's var= does).
+func (ec *EvalCtx) evalItem(e Expr) (any, error) {
+	if ec.replaceMarkers {
+		return ec.evalMarking(e)
+	}
+	return ec.eval(e)
+}
+
+// tripArgs is the error a plugin using undefined items of its input or
+// arguments raises.
+func (ec *EvalCtx) tripArgs(in any, args []any, kwargs map[string]any) error {
+	if _, isU := in.(Undefined); !isU {
+		if err := tripMarkers(in, ec.pos); err != nil {
+			return err
+		}
+	}
+	for _, a := range args {
+		if _, isU := a.(Undefined); isU {
+			continue
+		}
+		if err := tripMarkers(a, ec.pos); err != nil {
+			return err
+		}
+	}
+	for _, k := range sortedKeys(kwargs) {
+		if _, isU := kwargs[k].(Undefined); isU {
+			continue
+		}
+		if err := tripMarkers(kwargs[k], ec.pos); err != nil {
+			return err
+		}
+	}
+	return nil
 }

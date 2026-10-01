@@ -278,6 +278,9 @@ type EvalCtx struct {
 	// callKwargs names the running filter's keyword arguments, in call
 	// order.
 	callKwargs []string
+	// replaceMarkers keeps undefined items of literals as markers (see
+	// EvalExpressionReplacing).
+	replaceMarkers bool
 }
 
 func (ec *EvalCtx) Engine() *Engine    { return ec.engine }
@@ -358,8 +361,8 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 		if err != nil {
 			return nil, err
 		}
-		if u, ok := v.(Undefined); ok {
-			return nil, u.useError(pos)
+		if err := tripMarkers(v, pos); err != nil {
+			return nil, err
 		}
 		v = ec.own.settle(v)
 		if HasCycle(v) {
@@ -484,8 +487,8 @@ func (e *Engine) evalExpression(src string, vars VarGetter, pos Position) (any, 
 	if err != nil {
 		return nil, nil, err
 	}
-	if u, ok := v.(Undefined); ok {
-		return nil, nil, u.useError(pos)
+	if err := tripMarkers(v, pos); err != nil {
+		return nil, nil, err
 	}
 	return v, ec, nil
 }

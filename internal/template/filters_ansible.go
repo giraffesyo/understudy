@@ -1241,6 +1241,9 @@ func filterMap(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, err
 	}
 	out := make([]any, len(items))
 	for i, item := range items {
+		if u, isU := item.(Undefined); isU && !undefinedTolerantFilters[pluginShortName(name)] {
+			return nil, u.useError(ec.pos)
+		}
 		v, err := fn(ec, item, args[1:], kwargs)
 		if err != nil {
 			return nil, err

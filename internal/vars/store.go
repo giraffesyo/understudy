@@ -5,6 +5,7 @@
 package vars
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -237,6 +238,9 @@ type Context struct {
 	sourced bool
 	// inContainer: the value being templated is an item of a container.
 	inContainer bool
+	// markers: a template in a variable's value that uses an undefined
+	// value yields it (a marker) rather than failing (debug's var=).
+	markers bool
 }
 
 // NewContext builds a variable context for one host and task.
@@ -495,7 +499,12 @@ func (c *Context) deepTemplateIn(v any, seen map[containerID]any) (any, error) {
 	}
 	switch t := v.(type) {
 	case string:
-		return c.store.engine.RenderTemplate(t, c, c.origin(t))
+		out, err := c.store.engine.RenderTemplate(t, c, c.origin(t))
+		var ue *template.UndefinedError
+		if err != nil && c.markers && errors.As(err, &ue) {
+			return template.Undefined{Name: ue.Name, Err: ue}, nil
+		}
+		return out, err
 	case yaml.UnsafeString:
 		return t, nil // never re-templated
 	case Final:
@@ -624,6 +633,18 @@ func (c *Context) EvalWhen(exprs []string) (ok bool, err error) {
 		}
 	}
 	return true, nil
+}
+
+// EvalExprReplacing evaluates a bare expression as debug's var= does:
+// undefined values become placeholders, reported as markers.
+func (c *Context) EvalExprReplacing(expr string) (v any, markers []template.Marker, err error) {
+	defer capturePanic(&err)
+	// Variables resolve anew, an undefined item of one a marker in place.
+	child := *c
+	child.markers = true
+	child.resolving = map[string]bool{}
+	child.cache = map[string]any{}
+	return c.store.engine.EvalExpressionReplacing(expr, &child, c.pos)
 }
 
 // EvalExpr evaluates a bare expression (until:, failed_when:).

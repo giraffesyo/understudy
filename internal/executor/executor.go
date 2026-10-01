@@ -1342,6 +1342,18 @@ func (v hostVarsVars) Keys() []string {
 
 func (v hostVarsVars) Len() int { return len(v.Keys()) }
 
+// PyTypeName is the class messages name it by.
+func (hostVarsVars) PyTypeName() string { return "HostVarsVars" }
+
+// PyTypeName is the class messages name it by.
+func (*hostVars) PyTypeName() string { return "HostVars" }
+
+// MissingItem is the message of a host hostvars does not have: its
+// expression.
+func (*hostVars) MissingItem(host string) string {
+	return "hostvars[" + template.PyRepr(host) + "]"
+}
+
 func (h *hostVars) Keys() []string { return h.names }
 func (h *hostVars) Len() int       { return len(h.names) }
 
@@ -1931,6 +1943,7 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 				r.Store.SetIncludeVars(h, vars)
 			}
 		},
+		Warn: r.warnBlock,
 	}, target, nil
 }
 
