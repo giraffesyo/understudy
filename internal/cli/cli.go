@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,30 +103,34 @@ Common options:
 
 // parsedArgs holds common flag values.
 type parsedArgs struct {
-	inventory  []string
-	limit      string
-	extraVars  map[string]any
-	forks      int
-	verbosity  int
-	check      bool
-	diff       bool
-	become     bool
-	becomeUser string
-	askBecome  bool
-	askPass    bool
-	askVault   bool
-	vaultFiles []string
-	remoteUser string
-	privateKey string
-	connection string
-	tags       string
-	skipTags   string
-	syntax     bool
-	listHosts  bool
-	listTasks  bool
-	module     string // adhoc -m
-	moduleArgs string // adhoc -a
-	positional []string
+	inventory []string
+	limit     string
+	extraVars map[string]any
+	// extraVarsErr is the first -e @file that could not be read: as
+	// ansible-core loads extra vars, it fails the inventory sources'
+	// parsing and then the run.
+	extraVarsErr error
+	forks        int
+	verbosity    int
+	check        bool
+	diff         bool
+	become       bool
+	becomeUser   string
+	askBecome    bool
+	askPass      bool
+	askVault     bool
+	vaultFiles   []string
+	remoteUser   string
+	privateKey   string
+	connection   string
+	tags         string
+	skipTags     string
+	syntax       bool
+	listHosts    bool
+	listTasks    bool
+	module       string // adhoc -m
+	moduleArgs   string // adhoc -a
+	positional   []string
 
 	becomeMethod   string
 	becomePassFile string
@@ -154,7 +159,18 @@ func boolFlag(set func(*parsedArgs)) func(*parsedArgs, string) error {
 var cliFlags = []cliFlag{
 	{[]string{"-i", "--inventory", "--inventory-file"}, true, func(p *parsedArgs, v string) error { p.inventory = append(p.inventory, v); return nil }},
 	{[]string{"-l", "--limit"}, true, func(p *parsedArgs, v string) error { p.limit = v; return nil }},
-	{[]string{"-e", "--extra-vars"}, true, func(p *parsedArgs, v string) error { return parseExtraVars(v, p.extraVars) }},
+	{[]string{"-e", "--extra-vars"}, true, func(p *parsedArgs, v string) error {
+		if path, ok := strings.CutPrefix(v, "@"); ok {
+			if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+				if p.extraVarsErr == nil {
+					abs, _ := filepath.Abs(path)
+					p.extraVarsErr = inventory.FileNotFoundError(abs)
+				}
+				return nil
+			}
+		}
+		return parseExtraVars(v, p.extraVars)
+	}},
 	{[]string{"-f", "--forks"}, true, func(p *parsedArgs, v string) (err error) { p.forks, err = strconv.Atoi(v); return }},
 	{[]string{"-t", "--tags"}, true, func(p *parsedArgs, v string) error { p.tags = joinCSV(p.tags, v); return nil }},
 	{[]string{"--skip-tags"}, true, func(p *parsedArgs, v string) error { p.skipTags = joinCSV(p.skipTags, v); return nil }},
@@ -464,6 +480,14 @@ func buildVaultSecrets(p *parsedArgs) (*vault.Secrets, error) {
 	}
 	for _, f := range files {
 		pw, err := vault.LoadPasswordFile(f)
+		if errors.Is(err, fs.ErrNotExist) {
+			// get_file_vault_secret's error, warned about as the default
+			// vault id's secret and then raised.
+			abs, _ := filepath.Abs(f)
+			msg := fmt.Sprintf("The vault password file %s was not found", abs)
+			warnOnce("Error getting vault password file (default): " + msg + "\n")
+			return nil, errors.New(msg)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("vault password file: %w", err)
 		}
@@ -572,10 +596,15 @@ func loadInventory(p *parsedArgs, playbookDir string) (*inventory.Inventory, err
 		UnparsedWarning:     cfg.InventoryUnparsedWarning,
 		UnparsedIsFailed:    cfg.InventoryUnparsedIsFailed,
 		AnyUnparsedIsFailed: cfg.InventoryAnyUnparsedIsFailed,
+		ExtraVarsErr:        p.extraVarsErr,
 		Warn:                warnOnce,
 	})
 	if err != nil {
 		return nil, err
+	}
+	if p.extraVarsErr != nil {
+		// The variable manager loads them again, for good.
+		return nil, errors.New(inventory.Inline(p.extraVarsErr))
 	}
 	inv.PatternMismatch = cfg.HostPatternMismatch
 	return inv, nil

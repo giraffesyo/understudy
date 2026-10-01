@@ -40,6 +40,10 @@ type Options struct {
 	UnparsedWarning     bool
 	UnparsedIsFailed    bool
 	AnyUnparsedIsFailed bool
+	// ExtraVarsErr is the error loading the extra vars failed with: every
+	// plugin that takes on a source loads them first (load_extra_vars in
+	// BaseInventoryPlugin.parse), so each fails with it.
+	ExtraVarsErr error
 	// Warn receives each warning as ansible-core's Display formats it
 	// (without the "[WARNING]: " prefix; ending in a newline, two after a
 	// multi-line message).
@@ -204,7 +208,13 @@ func (l *loader) parseSource(src string) (bool, error) {
 		if !p.verify(src) {
 			continue
 		}
-		err := p.parse(l.inv, src)
+		var err error
+		if ce, ok := l.o.ExtraVarsErr.(*chainError); ok {
+			c := *ce // each failure gets its own origin
+			err = &c
+		} else if err = l.o.ExtraVarsErr; err == nil {
+			err = p.parse(l.inv, src)
+		}
 		if err == nil {
 			parsed = true
 			break

@@ -1,0 +1,8 @@
+---
+# A missing -e @file fails the run after the configuration line (-v): each
+# inventory source's plugin fails loading the extra vars first, then the
+# variable manager does.
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg=never
