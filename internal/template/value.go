@@ -804,3 +804,12 @@ func (r *rangeValue) materialize() []any {
 
 // Truthy is Python truthiness for a rendered value.
 func Truthy(v any) bool { return truthy(v) }
+
+// pyToBytes is ansible's to_bytes(v): a string's text, anything else
+// as str(v) (its nonstring='simplerepr').
+func pyToBytes(v any) string {
+	if s, ok := asString(Undeprecate(v)); ok {
+		return s
+	}
+	return toStr(v)
+}

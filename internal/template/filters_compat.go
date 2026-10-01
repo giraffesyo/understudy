@@ -13,19 +13,26 @@ func registerCompatFilters(e *Engine) {
 	e.Filters["comment"] = filterComment
 	e.Filters["urlsplit"] = filterURLSplit
 	e.Filters["shuffle"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		// randomize_list: a seed makes the order deterministic within
-		// understudy (it does not reproduce Python's PRNG sequence).
-		items, err := iterate(in)
-		if err != nil {
-			return in, nil // Ansible swallows the error and returns the input
+		// randomize_list(mylist, seed=None): list(mylist) shuffled by
+		// Python's Random (seeded, as ansible-core's is); any error is
+		// swallowed, returning what it had.
+		items, ok := pyIterItems(Undeprecate(in))
+		if !ok {
+			return in, nil
 		}
-		out := append([]any(nil), items...)
+		out := append([]any{}, items...)
 		seed := kwargs["seed"]
-		if seed == nil && len(args) > 0 {
+		if len(args) > 0 {
 			seed = args[0]
 		}
-		rng := newRand(seed)
-		rng.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
+		if !truthy(seed) {
+			seed = nil
+		}
+		rng, err := newPyRandom(seed)
+		if err != nil {
+			return out, nil
+		}
+		rng.shuffle(out)
 		return out, nil
 	}
 }

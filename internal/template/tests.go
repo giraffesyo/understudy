@@ -2,6 +2,7 @@ package template
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -100,19 +101,12 @@ func registerTests(e *Engine) {
 		}
 		return equal(m, int64(0)), nil
 	}
+	// even and odd are value % 2 == 0 and value % 2 == 1.
 	t["even"] = func(ec *EvalCtx, in any, args []any) (bool, error) {
-		n, ok := asInt(in)
-		if !ok {
-			return false, fmt.Errorf("expected an integer, got %s", typeName(in))
-		}
-		return n%2 == 0, nil
+		return pyMod2Is(ec, in, 0)
 	}
 	t["odd"] = func(ec *EvalCtx, in any, args []any) (bool, error) {
-		n, ok := asInt(in)
-		if !ok {
-			return false, fmt.Errorf("expected an integer, got %s", typeName(in))
-		}
-		return n%2 != 0, nil
+		return pyMod2Is(ec, in, 1)
 	}
 	t["in"] = func(ec *EvalCtx, in any, args []any) (bool, error) {
 		if len(args) != 1 {
@@ -145,4 +139,27 @@ func cmpTest(op string) TestFunc {
 		}
 		return ec.compareOnce(op, in, args[0], 0)
 	}
+}
+
+// pyMod2Is is value % 2 == want in Python: a float's remainder, a
+// string's %-formatting.
+func pyMod2Is(ec *EvalCtx, in any, want int64) (bool, error) {
+	v := Undeprecate(in)
+	if s, ok := asString(v); ok {
+		_, err := pyPercentFormat(s, []any{int64(2)}, nil)
+		return false, err
+	}
+	switch t := v.(type) {
+	case float64:
+		m := math.Mod(t, 2)
+		if m < 0 {
+			m += 2
+		}
+		return m == float64(want), nil
+	case bool, int64, int, *big.Int:
+		n, _ := pyIndex(t)
+		m := new(big.Int).Mod(n, big.NewInt(2))
+		return m.Int64() == want, nil
+	}
+	return false, fmt.Errorf("unsupported operand type(s) for %%: '%s' and 'int'", pyOperandClass(v, ec.fromVar(-1)))
 }

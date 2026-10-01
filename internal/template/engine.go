@@ -275,6 +275,9 @@ type EvalCtx struct {
 	filterVars []bool
 	// testKwargs are the running test's keyword arguments.
 	testKwargs map[string]any
+	// callKwargs names the running filter's keyword arguments, in call
+	// order.
+	callKwargs []string
 }
 
 func (ec *EvalCtx) Engine() *Engine    { return ec.engine }

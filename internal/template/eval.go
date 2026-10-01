@@ -532,18 +532,25 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := checkArity(false, t.name, t.full, len(args), t.kwargs); err != nil {
+		return nil, ec.pluginError("filter", t.full, err)
+	}
 	// The filter reads some of the deprecated values it was given
 	// (to_json all of them, dict2items the values); those it passes on
 	// stay deprecated.
 	ec.filterReads(t.name, in, args, kwargs)
-	saved := ec.filterVars
+	saved, savedKw := ec.filterVars, ec.callKwargs
+	ec.callKwargs = make([]string, len(t.kwargs))
+	for i, k := range t.kwargs {
+		ec.callKwargs[i] = k.name
+	}
 	ec.filterVars = make([]bool, 1+len(t.args))
 	ec.filterVars[0] = ec.isVarRef(t.x)
 	for i, a := range t.args {
 		ec.filterVars[i+1] = ec.isVarRef(a)
 	}
 	out, err := fn(ec, in, args, kwargs)
-	ec.filterVars = saved
+	ec.filterVars, ec.callKwargs = saved, savedKw
 	if err != nil {
 		if _, ok := err.(*TemplateError); ok {
 			return nil, err
@@ -597,6 +604,9 @@ func (ec *EvalCtx) evalTest(t *testExpr) (any, error) {
 	args, kwargs, err := ec.evalArgs(t.args, t.kwargs)
 	if err != nil {
 		return nil, err
+	}
+	if err := checkArity(true, t.name, t.full, len(args), t.kwargs); err != nil {
+		return nil, ec.pluginError("test", t.full, err)
 	}
 	saved := ec.testKwargs
 	ec.testKwargs = kwargs

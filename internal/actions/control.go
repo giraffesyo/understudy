@@ -61,7 +61,9 @@ func runDebug(_ context.Context, actx *Context, args map[string]any, _ string) *
 		if m == nil {
 			return &agentproto.Result{VerboseAlways: true, Extra: map[string]any{"msg": nil}}
 		}
-		if s, isStr := m.(string); isStr {
+		if s, isStr := m.(string); isStr && s == "" {
+			return &agentproto.Result{VerboseAlways: true, Extra: map[string]any{"msg": ""}}
+		} else if isStr {
 			msg = s
 		} else {
 			return &agentproto.Result{VerboseAlways: true, Extra: map[string]any{"msg": jsonSafe(m)}}

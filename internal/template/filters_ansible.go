@@ -4,19 +4,19 @@ import (
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/sha3"
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash"
-	"hash/fnv"
 	"math"
 	"math/big"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -210,11 +210,11 @@ func registerAnsibleFilters(e *Engine) {
 	f["selectattr"] = mkSelect(false, true)
 	f["rejectattr"] = mkSelect(true, true)
 
-	// List set operations (first-seen order, like Ansible).
-	f["union"] = setOp(func(inA, inB bool) bool { return inA || inB })
-	f["intersect"] = setOp(func(inA, inB bool) bool { return inA && inB })
-	f["difference"] = setOp(func(inA, inB bool) bool { return inA && !inB })
-	f["symmetric_difference"] = setOp(func(inA, inB bool) bool { return inA != inB })
+	// Set operations (see pyset.go).
+	f["union"] = setOp(setUnion)
+	f["intersect"] = setOp(setIntersect)
+	f["difference"] = setOp(setDifference)
+	f["symmetric_difference"] = setOp(setSymmetricDifference)
 
 	// ---- dicts ----
 	// key_name and value_name, positional or by keyword.
@@ -547,79 +547,59 @@ func registerAnsibleFilters(e *Engine) {
 		return math.Log(x) / math.Log(b), nil
 	}
 
-	// random: choose a random element of a list, or a random int in [0, N).
-	// A seed makes it deterministic within understudy (the sequence does not
-	// match Ansible's Python PRNG, so seeded values are not cross-checked).
+	// random is ansible-core's rand(end, start=None, step=None,
+	// seed=None): randrange for an int, choice for a sequence, with
+	// Python's Random (seeded, the same picks as ansible-core's).
 	f["random"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		rng := newRand(kwargs["seed"])
-		if items, ok := in.([]any); ok {
-			if len(items) == 0 {
-				return nil, nil
+		arg := func(i int, name string) any {
+			if i < len(args) {
+				return args[i]
 			}
-			return items[rng.Intn(len(items))], nil
+			return kwargs[name]
 		}
-		n, ok := asInt(in)
-		if !ok {
-			return nil, fmt.Errorf("random requires a list or an integer, got %s", typeName(in))
-		}
-		if n <= 0 {
-			return int64(0), nil
-		}
-		return rng.Int63n(n), nil
-	}
-
-	// password_hash(scheme, salt=None, rounds=None): glibc crypt(3) hash of a
-	// password. Only sha256/sha512 are supported (the schemes real playbooks
-	// use); a salt must be given for a deterministic result.
-	f["password_hash"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		pw, ok := asString(in)
-		if !ok {
-			return nil, fmt.Errorf("password_hash requires a string")
-		}
-		scheme, err := argStr(args, 0, "sha512")
+		start, step := Undeprecate(arg(0, "start")), Undeprecate(arg(1, "step"))
+		rng, err := newPyRandom(arg(2, "seed"))
 		if err != nil {
 			return nil, err
 		}
-		use512 := scheme == "sha512"
-		if !use512 && scheme != "sha256" {
-			return nil, fmt.Errorf("password_hash: unsupported scheme %q (sha256/sha512 only)", scheme)
-		}
-		salt, _ := asString(args1(args, 1))
-		if s, ok := kwargs["salt"]; ok {
-			salt, _ = asString(s)
-		}
-		if salt == "" {
-			return nil, fmt.Errorf("password_hash: a salt is required (random salts are not supported)")
-		}
-		// Ansible's password_hash uses passlib, whose default rounds differ by
-		// scheme (sha512=656000, sha256=535000) — not glibc's 5000. Match it so
-		// unqualified hashes agree.
-		rounds := 535000
-		if use512 {
-			rounds = 656000
-		}
-		if v, ok := kwargs["rounds"]; ok {
-			if n, ok := asInt(v); ok {
-				rounds = int(n)
+		switch end := Undeprecate(in).(type) {
+		case bool, int64, int, *big.Int:
+			if !truthy(start) {
+				start = int64(0)
 			}
-		} else if n, ok := asInt(args1(args, 2)); ok {
-			rounds = int(n)
-		}
-		if ec.engine.Verbose != nil {
-			// BaseHash announces the backend do_encrypt picked: libxcrypt
-			// where ansible-core finds it, else passlib.
-			backend := "PasslibHash"
-			if cryptGensalt() {
-				backend = "CryptHash"
+			if !truthy(step) {
+				step = int64(1)
 			}
-			ec.engine.Verbose(2, fmt.Sprintf("Using %s to hash input with '%s_crypt'", backend, scheme))
+			return pyRandrange(rng, start, end, step)
+		case nil, float64:
+		default:
+			if !isMap(end) {
+				items, err := iterate(end)
+				if err != nil {
+					break
+				}
+				if truthy(start) || truthy(step) {
+					return nil, fmt.Errorf("start and step can only be used with integer values")
+				}
+				if len(items) == 0 {
+					return nil, fmt.Errorf("Cannot choose from an empty sequence")
+				}
+				return items[rng.randbelowInt(len(items))], nil
+			}
+			keys, _, _ := orderedMap(end)
+			if truthy(start) || truthy(step) {
+				return nil, fmt.Errorf("start and step can only be used with integer values")
+			}
+			if len(keys) == 0 {
+				return nil, fmt.Errorf("Cannot choose from an empty sequence")
+			}
+			// seq[i] on a dict: a KeyError for the int.
+			return nil, fmt.Errorf("%d", rng.randbelowInt(len(keys)))
 		}
-		salt, err = cryptSalt(salt)
-		if err != nil {
-			return nil, fmt.Errorf("password_hash: %v", err)
-		}
-		return shaCrypt(pw, salt, rounds, use512), nil
+		return nil, fmt.Errorf("random can only be used on sequences and integers")
 	}
+
+	f["password_hash"] = filterPasswordHash
 
 	// strftime(timestamp): the format string is the input; the epoch seconds
 	// are the argument (defaulting to now is unsupported — a timestamp must be
@@ -720,6 +700,18 @@ func registerAnsibleFilters(e *Engine) {
 		if !ok {
 			return nil, fmt.Errorf("the JSON object must be str, bytes or bytearray, not %s", pyClassName(in, false))
 		}
+		// json.loads(a, cls=..., **kwargs) passes the keywords to the
+		// decoder.
+		for _, kw := range ec.callKwargs {
+			if kw == "profile" || slices.Contains(jsonDecoderKwargs, kw) {
+				continue
+			}
+			msg := fmt.Sprintf("JSONDecoder.__init__() got an unexpected keyword argument '%s'", kw)
+			if sugg := pySuggestion(append([]string{"self"}, jsonDecoderKwargs...), kw); sugg != "" {
+				msg += fmt.Sprintf(". Did you mean '%s'?", sugg)
+			}
+			return nil, errors.New(msg)
+		}
 		// Objects keep their key order and numbers their type, as
 		// Python's json.loads builds them.
 		return omap.UnmarshalJSON([]byte(s))
@@ -771,17 +763,21 @@ func registerAnsibleFilters(e *Engine) {
 		return string(data), nil
 	}
 
+	// hash is get_hash(data, hashtype='sha1'): hashlib.new(hashtype) over
+	// to_bytes(data), which is str(data) for anything not a string.
 	f["hash"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, ok := asString(in)
-		if !ok {
-			return nil, fmt.Errorf("hash requires a string")
-		}
-		algo := "sha1"
+		algo := any("sha1")
 		if len(args) > 0 {
-			algo, _ = asString(args[0])
+			algo = args[0]
+		} else if v, ok := kwargs["hashtype"]; ok {
+			algo = v
+		}
+		name, ok := asString(Undeprecate(algo))
+		if !ok {
+			return nil, whileHandling("new() argument 'name' must be str, not %s", pyClassName(algo, ec.fromVar(0)))
 		}
 		var h hash.Hash
-		switch algo {
+		switch strings.ToLower(name) {
 		case "md5":
 			h = md5.New()
 		case "sha1":
@@ -794,14 +790,40 @@ func registerAnsibleFilters(e *Engine) {
 			h = sha512.New384()
 		case "sha512":
 			h = sha512.New()
+		case "sha512_224":
+			h = sha512.New512_224()
+		case "sha512_256":
+			h = sha512.New512_256()
+		case "sha3_224":
+			h = sha3.New224()
+		case "sha3_256":
+			h = sha3.New256()
+		case "sha3_384":
+			h = sha3.New384()
+		case "sha3_512":
+			h = sha3.New512()
 		default:
-			return nil, whileHandling("unsupported hash type %s", algo)
+			return nil, whileHandling("unsupported hash type %s", name)
 		}
-		h.Write([]byte(s))
+		h.Write([]byte(pyToBytes(in)))
 		return hex.EncodeToString(h.Sum(nil)), nil
 	}
+	// checksum is secure_hash_s(data, hash_func=sha1): a hash_func given
+	// is called.
 	f["checksum"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		fn, given := kwargs["hash_func"]
+		if len(args) > 0 {
+			fn, given = args[0], true
+		}
+		if given {
+			return nil, fmt.Errorf("'%s' object is not callable", pyClassName(fn, ec.fromVar(0)))
+		}
 		return e.Filters["hash"](ec, in, []any{"sha1"}, nil)
+	}
+	f["sha1"] = f["checksum"]
+	// md5 is md5s(data).
+	f["md5"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		return e.Filters["hash"](ec, in, []any{"md5"}, nil)
 	}
 
 	f["format"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
@@ -1100,6 +1122,19 @@ func groupKey(k any, caseSensitive bool) string {
 // extractAttr follows a dotted attribute path into maps.
 func extractAttr(item, attr any) (any, error) {
 	path, ok := asString(attr)
+	if n, isInt := attr.(int64); isInt && !ok {
+		// An int attribute is one item lookup.
+		if lst, isList := Undeprecate(item).([]any); isList {
+			i := n
+			if i < 0 {
+				i += int64(len(lst))
+			}
+			if i >= 0 && i < int64(len(lst)) {
+				return lst[i], nil
+			}
+		}
+		return Undefined{Name: fmt.Sprintf("%s[%d]", describeOwner(item), n)}, nil
+	}
 	if !ok {
 		return nil, fmt.Errorf("attribute name must be a string")
 	}
@@ -1163,7 +1198,16 @@ func filterMap(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, err
 	if err != nil {
 		return nil, err
 	}
-	if attr, ok := kwargs["attribute"]; ok {
+	if len(items) == 0 {
+		// Jinja prepares the mapping only for a non-empty sequence.
+		return []any{}, nil
+	}
+	if attr, ok := kwargs["attribute"]; ok && len(args) == 0 {
+		for k := range kwargs {
+			if k != "attribute" && k != "default" {
+				return nil, fmt.Errorf("Unexpected keyword argument %s", pyStrRepr(k))
+			}
+		}
 		out := make([]any, len(items))
 		for i, item := range items {
 			v, err := extractAttr(item, attr)
@@ -1182,19 +1226,22 @@ func filterMap(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, err
 		return out, nil
 	}
 	if len(args) == 0 {
-		return items, nil
+		return nil, fmt.Errorf("map requires a filter argument")
 	}
 	name, ok := asString(args[0])
 	if !ok {
-		return nil, fmt.Errorf("map requires a filter name")
+		return nil, pluginLoadError("filter", args[0])
 	}
 	fn, ok := ec.engine.Filters[pluginShortName(name)]
 	if !ok {
 		return nil, fmt.Errorf("No filter named %s.", pyStrRepr(name))
 	}
+	if err := checkArity(false, pluginShortName(name), name, len(args)-1, kwargsInOrder(ec.callKwargs)); err != nil {
+		return nil, ec.pluginError("filter", name, err)
+	}
 	out := make([]any, len(items))
 	for i, item := range items {
-		v, err := fn(ec, item, args[1:], nil)
+		v, err := fn(ec, item, args[1:], kwargs)
 		if err != nil {
 			return nil, err
 		}
@@ -1210,10 +1257,14 @@ func mkSelect(negate, byAttr bool) FilterFunc {
 		if err != nil {
 			return nil, err
 		}
+		if len(items) == 0 {
+			// Jinja prepares the test only for a non-empty sequence.
+			return []any{}, nil
+		}
 		var attr any
 		if byAttr {
 			if len(args) == 0 {
-				return nil, fmt.Errorf("selectattr requires an attribute name")
+				return nil, fmt.Errorf("Missing parameter for attribute name")
 			}
 			attr = args[0]
 			args = args[1:]
@@ -1223,7 +1274,7 @@ func mkSelect(negate, byAttr bool) FilterFunc {
 		if len(args) > 0 {
 			name, ok := asString(args[0])
 			if !ok {
-				return nil, fmt.Errorf("test name must be a string")
+				return nil, pluginLoadError("test", args[0])
 			}
 			test, ok = ec.engine.Tests[pluginShortName(name)]
 			if !ok {
@@ -1264,53 +1315,6 @@ func mkSelect(negate, byAttr bool) FilterFunc {
 	}
 }
 
-func setOp(keep func(inA, inB bool) bool) FilterFunc {
-	return func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		if len(args) != 1 {
-			return nil, fmt.Errorf("set operation requires exactly one argument")
-		}
-		a, ok := in.([]any)
-		if !ok {
-			return nil, fmt.Errorf("set operations require lists, got %s", typeName(in))
-		}
-		b, ok := args[0].([]any)
-		if !ok {
-			return nil, fmt.Errorf("set operations require lists, got %s", typeName(args[0]))
-		}
-		contains := func(list []any, v any) bool {
-			for _, item := range list {
-				if equal(item, v) {
-					return true
-				}
-			}
-			return false
-		}
-		var out []any
-		appendUnique := func(v any) {
-			for _, seen := range out {
-				if equal(seen, v) {
-					return
-				}
-			}
-			out = append(out, v)
-		}
-		for _, v := range a {
-			if keep(true, contains(b, v)) {
-				appendUnique(v)
-			}
-		}
-		for _, v := range b {
-			if keep(contains(a, v), true) && keep(false, true) {
-				appendUnique(v)
-			}
-		}
-		if out == nil {
-			out = []any{}
-		}
-		return out, nil
-	}
-}
-
 func asFloatArg(args []any, i int) (float64, bool) {
 	if i >= len(args) {
 		return 0, false
@@ -1324,17 +1328,6 @@ func args1(args []any, i int) any {
 		return nil
 	}
 	return args[i]
-}
-
-// newRand returns a PRNG seeded from the given value (deterministic) or from
-// the clock when seed is nil.
-func newRand(seed any) *rand.Rand {
-	if seed == nil {
-		return rand.New(rand.NewSource(time.Now().UnixNano()))
-	}
-	h := fnv.New64a()
-	h.Write([]byte(toStr(seed)))
-	return rand.New(rand.NewSource(int64(h.Sum64())))
 }
 
 // strftime formats epoch seconds using Python strftime codes, in local time
@@ -1943,4 +1936,22 @@ func jsonSanitize(v any) any {
 		return out
 	}
 	return v
+}
+
+// jsonDecoderKwargs are json.JSONDecoder's keyword arguments.
+var jsonDecoderKwargs = []string{"object_hook", "parse_float", "parse_int", "parse_constant", "strict", "object_pairs_hook"}
+
+// pluginLoadError is ansible-core's failure loading a filter or test
+// named by something not a string (map(1), select(none)).
+func pluginLoadError(kind string, name any) error {
+	return fmt.Errorf("The %s plugin %s failed to load: '%s' object has no attribute 'removeprefix'", kind, pyRepr(name), pyClassName(name, false))
+}
+
+// kwargsInOrder are keyword arguments by name, for checkArity.
+func kwargsInOrder(names []string) []kwarg {
+	out := make([]kwarg, len(names))
+	for i, n := range names {
+		out[i] = kwarg{name: n}
+	}
+	return out
 }

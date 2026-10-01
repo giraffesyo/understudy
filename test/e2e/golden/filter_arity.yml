@@ -1,0 +1,98 @@
+# Calling a filter or test binds its arguments to the plugin's Python
+# signature: too many or too few, or a keyword it does not take, fail as
+# CPython words the TypeError ("do_upper() takes 1 positional argument
+# but 2 were given"), through ansible-core's plugin error chain. Set
+# operations, random, shuffle, password_hash and checksum follow the
+# Python code of their plugins, errors and orders included.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    l: [3, 1, 10, 33]
+    n: 5
+  tasks:
+    - {debug: {msg: "{{ 'a' | upper(1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | unique(1, 2, 3) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' | b64encode(bogus=1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' | b64encode(encodng='x') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' | b64encode('x', string='y') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' | string(s=1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' | ternary }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' | ternary(true_val=1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' | default(1, 2, 3) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' | length(1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' | abs(zz=1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a b' | split(' ', 1, 2) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' | split(1, sep=2) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' | to_nice_yaml(4, 5, indent=2) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' | random(1, 2, 3, 4) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | join(',', 2) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | map('string', 1) | list }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | map | list }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ [] | map | list }}"}}
+    - {debug: {msg: "{{ l | map(1) | list }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | select(none) | list }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | selectattr | list }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ '1' | from_json(zz=1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' is defined(1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' is version('1', '<', 3, 4) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' is eq }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' is sameas }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'a' is match }}"}}
+    - {debug: {msg: "{{ 'a' | regex_replace }}"}}
+    - {debug: {msg: "{{ 'a' is even }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ [1] is odd }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 1.5 is odd }}"}}
+    - {debug: {msg: ""}}
+    # Set operations: Python set order for numbers, the list fallbacks'
+    # errors for operands that are not lists.
+    - {debug: {msg: "{{ l | union([2, 1]) }}"}}
+    - {debug: {msg: "{{ l | intersect([33, 10, 3]) }}"}}
+    - {debug: {msg: "{{ l | difference([33]) }}"}}
+    - {debug: {msg: "{{ l | symmetric_difference([33, 7]) }}"}}
+    - {debug: {msg: "{{ [[1], 2] | union([2, [1], 3]) }}"}}
+    - {debug: {msg: "{{ n | union([1]) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | union(1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ none | union('ab') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ {'a': 1} | union([[1]]) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | difference(1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ [1] | intersect(none) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ [[1], 2] | intersect('ab') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ [[1], 2] | difference({'a': 1}) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'ab' | symmetric_difference([[1]]) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ true | difference([1]) }}"}, ignore_errors: true}
+    # random and shuffle: Python's Random, seeded as ansible-core seeds it.
+    - {debug: {msg: "{{ 59 | random(seed='web01') }}"}}
+    - {debug: {msg: "{{ 59 | random(seed=inventory_hostname) }}"}}
+    - {debug: {msg: "{{ 100 | random(5, 7, seed=42) }}"}}
+    - {debug: {msg: "{{ l | random(seed=1) }}"}}
+    - {debug: {msg: "{{ 'abcdef' | random(seed=1.5) }}"}}
+    - {debug: {msg: "{{ range(10) | shuffle(seed='x') }}"}}
+    - {debug: {msg: "{{ l | shuffle(seed=7) }}"}}
+    - {debug: {msg: "{{ n | random(start='x') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 0 | random }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ [] | random }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | random(start=1) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 1.5 | random }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ n | random(seed=[1]) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'x' | random }}"}}
+    # password_hash, checksum and hash.
+    - {debug: {msg: "{{ 'pw' | password_hash('nope') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'pw' | password_hash('sha512', 'bad salt!') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'pw' | password_hash('sha512', 'abcdefghijklmnopqrstu') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'pw' | password_hash('sha512', 'abc', rounds=500) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'pw' | password_hash('sha512', 'abc', rounds='x') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'pw' | password_hash('sha512', 'abc', rounds=1.5) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'pw' | password_hash('sha512', 'abc', salt_size='x') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ none | password_hash('sha512', 'abc') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ l | password_hash('sha512', 'abc') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'pw' | password_hash('sha512', 'abc', rounds=5000) }}"}}
+    - {debug: {msg: "{{ 'pw' | password_hash('md5', 'abc') }}"}}
+    - {debug: {msg: "{{ 'pw' | password_hash('sha512', 123) }}"}}
+    - {debug: {msg: "{{ 'pw' | password_hash('sha512') | regex_replace('[^$]*$', 'X') | length }}"}}
+    - {debug: {msg: "{{ 1 | checksum }}"}}
+    - {debug: {msg: "{{ none | checksum }}"}}
+    - {debug: {msg: "{{ [1, 'a'] | checksum }}"}}
+    - {debug: {msg: "{{ 'x' | checksum('md5') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ 'x' | sha1 }}"}}
+    - {debug: {msg: "{{ 1 | md5 }}"}}
+    - {debug: {msg: "{{ [1] | hash('sha3_256') }}"}}
