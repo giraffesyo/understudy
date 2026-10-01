@@ -87,18 +87,18 @@ func registerTests(e *Engine) {
 		return in == args[0], nil
 	}
 	t["divisibleby"] = func(ec *EvalCtx, in any, args []any) (bool, error) {
-		n, ok := asInt(in)
-		if !ok {
-			return false, fmt.Errorf("expected an integer, got %s", typeName(in))
-		}
 		if len(args) != 1 {
-			return false, fmt.Errorf("divisibleby requires one argument")
+			return false, fmt.Errorf("test_divisibleby() missing 1 required positional argument: 'num'")
 		}
-		d, ok := asInt(args[0])
-		if !ok || d == 0 {
-			return false, fmt.Errorf("divisor must be a non-zero integer")
+		// value % num == 0
+		if _, isStr := asString(in); isStr {
+			return false, fmt.Errorf("not all arguments converted during string formatting")
 		}
-		return n%d == 0, nil
+		m, err := numArith(tokMod, in, args[0])
+		if err != nil {
+			return false, err
+		}
+		return equal(m, int64(0)), nil
 	}
 	t["even"] = func(ec *EvalCtx, in any, args []any) (bool, error) {
 		n, ok := asInt(in)

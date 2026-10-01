@@ -129,6 +129,9 @@ type TemplateError struct {
 	// Plugin marks an error a filter or test plugin raised: Msg is
 	// ansible-core's "The filter plugin '...' failed: ..." chain.
 	Plugin bool
+	// pluginHead and pluginDetail split a plugin failure whose exception
+	// was raised while handling another (see SplitCause).
+	pluginHead, pluginDetail string
 }
 
 // Cause is the error as ansible-core words a template failure's cause:
@@ -138,6 +141,9 @@ type TemplateError struct {
 func Cause(err error) (msg string, ok bool) {
 	var ue *UndefinedError
 	if errors.As(err, &ue) {
+		if ue.Hint != "" {
+			return ue.Hint, true
+		}
 		return undefinedCause(ue.Name), true
 	}
 	var te *TemplateError
@@ -267,6 +273,8 @@ type EvalCtx struct {
 	// filterVars marks which of the running filter's input and positional
 	// arguments were read from variables (see pyClassName).
 	filterVars []bool
+	// testKwargs are the running test's keyword arguments.
+	testKwargs map[string]any
 }
 
 func (ec *EvalCtx) Engine() *Engine    { return ec.engine }

@@ -69,6 +69,7 @@ type testExpr struct {
 	name    string
 	full    string // the name as written (ansible.builtin.combine)
 	args    []Expr
+	kwargs  []kwarg
 	negated bool
 }
 

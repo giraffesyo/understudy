@@ -1,6 +1,7 @@
 package template
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -491,7 +492,7 @@ func (ec *EvalCtx) compareOnce(op string, l, r any, off int) (bool, error) {
 		}
 		return found, nil
 	}
-	c, err := compare(l, r)
+	c, err := compareOp(l, r, op)
 	if err != nil {
 		return false, ec.errf(off, "%s", err)
 	}
@@ -563,13 +564,17 @@ func (ec *EvalCtx) pluginError(kind, name string, err error) error {
 		name = "ansible.builtin." + name
 	}
 	head := fmt.Sprintf("The %s plugin %s failed.", kind, pyStrRepr(name))
-	msg := err.Error()
-	if strings.HasSuffix(head, msg) {
-		msg = head
-	} else {
-		msg = strings.TrimRight(head, ". ") + ": " + msg
+	detail := err.Error()
+	msg := head
+	if !strings.HasSuffix(head, detail) {
+		msg = strings.TrimRight(head, ". ") + ": " + detail
 	}
-	return &TemplateError{Pos: ec.pos, Msg: msg, Src: ec.src, Plugin: true}
+	te := &TemplateError{Pos: ec.pos, Msg: msg, Src: ec.src, Plugin: true}
+	var he *handlingError
+	if errors.As(err, &he) {
+		te.pluginHead, te.pluginDetail = head, detail
+	}
+	return te
 }
 
 // undefinedTolerantTests may receive an Undefined input.
@@ -590,11 +595,14 @@ func (ec *EvalCtx) evalTest(t *testExpr) (any, error) {
 		u := in.(Undefined)
 		return nil, u.useError(ec.pos)
 	}
-	args, _, err := ec.evalArgs(t.args, nil)
+	args, kwargs, err := ec.evalArgs(t.args, t.kwargs)
 	if err != nil {
 		return nil, err
 	}
+	saved := ec.testKwargs
+	ec.testKwargs = kwargs
 	res, err := fn(ec, in, args)
+	ec.testKwargs = saved
 	if err != nil {
 		if _, ok := err.(*TemplateError); ok {
 			return nil, err

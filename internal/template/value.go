@@ -549,7 +549,10 @@ func typeName(v any) string {
 
 // compare returns -1/0/1 for Python-style ordering, or an error for
 // incomparable types (Python 3 raises on e.g. int < str).
-func compare(a, b any) (int, error) {
+func compare(a, b any) (int, error) { return compareOp(a, b, "<") }
+
+// compareOp is compare for the operator op, which its error names.
+func compareOp(a, b any, op string) (int, error) {
 	a, b = Undeprecate(a), Undeprecate(b)
 	if c, isNum := compareNumbers(a, b); isNum {
 		return c, nil
@@ -562,7 +565,7 @@ func compare(a, b any) (int, error) {
 	if la, ok := a.([]any); ok {
 		if lb, ok := b.([]any); ok {
 			for i := 0; i < len(la) && i < len(lb); i++ {
-				c, err := compare(la[i], lb[i])
+				c, err := compareOp(la[i], lb[i], op)
 				if err != nil || c != 0 {
 					return c, err
 				}
@@ -576,7 +579,7 @@ func compare(a, b any) (int, error) {
 			return 0, nil
 		}
 	}
-	return 0, fmt.Errorf("'<' not supported between instances of '%s' and '%s'", pyClassName(a, false), pyClassName(b, false))
+	return 0, fmt.Errorf("'%s' not supported between instances of '%s' and '%s'", op, pyClassName(a, false), pyClassName(b, false))
 }
 
 // equal implements Python ==: cross-type numeric comparison works; other
@@ -695,7 +698,7 @@ func contains(needle, haystack any) (bool, error) {
 		_, found := h.GetItem(s)
 		return found, nil
 	}
-	return false, fmt.Errorf("argument of type %s is not iterable", typeName(haystack))
+	return false, fmt.Errorf("argument of type '%s' is not a container or iterable", pyClassName(haystack, false))
 }
 
 // length implements the length/count filter and len() semantics.
@@ -715,7 +718,7 @@ func length(v any) (int, error) {
 	case *rangeValue:
 		return int(t.length()), nil
 	}
-	return 0, fmt.Errorf("object of type %s has no length", typeName(v))
+	return 0, fmt.Errorf("object of type '%s' has no len()", pyClassName(v, false))
 }
 
 // iterate returns the items of an iterable: list items, string runes (as
@@ -750,7 +753,7 @@ func iterate(v any) ([]any, error) {
 	case *rangeValue:
 		return t.materialize(), nil
 	}
-	return nil, fmt.Errorf("'%s' object is not iterable", typeName(v))
+	return nil, fmt.Errorf("'%s' object is not iterable", pyClassName(v, false))
 }
 
 // rangeValue is the lazy result of range(): iterable and indexable without

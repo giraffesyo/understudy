@@ -204,6 +204,9 @@ func runTemplate(ctx context.Context, actx *Context, args map[string]any, _ stri
 		if file, line, col, ok := template.FileErrorOrigin(err); ok && line > 0 {
 			res.ErrorChain.InnerFile, res.ErrorChain.InnerLine, res.ErrorChain.InnerCol = file, line, col
 			res.ErrorChain.InnerPathOnly = false
+		} else if head, detail, ok := template.SplitCause(err); ok {
+			res.ErrorChain.Inner = head
+			res.ErrorChain.Root = &agentproto.ErrorChain{Inner: detail}
 		}
 		return res
 	}

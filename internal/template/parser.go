@@ -578,9 +578,10 @@ func (p *parser) parseFilterExpr(node Expr) (Expr, error) {
 				full += "." + seg.val
 			}
 			var args []Expr
+			var kwargs []kwarg
 			if p.kind() == tokLParen {
 				p.next()
-				args, _, err = p.parseCallArgs()
+				args, kwargs, err = p.parseCallArgs()
 				if err != nil {
 					return nil, err
 				}
@@ -592,7 +593,7 @@ func (p *parser) parseFilterExpr(node Expr) (Expr, error) {
 				}
 				args = []Expr{arg}
 			}
-			node = &testExpr{off: t.off, x: node, name: name, full: full, args: args, negated: negated}
+			node = &testExpr{off: t.off, x: node, name: name, full: full, args: args, kwargs: kwargs, negated: negated}
 		default:
 			return node, nil
 		}

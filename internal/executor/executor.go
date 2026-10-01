@@ -2527,20 +2527,33 @@ func (e *conditionalError) result() *agentproto.Result {
 	inner := e.message()
 	res := agentproto.Fail("Task failed: %s", inner)
 	res.Origin = "verbatim"
-	res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: inner,
-		InnerFile: e.pos.File, InnerLine: e.pos.Line, InnerCol: e.pos.Col}
+	res.ErrorChain = e.chain("Task failed.")
 	return res
+}
+
+// chain is the error's display below outer: the conditional's failure
+// at its origin (a plugin error raised while handling another split off).
+func (e *conditionalError) chain(outer string) *agentproto.ErrorChain {
+	ec := &agentproto.ErrorChain{Outer: outer, Inner: e.message(),
+		InnerFile: e.pos.File, InnerLine: e.pos.Line, InnerCol: e.pos.Col}
+	if head, detail, ok := template.SplitCause(e.err); ok {
+		article := "A"
+		if e.keyword == "until" {
+			article = "An"
+		}
+		ec.Inner = fmt.Sprintf("%s '%s' expression failed: %s", article, e.keyword, head)
+		ec.Root = &agentproto.ErrorChain{Inner: detail}
+	}
+	return ec
 }
 
 // actionResult is the module's result failed by a changed_when or
 // failed_when that did not evaluate (raised in the action: "Task failed:
 // Action failed").
 func (e *conditionalError) actionResult(res *agentproto.Result) *agentproto.Result {
-	inner := e.message()
 	out := *res
 	out.Failed = true
-	out.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed: Action failed.", Inner: inner,
-		InnerFile: e.pos.File, InnerLine: e.pos.Line, InnerCol: e.pos.Col}
+	out.ErrorChain = e.chain("Task failed: Action failed.")
 	return &out
 }
 
