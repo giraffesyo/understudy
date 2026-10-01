@@ -180,6 +180,9 @@ func Cause(err error) (msg string, ok bool) {
 	if se, ok := AsStorageError(err); ok {
 		return strings.TrimSuffix(se.Rendering(), ".") + ": " + se.Error(), true
 	}
+	if ve, ok := AsVaultError(err); ok {
+		return "Error rendering template: " + ve.Error(), true
+	}
 	return "", false
 }
 
@@ -211,6 +214,9 @@ func FileErrorOrigin(err error) (file string, line, col int, ok bool) {
 // changed_when, failed_when, assert's that) that did not evaluate: as
 // Cause, an undefined value as "Error while evaluating conditional: ...".
 func ConditionalCause(err error) string {
+	if msg, _, _, ok := RenderingCause(err); ok {
+		return "Error rendering expression: " + msg
+	}
 	msg, ok := Cause(err)
 	if !ok {
 		return err.Error()

@@ -3066,14 +3066,14 @@ func loopFailure(err error) *agentproto.Result {
 		if cause, ok := template.Cause(le.err); ok {
 			res := agentproto.Fail("%s", cause)
 			res.Origin = "verbatim"
-			if se, ok := template.AsStorageError(le.err); ok {
+			if msg, at, value, ok := template.RenderingCause(le.err); ok {
 				pos := le.pos
-				if se.Pos.File != "" {
+				if se, isStorage := template.AsStorageError(le.err); isStorage && se.Pos.File != "" {
 					pos = se.Pos
 				}
-				res.ErrorChain = &agentproto.ErrorChain{Outer: se.Rendering(),
+				res.ErrorChain = &agentproto.ErrorChain{Outer: "Error rendering template.",
 					OuterFile: pos.File, OuterLine: pos.Line, OuterCol: pos.Col,
-					Inner: se.Error(), InnerValue: se.Value}
+					Inner: msg, InnerValue: value, InnerFile: at.File, InnerLine: at.Line, InnerCol: at.Col}
 				return res
 			}
 			res.ErrorChain = &agentproto.ErrorChain{Inner: cause,
@@ -3136,6 +3136,16 @@ func (e *conditionalError) chain(outer string) *agentproto.ErrorChain {
 		cause, _ := template.Cause(ie.Err)
 		ec.Inner = fmt.Sprintf("%s '%s' expression failed: Error while evaluating conditional.", article, e.keyword)
 		ec.Root = &agentproto.ErrorChain{Inner: cause, InnerFile: ie.Pos.File, InnerLine: ie.Pos.Line, InnerCol: ie.Pos.Col}
+	} else if msg, at, value, ok := template.RenderingCause(e.err); ok {
+		// A value that cannot be stored or decrypted: the rendering
+		// error, caused by it.
+		article := "A"
+		if e.keyword == "until" {
+			article = "An"
+		}
+		ec.Inner = fmt.Sprintf("%s '%s' expression failed: Error rendering expression.", article, e.keyword)
+		ec.Root = &agentproto.ErrorChain{Inner: msg, InnerValue: value,
+			InnerFile: at.File, InnerLine: at.Line, InnerCol: at.Col}
 	} else if head, detail, value, ok := template.SplitCause(e.err); ok {
 		article := "A"
 		if e.keyword == "until" {

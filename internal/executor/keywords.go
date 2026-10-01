@@ -109,11 +109,13 @@ func argTemplateError(task *playbook.Task, key string, pos template.Position, er
 		// cause keeps the file's origin.
 		chain.Inner = fmt.Sprintf("Error while resolving value for '%s'.", key)
 		chain.Root = &agentproto.ErrorChain{Inner: cause, InnerFile: file, InnerLine: line, InnerCol: col, InnerPathOnly: line == 0}
-	} else if msg, value, ok := template.StorageCause(err); ok {
+	} else if msg, at, value, ok := template.RenderingCause(err); ok {
 		// A value variable storage does not support (a timedelta, a
-		// method): shown apart, as its own value.
+		// method), shown apart as its own value, or one that cannot be
+		// decrypted, at its origin.
 		chain.Inner = fmt.Sprintf("Error while resolving value for '%s': Error rendering template.", key)
-		chain.Root = &agentproto.ErrorChain{Inner: msg, InnerValue: value}
+		chain.Root = &agentproto.ErrorChain{Inner: msg, InnerValue: value,
+			InnerFile: at.File, InnerLine: at.Line, InnerCol: at.Col}
 	} else if head, detail, value, ok := template.SplitCause(err); ok {
 		// A plugin's exception raised while handling another shows apart.
 		chain.Inner = fmt.Sprintf("Error while resolving value for '%s': %s", key, head)
