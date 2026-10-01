@@ -248,6 +248,12 @@ func splitLabels(s string) []string {
 	return append(out, s[start:])
 }
 
+// ParseAddress is ansible-core's parse_address: the host and port of
+// "host", "host:port" or "[host]:port" (port -1 when absent).
+func ParseAddress(address string, allowRanges bool) (string, int, error) {
+	return parseAddress(address, allowRanges)
+}
+
 // parseAddress is ansible-core's parse_address: the host and port of
 // "host", "host:port" or "[host]:port" (port -1 when absent).
 func parseAddress(address string, allowRanges bool) (string, int, error) {

@@ -590,6 +590,9 @@ func compareOp(a, b any, op string) (int, error) {
 	return 0, fmt.Errorf("'%s' not supported between instances of '%s' and '%s'", op, pyClassName(a, false), pyClassName(b, false))
 }
 
+// Equal is Python's == for template values.
+func Equal(a, b any) bool { return equal(a, b) }
+
 // equal implements Python ==: cross-type numeric comparison works; other
 // cross-type comparisons are false, never an error.
 func equal(a, b any) bool {
