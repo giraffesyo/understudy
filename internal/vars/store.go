@@ -121,6 +121,11 @@ func (s *Store) SetHostVarRaw(host, name string, value any) {
 // SetInventoryVars installs a host's merged inventory vars (group vars in
 // depth order + host vars — the inventory package pre-merges them).
 func (s *Store) SetInventoryVars(host string, vars map[string]any) {
+	s.mu.Lock()
+	if s.layers[LHostVars] != nil {
+		delete(s.layers[LHostVars], host)
+	}
+	s.mu.Unlock()
 	s.set(LHostVars, host, vars)
 }
 
