@@ -225,8 +225,10 @@ understudy vault view group_vars/all/vault.yml --vault-password-file .vault-pass
 
 ## What's supported
 
-**Language & structure** — plays, roles (with `meta` dependencies, defaults,
-and vars, argument-spec validation, `roles_path`), `import_tasks`/`import_role` (static) and
+**Language & structure** — plays, roles (with `meta` dependencies — for
+`include_role`/`import_role` too — `allow_duplicates` and the play's role
+cache, defaults, and vars, private or `public`, argument-spec validation,
+`roles_path`), `import_tasks`/`import_role` (static) and
 `include_tasks`/`include_role` (dynamic: per-host targets, loops, `when`, `apply`),
 handlers with `notify`/`listen`, `block`/`rescue`/`always`, tags, `vars_prompt`, the `linear`, `free`,
 `host_pinned` and `debug` strategies (with the task debugger and the
@@ -237,7 +239,8 @@ rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 
 **Task keywords** — `when`, `loop` / `with_*` (`items`, `nested`, `together`, `subelements`,
 `sequence`, `dict`, `indexed_items`, `flattened`, `lines`, `fileglob`, ...) with
-`loop_control` (`loop_var`, `index_var`, `label`, `extended`), `register`,
+`loop_control` (`loop_var`, `index_var`, `label`, `extended`, `pause`,
+`break_when`), `register`,
 `until`/`retries`/`delay`, `changed_when`, `failed_when`, `ignore_errors`,
 `become`/`become_user`/`become_method`/`become_flags`/`become_exe`, `vars`,
 `environment` (mappings, templates or a list of them, merged play, role,
