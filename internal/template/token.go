@@ -15,6 +15,11 @@ type Position struct {
 	// still holds are reported for the container, whose origin is
 	// unknown, rather than at File:Line:Col.
 	InContainer bool
+	// ContainerFile, ContainerLine and ContainerCol are that container's
+	// position, which converting the template's result for variable
+	// storage warns at.
+	ContainerFile               string
+	ContainerLine, ContainerCol int
 
 	// WholeFile marks a template that is a file's entire content (the
 	// template module, the template lookup): its errors originate in the

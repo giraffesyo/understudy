@@ -541,6 +541,9 @@ func (c *Context) origin(s string) template.Position {
 		}
 	}
 	pos.InContainer = c.inContainer
+	if c.inContainer && c.pos.File != "" {
+		pos.ContainerFile, pos.ContainerLine, pos.ContainerCol = c.pos.File, c.pos.Line, c.pos.Col
+	}
 	return pos
 }
 

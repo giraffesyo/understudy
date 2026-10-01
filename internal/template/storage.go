@@ -53,7 +53,12 @@ func (ec *EvalCtx) storableIn(v any, active map[cycleID]bool) (any, bool, error)
 	switch t := v.(type) {
 	case Markup:
 		if ec.engine.Warning != nil {
-			ec.engine.Warning(ec.pos, "Type 'Markup' is unsupported in variable storage, converting to 'str'.")
+			// A container's items are converted with the container.
+			pos := ec.pos
+			if pos.ContainerFile != "" {
+				pos = Position{File: pos.ContainerFile, Line: pos.ContainerLine, Col: pos.ContainerCol}
+			}
+			ec.engine.Warning(pos, "Type 'Markup' is unsupported in variable storage, converting to 'str'.")
 		}
 		return string(t), true, nil
 	case pyTimedelta:
