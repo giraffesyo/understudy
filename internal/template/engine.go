@@ -300,6 +300,9 @@ type EvalCtx struct {
 	// replaceMarkers keeps undefined items of literals as markers (see
 	// EvalExpressionReplacing).
 	replaceMarkers bool
+	// markOutput: an undefined {{ }} value in text stays in place
+	// (RenderTemplateMarking).
+	markOutput bool
 }
 
 func (ec *EvalCtx) Engine() *Engine    { return ec.engine }
@@ -350,6 +353,17 @@ func HasTemplate(s string) bool {
 // is returned (Ansible's native-types rule); otherwise the concatenated
 // string is returned. Undefined anywhere in output is an error.
 func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, error) {
+	return e.renderTemplate(src, vars, pos, false)
+}
+
+// RenderTemplateMarking is RenderTemplate where an undefined {{ }} value
+// in text is kept in place (a MarkedText), as debug's var= replaces
+// it with its marker there.
+func (e *Engine) RenderTemplateMarking(src string, vars VarGetter, pos Position) (any, error) {
+	return e.renderTemplate(src, vars, pos, true)
+}
+
+func (e *Engine) renderTemplate(src string, vars VarGetter, pos Position, mark bool) (any, error) {
 	if !HasTemplate(src) {
 		return src, nil
 	}
@@ -360,7 +374,7 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 	if err != nil {
 		return nil, err
 	}
-	ec := &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: pos, src: src, own: newOwnership(src)}
+	ec := &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: pos, src: src, own: newOwnership(src), markOutput: mark}
 
 	// Native-types rule: exactly one output expression and nothing that
 	// renders text. {% set %} nodes are allowed before it — they only bind
@@ -410,6 +424,8 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 		return nil, nil
 	case out.native.n == 1 && out.native.isValue:
 		return ec.storable(out.native.first)
+	case len(out.parts) > 0:
+		return MarkedText{Parts: append(out.parts, b.String()[out.flushed:])}, nil
 	}
 	return b.String(), nil
 }

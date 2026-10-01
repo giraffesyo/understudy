@@ -3,6 +3,7 @@ package template
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -12,6 +13,11 @@ import (
 // replaced, where it ends up in the result, by "<< error N - message >>",
 // and the messages are then warned about ("Encountered N template
 // errors."), grouped by the template each came from.
+
+// MarkedText is a template's text whose {{ }} values were undefined
+// where markers are replaced (a variable's value debug's var= reads):
+// its text and those undefined values, in place.
+type MarkedText struct{ Parts []any }
 
 // Marker is one undefined value a replacing evaluation met.
 type Marker struct {
@@ -105,6 +111,16 @@ func replaceMarkers(v any, pos Position, markers *[]Marker) any {
 		}
 		*markers = append(*markers, m)
 		return fmt.Sprintf("<< error %d - %s >>", len(*markers), m.Msg)
+	case MarkedText:
+		var b strings.Builder
+		for _, p := range t.Parts {
+			if s, ok := p.(string); ok {
+				b.WriteString(s)
+			} else {
+				b.WriteString(toStr(replaceMarkers(p, pos, markers)))
+			}
+		}
+		return b.String()
 	case []any:
 		for i, item := range t {
 			t[i] = replaceMarkers(item, pos, markers)

@@ -1,0 +1,26 @@
+---
+# debug's var renders the undefined values a variable's templates use as
+# numbered markers in place: the whole value, or within the text around
+# them, in containers too, each warned about at its template.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    whole: "{{ nope }}"
+    text: "x {{ nope }} y {{ nope2.attr }} z"
+    box: {a: "a {{ nope }}", b: 1, c: ["{{ nope3 }}", "c {{ nope }}"]}
+    fine: "x {{ 1 + 1 }} y"
+  tasks:
+    - debug:
+        var: whole
+    - debug:
+        var: text
+    - debug:
+        var: box
+    - debug:
+        var: fine
+    - debug:
+        var: "[text, whole]"
+    - name: in an argument, an undefined value still fails
+      debug:
+        msg: "{{ text }}"
+      ignore_errors: true

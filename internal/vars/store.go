@@ -776,7 +776,13 @@ func (c *Context) deepTemplateIn(v any, seen map[containerID]any) (any, error) {
 	}
 	switch t := v.(type) {
 	case string:
-		out, err := c.store.engine.RenderTemplate(t, c, c.origin(t))
+		render := c.store.engine.RenderTemplate
+		if c.markers {
+			// An undefined value in the text stays in place, as its
+			// marker.
+			render = c.store.engine.RenderTemplateMarking
+		}
+		out, err := render(t, c, c.origin(t))
 		var ue *template.UndefinedError
 		if err != nil && c.markers && errors.As(err, &ue) {
 			return template.Undefined{Name: ue.Name, Err: ue}, nil
