@@ -204,6 +204,20 @@ func FileNotFoundError(path string) error {
 	}
 }
 
+// EventError is an error event: its message, source context ("Origin:
+// ..." and the excerpt) and help text.
+func EventError(msg, ctx, help string) error {
+	return &chainError{msg: msg, ctx: ctx, help: help}
+}
+
+// AsEvent is err as an error event (a YAML error keeps its origin and
+// source excerpt).
+func AsEvent(err error) error { return asChain(err) }
+
+// FormatEvent is the error event as Display.error shows it after
+// "[ERROR]: ".
+func FormatEvent(err error) string { return asChain(err).format() }
+
 // Inline is the error's message with its help text after it, on one line,
 // as a top-level [ERROR] shows a file-not-found error.
 func Inline(err error) string {

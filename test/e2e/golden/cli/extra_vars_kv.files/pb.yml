@@ -1,0 +1,21 @@
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: key=value words, quoted, escaped, free-form
+      debug:
+        msg:
+          - "{{ x }} {{ x | type_debug }}"
+          - "{{ a }} | {{ d }} | {{ _raw_params }}"
+          - "{{ e }} | {{ f }} | {{ g }} | [{{ h }}]"
+          - "{{ p }} {{ q }}"
+          - "{{ t }} | {{ u }} | {{ w }}"
+    - name: JSON and YAML text, files
+      debug:
+        msg:
+          - "{{ j }} {{ k }}"
+          - "{{ m | type_debug }} {{ n }} {{ o }}"
+          - "{{ fy }} {{ fj }} {{ fj | type_debug }}"
+    - name: conditional from -e
+      debug:
+        msg: cond is true
+      when: x

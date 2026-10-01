@@ -1,0 +1,10 @@
+ansible-playbook
+-i
+localhost,
+-c
+local
+-e
+@missing.yml
+-e
+/abs
+pb.yml

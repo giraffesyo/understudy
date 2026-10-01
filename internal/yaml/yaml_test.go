@@ -316,7 +316,7 @@ func TestDuplicateKeysLastWinsWithWarning(t *testing.T) {
 	OnWarning = func(w Warning) { warned = append(warned, w) }
 	defer func() { OnWarning = nil }()
 	eq(t, "a: 1\na: 2\n", mapv("a", int64(2)))
-	want := Warning{Msg: "Found duplicate mapping key 'a'.", Help: "Using last defined value only.", File: "test.yml", Line: 2, Col: 1}
+	want := Warning{Msg: "Found duplicate mapping key 'a'.", Help: "Using last defined value only.", File: "test.yml", Line: 2, Col: 1, Key: "a"}
 	if len(warned) != 1 || warned[0] != want {
 		t.Errorf("warnings = %+v", warned)
 	}

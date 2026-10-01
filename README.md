@@ -476,6 +476,14 @@ than silently diverging. Known boundaries:
   traceback ansible-core prints after the message (its frames name
   ansible-core's source files and lines, which have no counterpart here).
   `--version` names understudy in place of ansible-core's Python details.
+  `-e` options load in order as ansible-core's `load_extra_vars` reads
+  them: `@file` (JSON first, then YAML), JSON or YAML text starting with
+  `{` or `[`, and otherwise `key=value` words split, unescaped and
+  unquoted as `parse_kv` does (quoted values keep their spaces, other
+  words join as `_raw_params`); the first that fails (unbalanced quotes,
+  a path without `@`, data that is not a mapping, a YAML error) fails
+  each inventory source and then the run, with ansible-core's message
+  and exit code.
 - **Exit codes**: as ansible-playbook, the result of the last play run
   (failed and unreachable hosts carry over between plays until
   `clear_host_errors`); several playbooks each end with a recap, and one

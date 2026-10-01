@@ -1,0 +1,12 @@
+ansible
+localhost
+-i
+localhost,
+-c
+local
+-m
+debug
+-a
+msg="{{ x }} {{ y }}"
+-e
+x='a b' y="c d" z

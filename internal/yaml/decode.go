@@ -18,6 +18,9 @@ type Warning struct {
 	// Value stands in for the source when the key has no origin (Python's
 	// bools cannot carry one); "" with Line 0 means no context at all (None).
 	Value string
+	// Key is the key's text, shown in place of a source that cannot be
+	// read (YAML text from the command line).
+	Key string
 }
 
 // OnWarning, if set, receives load warnings. The CLI points this at its
@@ -546,6 +549,7 @@ func (c *constructor) collection(n *Node) error {
 			case nil:
 			default:
 				w.Line, w.Col = key.Line, key.Column
+				w.Key = fmt.Sprint(v)
 			}
 			c.warnings = append(c.warnings, w)
 		}
