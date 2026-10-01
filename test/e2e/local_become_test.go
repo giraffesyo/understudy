@@ -35,7 +35,7 @@ func startLocalBecomeContainer(t *testing.T) string {
 	// The image carries no understudy build (each worktree has its own);
 	// the binary is copied into this process's container instead.
 	dockerfile := `FROM ubuntu:24.04
-RUN apt-get update && apt-get install -y sudo && \
+RUN apt-get update && apt-get install -y sudo acl && \
     useradd -m -s /bin/bash nopw && useradd -m -s /bin/bash pw && echo 'pw:pwpass' | chpasswd && \
     echo 'root:` + rootPass + `' | chpasswd && \
     echo 'nopw ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/nopw && echo 'pw ALL=(ALL) ALL' > /etc/sudoers.d/pw
@@ -98,12 +98,19 @@ func TestLocalBecome(t *testing.T) {
       become: true
       register: rawwho
     - assert: {that: rawwho.stdout == "root\n"}
-    - name: become_user
+    - name: become_user (an unprivileged one reads the module through setfacl)
       command: id -un
       become: true
       become_user: nobody
       register: nobody
     - assert: {that: nobody.stdout == "nobody"}
+    - name: a transfer to an unprivileged become user
+      copy: {content: "as nobody\n", dest: /tmp/nobody-proof.txt}
+      become: true
+      become_user: nobody
+    - stat: {path: /tmp/nobody-proof.txt}
+      register: proofstat
+    - assert: {that: proofstat.stat.pw_name == "nobody"}
     - command: id -un
       register: plain
     - assert: {that: plain.stdout != "root"}
@@ -120,6 +127,21 @@ func TestLocalBecome(t *testing.T) {
 	out, code = runLocalBecome(t, name, "pw", "ansible_become_password=pwpass", play)
 	if code != 0 || !strings.Contains(out, "failed=0") {
 		t.Fatalf("password sudo run failed (exit %d):\n%s", code, out)
+	}
+
+	// Without setfacl (or chown, chmod +a, a common group) the module
+	// cannot be made readable to an unprivileged become user.
+	exec.Command("docker", "exec", name, "rm", "-f", "/usr/bin/setfacl").Run()
+	out, code = runLocalBecome(t, name, "nopw", "", `
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - command: id -un
+      become: true
+      become_user: nobody
+`)
+	if code != 2 || !strings.Contains(out, "Failed to set permissions on the temporary files Ansible needs to create when becoming an unprivileged user") {
+		t.Errorf("unprivileged become without setfacl (exit %d):\n%s", code, out)
 	}
 
 	// Never silently unprivileged: without the password sudo refuses.

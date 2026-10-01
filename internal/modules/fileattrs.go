@@ -102,7 +102,7 @@ func checkFileAttrs(env *RunEnv, fa fileAttrs, changed bool, msg string, diff *f
 // content goes to a temp file, is optionally validated, then atomically
 // moved onto the real path.
 func writeChanges(env *RunEnv, content []byte, dest, validate string, unsafeWrites bool) *agentproto.Result {
-	tmp, err := os.CreateTemp("", "tmp")
+	tmp, err := env.tempFileIn()
 	if err != nil {
 		return moduleCrash(err)
 	}

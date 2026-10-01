@@ -3,6 +3,7 @@ package connection
 import (
 	"context"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"strconv"
@@ -112,8 +113,8 @@ func pyTime(t time.Time) string {
 // Solaris-style ACLs, common_remote_group, and finally world-readable
 // files when allowed; each step runs as the login user and the first
 // that works wins. The chain runs as one remote script, after prep (a
-// command placing the files, "" for none).
-func fixupPerms(ctx context.Context, conn Connection, prep string, paths []string, b *BecomeSpec) error {
+// command placing the files, "" for none, reading stdin when given).
+func fixupPerms(ctx context.Context, conn Connection, prep string, stdin io.Reader, paths []string, b *BecomeSpec) error {
 	sh := b.Shell
 	user := b.user()
 	quoted := make([]string, len(paths))
@@ -154,7 +155,7 @@ func fixupPerms(ctx context.Context, conn Connection, prep string, paths []strin
 		fmt.Fprintf(&s, "try chmod a+rx %s; done_ \"world $rc\"; ", ps)
 	}
 	s.WriteString(`done_ "fail $rc"`)
-	res, err := conn.Exec(ctx, s.String(), ExecOptions{})
+	res, err := conn.Exec(ctx, s.String(), ExecOptions{Stdin: stdin})
 	if err != nil {
 		return err
 	}

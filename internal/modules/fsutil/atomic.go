@@ -84,7 +84,7 @@ func AtomicMove(src, dest string, keepDestAttrs bool) error {
 	}
 	if creating {
 		if err := syscall.Chmod(dest, 0o666&^processUmask()); err != nil {
-			return err
+			return &os.PathError{Op: "chmod", Path: dest, Err: err}
 		}
 		gid := os.Getegid()
 		if dst, err := os.Stat(filepath.Dir(dest)); err == nil && dst.Mode()&os.ModeSetgid != 0 {

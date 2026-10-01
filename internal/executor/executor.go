@@ -1647,9 +1647,14 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 				req.PythonFallback = varList(vctx, "ansible_interpreter_python_fallback")
 			}
 			b := become
-			if b != nil && !inProcess {
+			if b != nil {
 				bs := *b
 				bs.Shell = r.shellOptions(target, kw, vctx)
+				if inProcess {
+					// The local connection has no remote_user: the
+					// action's is the user running the playbook.
+					bs.Shell.RemoteUser = localUser()
+				}
 				b = &bs
 			}
 			connecting()
@@ -2077,7 +2082,7 @@ func (r *Runner) runModule(ctx context.Context, host, target string, kw connecti
 		}
 		login := &connection.LoginInfo{Path: os.Getenv("PATH"), UID: os.Getuid(), GID: os.Getgid()}
 		login.Home, _ = os.UserHomeDir()
-		client := &connection.AgentClient{Conn: connection.NewLocal(), AgentPath: connection.ShellQuote(exe) + " " + modules.LocalAgentArg, Login: login}
+		client := &connection.AgentClient{Conn: connection.NewLocal(), AgentPath: exe, AgentArg: modules.LocalAgentArg, Login: login}
 		res, err := client.Run(ctx, req, payload, become)
 		if bf := actions.BecomeFailure(err); bf != nil {
 			return bf, nil

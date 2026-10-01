@@ -878,7 +878,7 @@ func (u *userRun) modifyBusybox() (*int, string, string) {
 		zero := 0
 		rc = &zero
 		if !u.env.CheckMode {
-			tmp, err := os.CreateTemp("", "tmp")
+			tmp, err := u.env.tempFileIn()
 			if err != nil {
 				u.fail(err.Error(), nil)
 			}

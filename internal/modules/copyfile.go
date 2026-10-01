@@ -272,6 +272,17 @@ func pyToText(b []byte) string {
 // the path it was written to (the same unless an unprivileged become
 // user runs the module).
 func stagePayload(env *RunEnv, content []byte, ext, remoteTmp string) (dir, report, actual string, err error) {
+	if env != nil && env.StageDir != "" {
+		// The login user staged the file in the system temp dir. Where
+		// the module may write there (a common group's rwx), the file is
+		// used in place, the login user's as in ansible; otherwise the
+		// module works from its own copy.
+		staged := filepath.Join(env.StageDir, agentproto.StagedPayload)
+		named := filepath.Join(env.StageDir, ".source"+ext)
+		if os.Rename(staged, named) == nil {
+			return "", named, named, nil
+		}
+	}
 	reportDir, dir, err := transferDir(env, remoteTmp)
 	if err != nil {
 		return "", "", "", err
@@ -587,7 +598,7 @@ func copyCore(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 					return res
 				}
 				return &agentproto.Result{Failed: true,
-					Msg: fmt.Sprintf("Task failed: Module failed: Failed to copy %s to %s.: %s", pyStrRepr(src), pyStrRepr(dest), pyOSError(err))}
+					Msg: fmt.Sprintf("Task failed: Module failed: Failed to copy %s to %s: %s", pyStrRepr(src), pyStrRepr(dest), pyOSError(err))}
 			}
 		}
 		changed = true

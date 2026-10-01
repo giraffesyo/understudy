@@ -5,7 +5,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/rand"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 )
@@ -15,14 +18,25 @@ import (
 type AgentClient struct {
 	Conn      Connection
 	AgentPath string
+	// AgentArg, when set, is the argument that makes the binary at
+	// AgentPath act as the agent (a control binary serving local
+	// become).
+	AgentArg string
 	// Login is the login user (from the bootstrap probe), nil when
 	// unknown.
 	Login *LoginInfo
 }
 
+// stagingModules are the modules whose payload is a file the action
+// transfers next to the module (copy and template).
+var stagingModules = map[string]bool{"copy": true, "template": true}
+
 // Run executes one task through the agent.
 func (c *AgentClient) Run(ctx context.Context, req *agentproto.TaskRequest, payload io.Reader, become *BecomeSpec) (*agentproto.Result, error) {
-	agentPath := c.AgentPath
+	agentPath := ShellQuote(c.AgentPath)
+	if c.AgentArg == "" {
+		agentPath = c.AgentPath
+	}
 	if become != nil && c.Login != nil {
 		// Under become the task still reports paths and finds Python as
 		// the login user would: remote_tmp is under the login user's
@@ -30,11 +44,15 @@ func (c *AgentClient) Run(ctx context.Context, req *agentproto.TaskRequest, payl
 		req.LoginHome, req.LoginUID, req.LoginGID = c.Login.Home, c.Login.UID, c.Login.GID
 		req.DiscoveryPath = c.Login.Path
 	}
+	if res := c.unreadableAsAdmin(ctx, req, become); res != nil {
+		return res, nil
+	}
 	if becomeUnprivileged(become) {
 		// An unprivileged become user cannot reach the login user's
 		// files: like a module's AnsiballZ payload, the agent runs from a
 		// system temp dir made readable to it (the shell reports the dir
-		// with a trailing slash).
+		// with a trailing slash). A transferred file is staged there by
+		// the login user too, so the module meets it as ansible's does.
 		dir, err := systemTmp(ctx, c.Conn, become.Shell)
 		if err != nil {
 			return nil, err
@@ -42,11 +60,31 @@ func (c *AgentClient) Run(ctx context.Context, req *agentproto.TaskRequest, payl
 		defer c.Conn.Exec(context.WithoutCancel(ctx), "rm -f -r "+ShellQuote(dir)+" > /dev/null 2>&1", ExecOptions{})
 		mod := dir + "/AnsiballZ_" + moduleShortName(req.Module) + ".py"
 		prep := "cp " + ShellQuote(c.AgentPath) + " " + ShellQuote(mod)
-		if err := fixupPerms(ctx, c.Conn, prep, []string{dir + "/", mod}, become); err != nil {
+		paths := []string{dir + "/", mod}
+		var stage io.Reader
+		if payload != nil && req.PayloadLen > 0 && stagingModules[moduleShortName(req.Module)] {
+			data, err := io.ReadAll(io.LimitReader(payload, req.PayloadLen))
+			if err != nil {
+				return nil, err
+			}
+			payload = bytes.NewReader(data)
+			staged := dir + "/" + agentproto.StagedPayload
+			prep += " && ( umask 77 && cat > " + ShellQuote(staged) + " )"
+			paths = append(paths, staged)
+			stage = bytes.NewReader(data)
+		}
+		if err := fixupPerms(ctx, c.Conn, prep, stage, paths, become); err != nil {
 			return nil, err
 		}
 		req.StageDir = dir
+		req.ModuleRemoteTmp = become.Shell.RemoteTmp
+		if req.ModuleRemoteTmp == "" {
+			req.ModuleRemoteTmp = "~/.ansible/tmp"
+		}
 		agentPath = ShellQuote(mod)
+	}
+	if c.AgentArg != "" {
+		agentPath += " " + c.AgentArg
 	}
 	var stdin bytes.Buffer
 	if err := agentproto.WriteFrame(&stdin, req, payload); err != nil {
@@ -68,6 +106,70 @@ func (c *AgentClient) Run(ctx context.Context, req *agentproto.TaskRequest, payl
 		return nil, fmt.Errorf("agent exited with rc=%d: %s", res.RC, strings.TrimSpace(string(res.Stderr)))
 	}
 	return agentproto.ParseResult(res.Stdout)
+}
+
+// unreadableAsAdmin is a become user listed in admin_users that is
+// neither root nor the login user: ansible treats it as privileged and
+// stages the module in the login user's remote_tmp, a 0700 directory it
+// cannot read, so Python fails to open the module and the action cannot
+// read a result. That result, or nil for any other become.
+func (c *AgentClient) unreadableAsAdmin(ctx context.Context, req *agentproto.TaskRequest, b *BecomeSpec) *agentproto.Result {
+	if b == nil || b.Shell == nil || becomeUnprivileged(b) {
+		return nil
+	}
+	user := b.user()
+	if user == "root" || user == "0" || user == b.Shell.RemoteUser || (c.Login != nil && user == c.Login.User) {
+		return nil
+	}
+	remoteTmp := b.Shell.RemoteTmp
+	if remoteTmp == "" {
+		remoteTmp = "~/.ansible/tmp"
+	}
+	if c.Login != nil && c.Login.Home != "" && (remoteTmp == "~" || strings.HasPrefix(remoteTmp, "~/")) {
+		remoteTmp = c.Login.Home + remoteTmp[1:]
+	}
+	remoteTmp = strings.TrimRight(remoteTmp, "/")
+	module := fmt.Sprintf("%s/ansible-tmp-%s-%d-%d/AnsiballZ_%s.py", remoteTmp, pyTime(time.Now()), os.Getpid(),
+		rand.Int63n(1<<48), moduleShortName(req.Module))
+	python := req.PythonInterpreter
+	if python == "" {
+		python = c.discoverPython(ctx, req.PythonFallback)
+	}
+	// Commands run on a terminal over ssh (newlines arrive as CRLF), and
+	// OpenSSH reports the shared connection closing.
+	eol, stderr := "\n", ""
+	if n, ok := c.Conn.(interface{ closedNotice() string }); ok {
+		eol, stderr = "\r\n", n.closedNotice()
+	}
+	msg := "Module result deserialization failed: No start of json char found"
+	return &agentproto.Result{Failed: true, Msg: msg, Origin: "action",
+		ErrorChain: &agentproto.ErrorChain{Outer: "Task failed: Action failed.", Inner: msg,
+			Help: "See stdout/stderr for the returned output."},
+		Extra: map[string]any{"rc": int64(2), "module_stderr": stderr,
+			"module_stdout": fmt.Sprintf("%s: can't open file '%s': [Errno 13] Permission denied%s", python, module, eol)}}
+}
+
+// discoverPython is interpreter discovery's pick: the first of the
+// fallback list found on the login user's PATH (/usr/bin/python3 when
+// none is).
+func (c *AgentClient) discoverPython(ctx context.Context, fallback []string) string {
+	if len(fallback) == 0 {
+		fallback = []string{"python3.14", "python3.13", "python3.12", "python3.11", "python3.10", "python3.9",
+			"/usr/bin/python3", "python3"}
+	}
+	var script strings.Builder
+	for _, p := range fallback {
+		fmt.Fprintf(&script, "command -v %s; ", ShellQuote(p))
+	}
+	res, err := c.Conn.Exec(ctx, script.String(), ExecOptions{})
+	if err == nil {
+		for _, line := range strings.Split(string(res.Stdout), "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				return line
+			}
+		}
+	}
+	return "/usr/bin/python3"
 }
 
 // moduleShortName is a module's name without its collection.

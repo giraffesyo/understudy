@@ -38,6 +38,13 @@ type SSH struct {
 	done   chan struct{}
 }
 
+// closedNotice is what OpenSSH prints when a command that ran on a
+// terminal over a shared (ControlMaster) connection ends, as ansible's
+// ssh connection runs modules.
+func (s *SSH) closedNotice() string {
+	return "Shared connection to " + s.cfg.Host + " closed.\r\n"
+}
+
 // DialSSH establishes the connection, running the auth chain:
 // ssh-agent -> explicit keys -> default keys -> password.
 func DialSSH(cfg SSHConfig) (*SSH, error) {
