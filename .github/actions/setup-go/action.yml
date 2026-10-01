@@ -1,0 +1,54 @@
+name: Set up Go
+description: >-
+  Installs Go (GOTOOLCHAIN=local, so the job builds with exactly that Go) and
+  restores the module and build caches under a per-job key, so jobs that
+  build different things (race, cross-compiles, CodeQL) do not overwrite
+  one another's cache.
+
+inputs:
+  go-version:
+    description: Go version, in setup-go syntax. Empty uses go-version-file.
+    default: stable
+  go-version-file:
+    description: File to read the Go version from (e.g. go.mod) when go-version is empty.
+    default: ""
+  cache-key:
+    description: Name of the cache this job uses (the job and what it builds).
+    required: true
+  cache:
+    description: '"false" skips the caches (release builds start clean).'
+    default: "true"
+
+outputs:
+  go-version:
+    description: The installed Go version.
+    value: ${{ steps.go.outputs.go-version }}
+
+runs:
+  using: composite
+  steps:
+    - id: go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: ${{ inputs.go-version }}
+        go-version-file: ${{ inputs.go-version-file }}
+        cache: false
+
+    - id: paths
+      shell: bash
+      run: |
+        echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
+        {
+          echo "gocache=$(go env GOCACHE)"
+          echo "gomodcache=$(go env GOMODCACHE)"
+        } >> "$GITHUB_OUTPUT"
+
+    - if: inputs.cache == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ${{ steps.paths.outputs.gocache }}
+          ${{ steps.paths.outputs.gomodcache }}
+        key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ inputs.cache-key }}-${{ hashFiles('go.sum') }}
+        restore-keys: |
+          go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ inputs.cache-key }}-
