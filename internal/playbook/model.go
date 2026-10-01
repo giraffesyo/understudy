@@ -30,6 +30,9 @@ type Play struct {
 	CheckMode   *bool // play-level check_mode (nil = the run's --check)
 	Debugger    string
 	Diff        *bool // play-level diff (nil = the run's --diff)
+	// ignoreErrors is the play's ignore_errors, as a task carries it
+	// (literal or templated), for the tasks that set none of their own.
+	ignoreErrors *Task
 
 	// Serial batches the play across hosts (rolling execution). Entries are
 	// host counts or "N%" strings; nil runs all hosts in one batch.

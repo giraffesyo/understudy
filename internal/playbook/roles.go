@@ -282,6 +282,8 @@ func ResolveRoles(plays []*Play, baseDir string, rolesPath []string) error {
 			play.RoleDefaultOrigins = append(play.RoleDefaultOrigins, c.defaultOrigins...)
 			play.RoleVarOrigins = append(play.RoleVarOrigins, c.varOrigins...)
 		}
+		play.inheritIgnoreErrors(roleTasks)
+		play.inheritIgnoreErrors(roleHandlers)
 		// The roles' handlers come before the play's own
 		// (compile_roles_handlers() + handlers).
 		play.Handlers = append(roleHandlers, play.Handlers...)
