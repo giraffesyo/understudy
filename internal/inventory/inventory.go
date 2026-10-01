@@ -5,10 +5,12 @@ package inventory
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/template"
+	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
 // Host is one managed host.
@@ -17,7 +19,11 @@ type Host struct {
 	Vars map[string]any
 	// VarOrigins are where its variables with reserved names were set.
 	VarOrigins []template.KeyOrigin
-	groups     map[string]*Group
+	// FileVarOrigins are where its host_vars files named reserved
+	// variables: [0] next to the inventory sources, [1] next to the
+	// playbook.
+	FileVarOrigins [2][]template.KeyOrigin
+	groups         map[string]*Group
 
 	// implicit marks the implicit localhost: created on demand when a
 	// pattern names localhost and the inventory has none. It belongs to no
@@ -34,10 +40,14 @@ type Group struct {
 	Vars map[string]any
 	// VarOrigins are where its variables with reserved names were set.
 	VarOrigins []template.KeyOrigin
-	Hosts      map[string]*Host
-	Children   map[string]*Group
-	Parents    map[string]*Group
-	depth      int
+	// FileVarOrigins are where its group_vars files named reserved
+	// variables: [0] next to the inventory sources, [1] next to the
+	// playbook.
+	FileVarOrigins [2][]template.KeyOrigin
+	Hosts          map[string]*Host
+	Children       map[string]*Group
+	Parents        map[string]*Group
+	depth          int
 
 	// Insertion order, which Ansible's "inventory" host order follows.
 	hostOrder  []*Host
@@ -52,6 +62,9 @@ type Inventory struct {
 
 	hostOrder  []*Host  // first-seen order
 	groupOrder []*Group // creation order (ansible-core's groups dict)
+
+	// varsWarnings wait for the first lookup of host variables.
+	varsWarnings []string
 
 	// localhost is the host "localhost" patterns resolve to when the
 	// inventory has no host of that name: the first localhost-like host
@@ -448,4 +461,51 @@ func typeRepr(v any) string {
 		return "<class 'ansible.module_utils._internal._datatag._AnsibleTaggedDict'>"
 	}
 	return fmt.Sprintf("<class '%s'>", strings.TrimPrefix(fmt.Sprintf("%T", v), "*"))
+}
+
+// addOrigin records where a variable with a reserved name was set; a
+// name already set keeps its first origin (a dict keeps its first key).
+func addOrigin(origins []template.KeyOrigin, o template.KeyOrigin) []template.KeyOrigin {
+	for _, prev := range origins {
+		if prev.Name == o.Name {
+			return origins
+		}
+	}
+	return append(origins, o)
+}
+
+// keyOrigins are where a mapping node names reserved variables.
+func keyOrigins(node *yaml.Node, file string) []template.KeyOrigin {
+	if node == nil {
+		return nil
+	}
+	var out []template.KeyOrigin
+	for _, k := range node.MapKeys() {
+		if !template.IsReservedName(k) {
+			continue
+		}
+		o := template.KeyOrigin{Name: k}
+		if kn := node.MapKeyNode(k); kn != nil {
+			o.File, o.Line, o.Col = file, kn.Line, kn.Column
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
+// deferWarning keeps a vars plugin's warning for when the variables are
+// first looked up (VarsWarnings).
+func (inv *Inventory) deferWarning(msg string) {
+	if !slices.Contains(inv.varsWarnings, msg) {
+		inv.varsWarnings = append(inv.varsWarnings, msg)
+	}
+}
+
+// VarsWarnings are the warnings the host_group_vars plugin shows when a
+// host's variables are first looked up (a group_vars or host_vars that is
+// not a directory), each returned once.
+func (inv *Inventory) VarsWarnings() []string {
+	out := inv.varsWarnings
+	inv.varsWarnings = nil
+	return out
 }

@@ -1,0 +1,13 @@
+- hosts: all
+  gather_facts: false
+  vars:
+    vars_name_overlap: 1
+  tasks:
+    - debug: msg=one
+    - debug: msg=two
+      vars:
+        throttle: 1
+- hosts: h1
+  gather_facts: false
+  tasks:
+    - debug: msg=three
