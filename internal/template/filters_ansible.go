@@ -737,7 +737,11 @@ func registerAnsibleFilters(e *Engine) {
 	f["from_yaml"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
 		if !ok {
-			return in, nil // anything but a str is returned as is
+			// None as is; anything else but a str too, deprecated.
+			if Undeprecate(in) != nil {
+				ec.ignoredInput("from_yaml", in)
+			}
+			return in, nil
 		}
 		v, err := yaml.Unmarshal([]byte(s), "<from_yaml>")
 		var ye *yaml.Error
@@ -749,7 +753,11 @@ func registerAnsibleFilters(e *Engine) {
 	f["from_yaml_all"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
 		if !ok {
-			return nil, fmt.Errorf("from_yaml_all requires a string")
+			if Undeprecate(in) == nil {
+				return []any{}, nil
+			}
+			ec.ignoredInput("from_yaml_all", in)
+			return in, nil
 		}
 		file, err := yaml.Parse([]byte(s), "<from_yaml_all>")
 		if err != nil {

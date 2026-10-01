@@ -71,10 +71,14 @@ func (r *Runner) deprecation(pos template.Position, d template.Deprecated) {
 	if located {
 		fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n%s\n", pos.File, pos.Line, pos.Col, template.SourceExcerpt(pos.File, pos.Line, pos.Col))
 	}
+	if !located && d.Obj != "" {
+		// A plugin's warning about a value of no known origin.
+		fmt.Fprintf(&b, "Origin: <unknown>\n\n%s\n", d.Obj)
+	}
 	if d.Help != "" {
 		b.WriteString(d.Help + "\n")
 	}
-	if d.Help != "" || !located {
+	if d.Help != "" || !located && !d.Bare {
 		b.WriteString("\n")
 	}
 	msg := b.String()
