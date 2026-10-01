@@ -8,6 +8,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/executor"
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/template"
+	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
 // EventVersion identifies the event schema sent to external callbacks.
@@ -36,8 +37,10 @@ type Event struct {
 	IncludedFile  string   `json:"included_file,omitempty"`
 	IncludedHosts []string `json:"hosts,omitempty"`
 
-	// v2_playbook_on_stats: per-host recap counters.
-	Stats map[string]map[string]int `json:"stats,omitempty"`
+	// v2_playbook_on_stats: per-host recap counters, and the custom
+	// stats set_stats set (by host, "_run" for the run's).
+	Stats  map[string]map[string]int `json:"stats,omitempty"`
+	Custom map[string]any            `json:"custom,omitempty"`
 
 	// v2_playbook_on_start
 	Version int `json:"version,omitempty"`
@@ -58,6 +61,7 @@ type EventTask struct {
 // events adapts the executor's callback hooks into Events for a sink.
 type events struct {
 	mu      sync.Mutex
+	custom  map[string]any
 	sink    func(Event)
 	started bool
 	names   map[*playbook.Task]string
@@ -184,7 +188,20 @@ func (e *events) Recap(stats map[string]*executor.HostStats, order []string) {
 		out[h] = map[string]int{"ok": st.OK, "changed": st.Changed, "unreachable": st.Unreachable,
 			"failures": st.Failed, "skipped": st.Skipped, "rescued": st.Rescued, "ignored": st.Ignored}
 	}
-	e.emit(Event{Event: "v2_playbook_on_stats", Stats: out})
+	e.mu.Lock()
+	custom := e.custom
+	e.mu.Unlock()
+	e.emit(Event{Event: "v2_playbook_on_stats", Stats: out, Custom: custom})
+}
+
+func (e *events) CustomStats(custom map[string]*yaml.OMap) {
+	out := make(map[string]any, len(custom))
+	for h, st := range custom {
+		out[h] = template.Plain(st)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.custom = out
 }
 
 // NewEventCallback returns a callback that delivers every event to sink

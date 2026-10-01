@@ -161,6 +161,10 @@ type Task struct {
 	KeywordPos     map[string]Pos // source position of each task keyword's value (when, ...)
 	WhenPos        map[string]Pos // source position of each when: condition, by its text
 
+	// ArgSubKeys are the keys of each mapping-valued module arg, in
+	// source order (set_stats checks its data names where written).
+	ArgSubKeys map[string][]ArgKey
+
 	// KeywordTemplates holds keywords given as templates ("{{ x }}"),
 	// resolved per host at run time: no_log, ignore_errors, become,
 	// check_mode, diff, retries, delay.
@@ -176,6 +180,15 @@ type Task struct {
 	ApplyErr       error // apply: failed to load as a block (raised at run time)
 
 	literalKW map[string]bool // keywords set to literal values (parse time)
+}
+
+// ArgKey is one key of a mapping-valued module arg: its name, the key as
+// YAML constructed it (a string, or an int, bool, float or None) and
+// where it was written.
+type ArgKey struct {
+	Name  string
+	Value any
+	Pos   Pos
 }
 
 // DisplayAction is the action as an unnamed task's banner shows it: the

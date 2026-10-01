@@ -1137,6 +1137,7 @@ func buildCallback(verbosity int, adhoc bool, playbookDir string) (executor.Call
 		CallbacksEnabled:    cfg.CallbacksEnabled,
 		DisplayOkHosts:      cfg.DisplayOkHosts,
 		DisplaySkippedHosts: cfg.DisplaySkippedHosts,
+		ShowCustomStats:     cfg.ShowCustomStats,
 		Verbosity:           verbosity,
 		Adhoc:               adhoc,
 		PluginDirs:          callback.PluginDirs(cfg.CallbackPlugins, playbookDir),

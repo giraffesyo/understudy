@@ -8,6 +8,7 @@ import (
 
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/vars"
+	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
 // PlaybookCallback is implemented by callbacks that also take the
@@ -136,6 +137,14 @@ func (r *Runner) displayLoadNotes(plays []*playbook.Play) {
 func ForwardPlaybookStart(cb Callback, path string) {
 	if pc, ok := cb.(PlaybookCallback); ok {
 		pc.PlaybookStart(path)
+	}
+}
+
+// ForwardCustomStats hands the run's custom stats to a callback that
+// shows them.
+func ForwardCustomStats(cb Callback, custom map[string]*yaml.OMap) {
+	if cs, ok := cb.(CustomStatsCallback); ok {
+		cs.CustomStats(custom)
 	}
 }
 

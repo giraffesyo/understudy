@@ -58,6 +58,12 @@ type Callback interface {
 	Recap(stats map[string]*HostStats, order []string)
 }
 
+// CustomStatsCallback is a callback that shows the run's custom stats
+// (set_stats) with the recap: CustomStats comes just before Recap.
+type CustomStatsCallback interface {
+	CustomStats(custom map[string]*yaml.OMap)
+}
+
 // HostStats is one host's play-recap line.
 type HostStats struct {
 	OK, Changed, Unreachable, Failed, Skipped, Rescued, Ignored int
@@ -164,8 +170,9 @@ type Runner struct {
 	quitCode       int
 	dbgReader      *bufio.Reader
 	dbgMu          sync.Mutex
-	playEnded      bool // meta: end_play
-	batchEnded     bool // meta: end_batch
+	custom         map[string]*yaml.OMap // set_stats: host ("_run": the run's) -> stats
+	playEnded      bool                  // meta: end_play
+	batchEnded     bool                  // meta: end_batch
 	mu             sync.Mutex
 	implicitMu     sync.Mutex
 	implicitSet    bool // the implicit localhost's inventory vars are set
@@ -301,6 +308,7 @@ func (r *Runner) RunPlaybooks(ctx context.Context, books [][]*playbook.Play) (in
 				break
 			}
 		}
+		ForwardCustomStats(r.Callback, r.CustomStats())
 		r.Callback.Recap(r.stats, r.order)
 		if code = r.result(); code != 0 {
 			break
@@ -2398,6 +2406,9 @@ func (r *Runner) dispatch(ctx context.Context, task *playbook.Task, actx *action
 	if task.Module == "include_vars" {
 		return r.runIncludeVars(task, actx, args)
 	}
+	if task.Module == "set_stats" {
+		return r.runSetStats(task, actx, args)
+	}
 	if a := actions.Lookup(task.Module); a != nil {
 		res := a.Run(ctx, actx, args, freeForm)
 		if res != nil && res.Origin == "" {
@@ -2450,6 +2461,11 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 			if !r.notifyHandlers(h, res.Notify, h == host) {
 				return // the run ends here, before the result prints
 			}
+		}
+	}
+	if !res.Failed && !res.Skipped {
+		for _, st := range statsOf(res, loopItems) {
+			r.applyStats(host, task, st)
 		}
 	}
 	if loopItems == nil {
