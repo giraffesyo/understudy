@@ -783,7 +783,7 @@ func (u *userRun) createBusybox() (int, string, string) {
 		u.bbFailRC(rc, errOut)
 	}
 	data := u.name + ":" + u.bbPassword("")
-	rc, out, errOut = u.execute([]string{u.binPath("chpasswd"), "--encrypted"}, &data, true)
+	rc, _, errOut = u.execute([]string{u.binPath("chpasswd"), "--encrypted"}, &data, true)
 	if rc != 0 {
 		u.bbFailRC(rc, errOut)
 	}
@@ -1414,15 +1414,4 @@ func groupID(env *RunEnv, group string) string {
 		return ""
 	}
 	return fields[2]
-}
-
-func stringList(items []any) []string {
-	var out []string
-	for _, item := range items {
-		if s, ok := item.(string); ok && s != "" {
-			out = append(out, s)
-		}
-	}
-	sort.Strings(out)
-	return out
 }

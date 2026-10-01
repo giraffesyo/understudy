@@ -142,13 +142,6 @@ func sameValue(a, b any) (same bool) {
 	return a == b
 }
 
-// hasDeprecated reports whether v holds a deprecated value anywhere.
-func hasDeprecated(v any) bool {
-	found := false
-	walkDeprecated(v, func(Deprecated) { found = true }, false)
-	return found
-}
-
 // walkDeprecated calls visit for each deprecated value inside v. With
 // strip, it returns v without the wrappers (copying only the containers
 // that held one); changed reports whether it did.

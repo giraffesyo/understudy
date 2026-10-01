@@ -145,11 +145,6 @@ func openLocalPath(path string) error {
 	return errNoStatus
 }
 
-// ftpReply is one (possibly multi-line) FTP server reply.
-type ftpReply struct{ text string }
-
-func (r ftpReply) code() byte { return r.text[0] }
-
 // ftpError is an ftplib error_reply/error_temp/error_perm/error_proto;
 // str() is the reply, repr() the class name around it.
 type ftpError struct {

@@ -351,9 +351,7 @@ func loadRole(ref *RoleRef, baseDir string, rolesPath []string, tasksFrom string
 		if err != nil {
 			return nil, err
 		}
-		for _, t := range flattenRole(tasks, dir, ref.Name) {
-			role.tasks = append(role.tasks, t)
-		}
+		role.tasks = append(role.tasks, flattenRole(tasks, dir, ref.Name)...)
 	}
 	if vt, err := argSpecTask(dir, ref.Name, tasksFrom, ref.Params); err != nil {
 		return nil, err
@@ -582,12 +580,6 @@ func loadYAMLBase(dir, base string) (*yaml.Node, string, error) {
 		return doc, path, nil
 	}
 	return nil, "", nil
-}
-
-// loadVarsMain loads <dir>/main.yml as a vars mapping.
-func loadVarsMain(dir string) (map[string]any, error) {
-	m, _, err := loadVarsMainOrigins(dir)
-	return m, err
 }
 
 // loadVarsMainOrigins is loadVarsMain, with where the file names reserved

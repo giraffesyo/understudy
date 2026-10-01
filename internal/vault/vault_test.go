@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// A payload produced by real `ansible-vault encrypt_string` (password "secret").
-const realPayload = `$ANSIBLE_VAULT;1.1;AES256
-PLACEHOLDER`
-
 func TestRoundTrip(t *testing.T) {
 	for _, plaintext := range []string{"", "s", "hello vault", strings.Repeat("x", 100), "multi\nline\nsecret\n"} {
 		payload, err := Encrypt([]byte(plaintext), "secret")

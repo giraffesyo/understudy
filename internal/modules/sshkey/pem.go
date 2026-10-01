@@ -3,7 +3,8 @@ package sshkey
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/dsa" //nolint:staticcheck // DSA keys are still an openssh_keypair type
+	//lint:ignore SA1019 DSA keys are still an openssh_keypair type
+	"crypto/dsa"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/pbkdf2"

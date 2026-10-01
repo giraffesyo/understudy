@@ -273,7 +273,7 @@ func (c *jsonFile) Set(host string, f *Facts) error {
 	}
 	tmp.Close()
 	if err := os.Rename(tmp.Name(), path); err == nil {
-		err = os.Chmod(path, 0o644)
+		_ = os.Chmod(path, 0o644)
 	} else if c.warn != nil {
 		c.warn(fmt.Sprintf("Error in 'jsonfile' cache plugin while trying to move %s to %s.", pyQuote(tmp.Name()), pyQuote(path)))
 	}

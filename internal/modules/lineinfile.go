@@ -446,22 +446,3 @@ func (l *lineinfileRun) absent() *agentproto.Result {
 	}
 	return l.finish(changed, msg, backupDest, diff, &found)
 }
-
-func splitFileLines(data []byte) []string {
-	if len(data) == 0 {
-		return nil
-	}
-	s := strings.TrimSuffix(string(data), "\n")
-	return strings.Split(s, "\n")
-}
-
-func joinFileLines(lines []string, trailingNewline bool) []byte {
-	if len(lines) == 0 {
-		return nil
-	}
-	out := strings.Join(lines, "\n")
-	if trailingNewline {
-		out += "\n"
-	}
-	return []byte(out)
-}

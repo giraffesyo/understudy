@@ -1353,13 +1353,6 @@ func mkSelect(negate, byAttr bool) FilterFunc {
 	}
 }
 
-func asFloatArg(args []any, i int) (float64, bool) {
-	if i >= len(args) {
-		return 0, false
-	}
-	return asFloat(args[i])
-}
-
 // args1 returns the i-th positional argument, or nil if absent.
 func args1(args []any, i int) any {
 	if i >= len(args) {
@@ -1723,17 +1716,6 @@ func pyDirname(p string) string {
 		head = strings.TrimRight(head, "/")
 	}
 	return head
-}
-
-// pyJSON serializes a value the way Python's json.dumps does — the format
-// Ansible's to_json/to_nice_json produce (json.dumps' default
-// ensure_ascii=True). indent==0 yields the compact form with ", " and ": "
-// separators; indent>0 pretty-prints. sortKeys mirrors json.dumps'
-// sort_keys: to_json passes false (dict insertion order kept), to_nice_json
-// passes true. Plain Go maps have no inherent order and are always sorted;
-// *OMap/Mapping honor sortKeys.
-func pyJSON(v any, indent int, sortKeys bool) string {
-	return PyJSON(v, indent, sortKeys, true)
 }
 
 // PyJSON is Python's json.dumps(v, indent=indent or None,

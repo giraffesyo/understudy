@@ -502,15 +502,6 @@ func pyBool(b bool) string {
 	return "False"
 }
 
-func withArg(m map[string]any, k string, v any) map[string]any {
-	out := make(map[string]any, len(m)+1)
-	for key, val := range m {
-		out[key] = val
-	}
-	out[k] = v
-	return out
-}
-
 // dnfList is the dnf module's list= query: installed, updates,
 // available, repos, or a package spec.
 func dnfList(env *RunEnv, mgr string, repo []string, what string) *agentproto.Result {

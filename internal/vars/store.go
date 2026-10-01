@@ -1278,13 +1278,6 @@ func (s *Store) extraVar(name string) (any, bool) {
 	return v, ok
 }
 
-// isAllTemplate is is_possibly_all_template: the string starts and ends
-// with Jinja delimiters.
-func isAllTemplate(s string) bool {
-	return strings.HasPrefix(s, "{{") && strings.HasSuffix(s, "}}") ||
-		strings.HasPrefix(s, "{%") && strings.HasSuffix(s, "%}")
-}
-
 // ItemOrigin is where item i of the list raw (written at pos) resolves
 // to came from: a loop's item, read through its loop variable.
 func (c *Context) ItemOrigin(raw any, pos template.Position, i int) (template.OriginRef, bool) {

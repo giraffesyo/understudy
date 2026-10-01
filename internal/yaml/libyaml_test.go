@@ -58,8 +58,11 @@ func composeCanonical(src string) string {
 		if err != nil {
 			return err
 		}
-		if !c.nextEvent() || !c.nextEvent() {
-			return c.err()
+		// Step past the stream start, then the document start.
+		for range 2 {
+			if !c.nextEvent() {
+				return c.err()
+			}
 		}
 		if c.ev.kind == evStreamEnd {
 			return nil
