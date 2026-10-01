@@ -142,6 +142,8 @@ type TemplateError struct {
 	// pluginHead and pluginDetail split a plugin failure whose exception
 	// was raised while handling another (see SplitCause).
 	pluginHead, pluginDetail, pluginValue string
+	// pluginHelp is the cause's help text (see PluginHelp).
+	pluginHelp string
 	// pluginAt is where the value the plugin's error is about was
 	// written, where known (shown in place of the value).
 	pluginAt Position

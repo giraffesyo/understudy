@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/giraffesyo/understudy/internal/omap"
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -1852,7 +1853,19 @@ func pyJSONFloat(f float64) string {
 func pyJSONQuote(s string, ensureASCII bool) string {
 	var b strings.Builder
 	b.WriteByte('"')
-	for _, r := range s {
+	for i, r := range s {
+		if r == utf8.RuneError {
+			if _, size := utf8.DecodeRuneInString(s[i:]); size == 1 {
+				// An undecodable byte (a surrogate escape): kept, or
+				// its \udcXX escape.
+				if ensureASCII {
+					fmt.Fprintf(&b, `\udc%02x`, s[i])
+				} else {
+					b.WriteByte(s[i])
+				}
+				continue
+			}
+		}
 		switch r {
 		case '"':
 			b.WriteString(`\"`)

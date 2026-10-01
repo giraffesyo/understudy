@@ -131,6 +131,7 @@ func argTemplateError(task *playbook.Task, key string, pos template.Position, er
 		// A plugin's exception raised while handling another shows apart.
 		chain.Inner = fmt.Sprintf("Error while resolving value for '%s': %s", key, head)
 		chain.Root = &agentproto.ErrorChain{Inner: detail, InnerValue: value}
+		chain.Root.Help = template.PluginHelp(err)
 		if at, ok := template.PluginValueOrigin(err); ok {
 			// The value is shown where it was written.
 			chain.Root.InnerValue, chain.Root.InnerFile, chain.Root.InnerLine, chain.Root.InnerCol = "", at.File, at.Line, at.Col

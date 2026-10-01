@@ -206,7 +206,7 @@ func runTemplate(ctx context.Context, actx *Context, args map[string]any, _ stri
 			res.ErrorChain.InnerPathOnly = false
 		} else if head, detail, value, ok := template.SplitCause(err); ok {
 			res.ErrorChain.Inner = head
-			res.ErrorChain.Root = &agentproto.ErrorChain{Inner: detail, InnerValue: value}
+			res.ErrorChain.Root = &agentproto.ErrorChain{Inner: detail, InnerValue: value, Help: template.PluginHelp(err)}
 			if at, ok := template.PluginValueOrigin(err); ok {
 				// The value is shown where it was written.
 				res.ErrorChain.Root.InnerValue, res.ErrorChain.Root.InnerFile, res.ErrorChain.Root.InnerLine, res.ErrorChain.Root.InnerCol = "", at.File, at.Line, at.Col
