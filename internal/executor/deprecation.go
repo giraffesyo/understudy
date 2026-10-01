@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/giraffesyo/understudy/internal/template"
 )
@@ -23,6 +24,12 @@ var (
 		Help:    "Use `ansible_facts[\"fact_name\"]` (no `ansible_` prefix) instead.",
 		Version: "2.24"}
 )
+
+// deprecationHint precedes the first deprecation warning Display shows.
+const deprecationHint = "[WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.\n"
+
+// deprecationHintShown: the load's deprecation warnings showed the hint.
+var deprecationHintShown atomic.Bool
 
 // deprecate wraps v in the deprecation d.
 func deprecate(d template.Deprecated, v any) template.Deprecated {
@@ -84,10 +91,9 @@ func (r *Runner) deprecation(pos template.Position, d template.Deprecated) {
 		return
 	}
 	r.warned[msg] = true
-	const hint = "[WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.\n"
-	if !r.warned[hint] {
-		r.warned[hint] = true
-		fmt.Fprint(os.Stderr, hint)
+	if !r.warned[deprecationHint] && !deprecationHintShown.Load() {
+		r.warned[deprecationHint] = true
+		fmt.Fprint(os.Stderr, deprecationHint)
 	}
 	fmt.Fprint(os.Stderr, msg)
 }

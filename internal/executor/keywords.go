@@ -114,10 +114,14 @@ func argTemplateError(task *playbook.Task, key string, pos template.Position, er
 		chain.Inner = fmt.Sprintf("Error while resolving value for '%s': %s", key, head)
 		chain.Root = &agentproto.ErrorChain{Inner: detail}
 	}
-	if a := task.ActionPos; a.Line == 0 || (a.Line == task.Src.Line && a.Col == task.Src.Col) {
+	switch a := task.ActionPos; {
+	case a.Line == 0 || (a.Line == task.Src.Line && a.Col == task.Src.Col):
 		// The action is where the task starts: one error, one origin.
 		chain.Outer = "Task failed: " + mid
-	} else {
+	case a.File == pos.File && a.Line == pos.Line && a.Col == pos.Col && chain.Root == nil:
+		// The argument is in the action's own value: one event there.
+		chain.Inner = strings.TrimSuffix(mid, ".") + ": " + chain.Inner
+	default:
 		chain.Mid, chain.MidFile, chain.MidLine, chain.MidCol = mid, a.File, a.Line, a.Col
 	}
 	res.ErrorChain = chain

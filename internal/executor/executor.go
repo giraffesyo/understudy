@@ -1585,7 +1585,13 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 	if task.Module == "set_fact" {
 		argsCtx = vctx.KeepingDeprecated()
 	}
-	args := make(map[string]any, len(task.Args))
+	args, failed := r.templatedArgs(task, vctx)
+	if failed != nil {
+		return failed
+	}
+	if args == nil {
+		args = make(map[string]any, len(task.Args))
+	}
 	for _, k := range slices.Sorted(maps.Keys(task.Args)) { // ansible-core templates them in key order
 		raw := task.Args[k]
 		if k == "that" && isAssertModule(task.Module) {
@@ -1600,6 +1606,7 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			return argTemplateError(task, k, argPos(task, k), err)
 		}
 		if _, isOmit := v.(template.Omit); isOmit {
+			delete(args, k)
 			continue
 		}
 		args[k] = v

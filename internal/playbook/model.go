@@ -157,9 +157,19 @@ type Task struct {
 	ArgPos         map[string]Pos // source position of each map-form module arg value
 	ArgKeyPos      map[string]Pos // source position of each map-form module arg name
 	ArgsPos        Pos            // the module's value (k=v or free-form string args share it)
-	ActionPos      Pos            // the module's key (or action:/local_action:)
-	KeywordPos     map[string]Pos // source position of each task keyword's value (when, ...)
-	WhenPos        map[string]Pos // source position of each when: condition, by its text
+	// RawArgs is the free text of a k=v string for a module that takes
+	// none (parse_kv's _raw_params): a template resolving to the args
+	// ("{{ args_dict }}"), or an error when the task runs.
+	RawArgs string
+	// LoadDeprecations are the deprecation warnings loading the task
+	// raised (an action: mapping, an empty args:), in order.
+	LoadDeprecations []LoadDeprecation
+	// VarArgs is an args: keyword given as a template (_variable_params).
+	VarArgs    string
+	VarArgsPos Pos
+	ActionPos  Pos            // the module's key (or action:/local_action:)
+	KeywordPos map[string]Pos // source position of each task keyword's value (when, ...)
+	WhenPos    map[string]Pos // source position of each when: condition, by its text
 
 	// KeywordTemplates holds keywords given as templates ("{{ x }}"),
 	// resolved per host at run time: no_log, ignore_errors, become,
@@ -239,4 +249,10 @@ type VarPrompt struct {
 	Salt         string
 	SaltSize     int
 	Unsafe       bool
+}
+
+// LoadDeprecation is a deprecation warning raised loading a task.
+type LoadDeprecation struct {
+	Msg, Help, Version string
+	Pos                Pos
 }

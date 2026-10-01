@@ -1,0 +1,79 @@
+---
+# A task's args may come whole from a template: the module's string
+# ("debug: '{{ dict }}'", the raw params of a module that takes none) or
+# the args keyword ("args: '{{ dict }}'"). Each resolves to a dict, under
+# the args written out, warning that templated args are unsafe; one that
+# resolves to anything else fails the task ("Task args must resolve to a
+# 'dict' not 'str'."), and free text that is not a template is "does not
+# support raw params". action: given as a mapping and an empty args: are
+# deprecated.
+- name: templated task args
+  hosts: all
+  gather_facts: false
+  vars:
+    dargs: {msg: hello}
+    vargs: {msg: from_var, verbosity: 0}
+    sargs: "msg=hi"
+    largs: [1]
+  tasks:
+    - debug: "{{ dargs }}"
+    - debug: "{{ sargs }}"
+      ignore_errors: true
+    - debug: "{{ largs }}"
+      ignore_errors: true
+    - debug: "{{ nope }}"
+      ignore_errors: true
+    - debug: "{{ none }}"
+      ignore_errors: true
+    - debug:
+      args: "{{ dargs }}"
+    - debug:
+      args: "{{ sargs }}"
+      ignore_errors: true
+    - debug: "{{ dargs }}"
+      args:
+        msg: override
+    - debug:
+        msg: explicit
+      args: "{{ vargs }}"
+    - debug: "{{ dargs }}"
+      args: "{{ vargs }}"
+    - debug: "msg={{ 'x' }} {{ dargs }}"
+    - debug: "msg={{ 'x' }} {{ sargs }}"
+      ignore_errors: true
+    - debug: "{{ {'msg': omit} }}"
+    - debug: "{{ dargs | combine({'msg': nope}) }}"
+      ignore_errors: true
+    - debug: hello world
+      ignore_errors: true
+    - debug: msg=x hello
+      ignore_errors: true
+    - debug: "{{ dargs }} extra"
+      ignore_errors: true
+    - set_fact: "{{ {'from_template': 1} }}"
+    - debug: var=from_template
+    - action: debug msg={{ nope }}
+      ignore_errors: true
+    - action:
+        module: debug
+        msg: "{{ nope }}"
+      ignore_errors: true
+    - local_action: debug msg={{ nope }}
+      ignore_errors: true
+    - action: "debug {{ sargs }}"
+      ignore_errors: true
+    - action:
+        module: debug
+        args: "{{ dargs }}"
+    - action:
+        module: debug
+        args: "{{ sargs }}"
+      ignore_errors: true
+    - action:
+        module: debug
+        args: "msg=x"
+    - action: "debug {{ dargs }}"
+    - action: debug hello
+      ignore_errors: true
+    - debug:
+      args:

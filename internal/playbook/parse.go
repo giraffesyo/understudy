@@ -930,7 +930,6 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			if key == "local_action" {
 				task.Delegate = "localhost"
 			}
-			task.ActionPos = keyPos(node, key, file)
 			moduleKeys = []string{""}
 		}
 	}
@@ -978,9 +977,25 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 		case "name":
 			task.Name, _ = val.Str()
 		case "args":
-			m, err := decodeMap(val, file, "args")
+			raw, err := val.Decode()
 			if err != nil {
 				return nil, err
+			}
+			const argsHelp = "A mapping or template which resolves to a mapping is required."
+			if s, isStr := raw.(string); isStr && isAllTemplate(s) {
+				// A template resolving to the args (_variable_params).
+				task.VarArgs, task.VarArgsPos = s, Pos{File: file, Line: val.Line, Col: val.Column}
+				break
+			}
+			if raw == nil {
+				task.LoadDeprecations = append(task.LoadDeprecations, LoadDeprecation{Msg: "Ignoring empty task `args` keyword.",
+					Help: argsHelp, Version: "2.23", Pos: Pos{File: file, Line: node.Line, Col: node.Column}})
+				break
+			}
+			m, ok := yaml.PlainMap(raw)
+			if !ok {
+				return nil, &parseError{file: file, line: val.Line, col: val.Column,
+					msg: "The value of the task `args` keyword is invalid.", help: argsHelp}
 			}
 			if task.Args == nil {
 				task.Args = map[string]any{}
@@ -1302,12 +1317,56 @@ func parseActionValue(task *Task, node *yaml.Node, file string) error {
 		if mod == "" {
 			return errAt(file, node, "action: mapping form requires a module key")
 		}
-		task.Module = normalizeModuleName(mod)
-		task.Action = mod
+		task.LoadDeprecations = append(task.LoadDeprecations, LoadDeprecation{Msg: "Using a mapping for `action` is deprecated.",
+			Help: "Use a string value for `action`.", Version: "2.23", Pos: Pos{File: file, Line: node.Line, Col: node.Column}})
+		// The action comes from the module: value ("module: copy src=a"
+		// may carry k=v args too).
+		modNode := node.MapGet("module")
+		task.ActionPos = Pos{File: file, Line: modNode.Line, Col: modNode.Column}
+		fields := strings.SplitN(strings.TrimSpace(mod), " ", 2)
+		task.Module = normalizeModuleName(fields[0])
+		task.Action = fields[0]
 		args := map[string]any{}
-		for k, val := range m {
-			if k != "module" {
+		task.ArgPos = map[string]Pos{}
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key, val := node.Content[i], node.Content[i+1]
+			if key.Value != "module" && key.Value != "args" {
+				args[key.Value] = m[key.Value]
+				task.ArgPos[key.Value] = Pos{File: file, Line: val.Line, Col: val.Column}
+			}
+		}
+		if len(fields) == 2 {
+			kv, raw := parseKVRaw(fields[1])
+			for k, val := range kv {
 				args[k] = val
+				task.ArgPos[k] = task.ActionPos
+			}
+			task.RawArgs, task.ArgsPos = raw, task.ActionPos
+		}
+		// args: in the mapping merges in (a string as k=v, its free text
+		// the raw params).
+		if argsNode := node.MapGet("args"); argsNode != nil {
+			argsPos := Pos{File: file, Line: argsNode.Line, Col: argsNode.Column}
+			switch a := m["args"].(type) {
+			case string:
+				kv, raw := parseKVRaw(a)
+				for k, val := range kv {
+					args[k] = val
+					task.ArgPos[k] = argsPos
+				}
+				if raw != "" {
+					task.RawArgs, task.ArgsPos = raw, argsPos
+				}
+			default:
+				if am, ok := yaml.PlainMap(a); ok {
+					for k, val := range am {
+						args[k] = val
+					}
+					for i := 0; argsNode.Kind == yaml.MappingNode && i+1 < len(argsNode.Content); i += 2 {
+						key, val := argsNode.Content[i], argsNode.Content[i+1]
+						task.ArgPos[key.Value] = Pos{File: file, Line: val.Line, Col: val.Column}
+					}
+				}
 			}
 		}
 		if len(args) > 0 {
@@ -1318,6 +1377,9 @@ func parseActionValue(task *Task, node *yaml.Node, file string) error {
 		if !ok || strings.TrimSpace(s) == "" {
 			return errAt(file, node, "action: must name a module")
 		}
+		// The action and its k=v args come from the value.
+		task.ActionPos = Pos{File: file, Line: node.Line, Col: node.Column}
+		task.ArgsPos = task.ActionPos
 		fields := strings.SplitN(strings.TrimSpace(s), " ", 2)
 		rest := ""
 		if len(fields) == 2 {
@@ -1383,11 +1445,16 @@ func parseModuleArgs(task *Task, node *yaml.Node, file string) error {
 			}
 			return nil
 		}
-		kv, err := parseKV(t)
-		if err != nil {
-			return errAt(file, node, "cannot parse %q as module arguments: %v", t, err)
-		}
+		kv, raw := parseKVRaw(t)
 		task.Args = kv
+		if rawParamModule(task.Module) {
+			// These take raw params: an argument like any other.
+			if raw != "" {
+				kv["_raw_params"] = raw
+			}
+		} else {
+			task.RawArgs = raw
+		}
 		return nil
 	default:
 		return errAt(file, node, "module arguments must be a mapping or string, got %T", v)
@@ -1407,12 +1474,26 @@ func ParseAdhocArgs(task *Task, module, raw string) error {
 		}
 		return nil
 	}
-	kv, err := parseKV(raw)
-	if err != nil {
-		return fmt.Errorf("cannot parse %q as module arguments: %w", raw, err)
-	}
+	kv, rawParams := parseKVRaw(raw)
 	task.Args = kv
+	if rawParamModule(task.Module) {
+		if rawParams != "" {
+			kv["_raw_params"] = rawParams
+		}
+	} else {
+		task.RawArgs = rawParams
+	}
 	return nil
+}
+
+// rawParamModule names the actions that take raw params beyond the
+// free-form modules (RAW_PARAM_MODULES): their free text is an argument.
+func rawParamModule(name string) bool {
+	switch name {
+	case "set_fact", "add_host", "group_by":
+		return true
+	}
+	return false
 }
 
 // executorStatement names task keys handled by the executor itself rather

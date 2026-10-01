@@ -813,3 +813,14 @@ func pyToBytes(v any) string {
 	}
 	return toStr(v)
 }
+
+// AsDict is v as a plain map, when it is a dict.
+func AsDict(v any) (map[string]any, bool) { return anyToMap(v) }
+
+// NativeTypeName is ansible-core's native_type_name(v): its Python type.
+func NativeTypeName(v any) string {
+	if _, ok := Undeprecate(v).(yaml.UnsafeString); ok {
+		return "str"
+	}
+	return pyTypeName(Undeprecate(v))
+}
