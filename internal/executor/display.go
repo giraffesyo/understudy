@@ -21,6 +21,22 @@ type PlaybookCallback interface {
 	HandlerNotified(handler *playbook.Task, host string)
 }
 
+// NoHostsMatchedCallback is implemented by callbacks that report a play
+// whose pattern matched no hosts (v2_playbook_on_no_hosts_matched).
+type NoHostsMatchedCallback interface {
+	NoHostsMatched()
+}
+
+// ForwardNoHostsMatched reports a play that matched no hosts to a
+// callback that shows it.
+func ForwardNoHostsMatched(cb Callback) {
+	if c, ok := cb.(NoHostsMatchedCallback); ok {
+		c.NoHostsMatched()
+	}
+}
+
+func (f *freeCallback) NoHostsMatched() { ForwardNoHostsMatched(f.Callback) }
+
 // COLOR_VERBOSE, the color Display.verbose (display.v, display.vv, ...)
 // prints in.
 const colorVerbose = "0;34"

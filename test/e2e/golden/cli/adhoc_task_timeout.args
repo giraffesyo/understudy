@@ -1,0 +1,12 @@
+ansible
+localhost
+-i
+localhost,
+-c
+local
+-m
+command
+-a
+sleep 3
+--task-timeout
+1

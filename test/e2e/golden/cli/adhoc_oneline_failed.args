@@ -1,0 +1,11 @@
+ansible
+localhost
+-i
+localhost,
+-c
+local
+-o
+-m
+fail
+-a
+msg=nope

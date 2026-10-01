@@ -1,0 +1,9 @@
+ansible
+all
+-i
+a,b,
+-l
+b
+--list-hosts
+-m
+command

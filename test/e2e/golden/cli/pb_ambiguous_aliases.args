@@ -1,0 +1,3 @@
+ansible-playbook
+--become-pass
+p.yml

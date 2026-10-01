@@ -1,0 +1,5 @@
+ansible-playbook
+-k
+--conn-pass-file
+x
+p.yml

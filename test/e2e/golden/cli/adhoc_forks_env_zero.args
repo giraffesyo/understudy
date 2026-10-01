@@ -1,0 +1,4 @@
+ansible
+localhost
+-m
+ping

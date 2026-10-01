@@ -1,0 +1,4 @@
+ansible-playbook
+p.yml
+-v
+other.yml

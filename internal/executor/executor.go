@@ -412,7 +412,7 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 	}
 	r.Callback.PlayStart(play)
 	if len(allHosts) == 0 {
-		fmt.Println("skipping: no hosts matched")
+		ForwardNoHostsMatched(r.Callback)
 		return nil
 	}
 

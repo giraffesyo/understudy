@@ -1,0 +1,5 @@
+ansible-playbook
+-J
+--vault-password-file
+f
+p.yml

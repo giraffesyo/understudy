@@ -1,0 +1,4 @@
+ansible
+nohost
+-m
+ping

@@ -1,0 +1,5 @@
+ansible
+all
+-i
+a,b,
+--list-hosts

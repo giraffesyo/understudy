@@ -1,0 +1,8 @@
+ansible
+all
+-i
+a,
+-l
+zzz
+-m
+ping

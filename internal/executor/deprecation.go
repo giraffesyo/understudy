@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/giraffesyo/understudy/internal/template"
 )
@@ -84,10 +85,18 @@ func (r *Runner) deprecation(pos template.Position, d template.Deprecated) {
 		return
 	}
 	r.warned[msg] = true
-	const hint = "[WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.\n"
-	if !r.warned[hint] {
-		r.warned[hint] = true
-		fmt.Fprint(os.Stderr, hint)
+	fmt.Fprint(os.Stderr, DeprecationHint()+msg)
+}
+
+// deprecationHinted: Display's one-time hint on silencing deprecation
+// warnings has been shown (by whatever showed the first one).
+var deprecationHinted atomic.Bool
+
+// DeprecationHint is the hint the first deprecation warning of the run
+// comes after ("" once shown).
+func DeprecationHint() string {
+	if deprecationHinted.CompareAndSwap(false, true) {
+		return "[WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.\n"
 	}
-	fmt.Fprint(os.Stderr, msg)
+	return ""
 }

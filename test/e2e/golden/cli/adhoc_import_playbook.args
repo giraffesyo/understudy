@@ -1,0 +1,8 @@
+ansible
+all
+-i
+a,
+-m
+ansible.builtin.import_playbook
+-a
+x.yml
