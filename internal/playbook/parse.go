@@ -55,6 +55,32 @@ type parseError struct {
 	// notParser marks an AnsibleError that is not an AnsibleParserError
 	// (ansible-playbook exits 1 for it instead of 4).
 	notParser bool
+	// help is the error's help text, shown after its source excerpt.
+	help string
+	// cause, when set, is the error this one was raised from: shown
+	// after "<<< caused by >>>" with its own origin and the help text.
+	cause *parseError
+}
+
+// HelpText is the error's help text.
+func (e *parseError) HelpText() string { return e.help }
+
+// Formatted is the error as Display.error shows a chained error, ""
+// when it has no cause.
+func (e *parseError) Formatted() string {
+	if e.cause == nil {
+		return ""
+	}
+	c := e.cause
+	var b strings.Builder
+	fmt.Fprintf(&b, "[ERROR]: %s: %s\n\n%s\n", strings.TrimRight(e.msg, ". "), c.msg, e.msg)
+	fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n%s\n", e.file, e.line, e.col, SourceContext(e.file, e.line, e.col))
+	fmt.Fprintf(&b, "<<< caused by >>>\n\n%s\n", c.msg)
+	fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n%s\n", c.file, c.line, c.col, SourceContext(c.file, c.line, c.col))
+	if c.help != "" {
+		b.WriteString(c.help + "\n\n")
+	}
+	return b.String()
 }
 
 // ExitCode is ansible-playbook's exit status for the error.
@@ -255,7 +281,11 @@ func parsePlay(node *yaml.Node, file string) (*Play, error) {
 			if err != nil {
 				return nil, err
 			}
+			if err := checkVarNames(val, file); err != nil {
+				return nil, err
+			}
 			play.Vars = v
+			play.VarOrigins = reservedKeyOrigins(val, file)
 		case "vars_files":
 			items, ok := val.Seq()
 			if !ok {
@@ -565,6 +595,7 @@ func parseRoleRefs(node *yaml.Node, file string) ([]*RoleRef, error) {
 				for k, v := range m {
 					ref.Params[k] = v
 				}
+				ref.Vars = m
 			case "check_mode", "diff":
 				b, err := decodeBool(val, file, key)
 				if err != nil {
@@ -599,6 +630,10 @@ func parseRoleRefs(node *yaml.Node, file string) ([]*RoleRef, error) {
 					ref.Params = map[string]any{}
 				}
 				ref.Params[key] = v
+				if ref.InlineParams == nil {
+					ref.InlineParams = map[string]any{}
+				}
+				ref.InlineParams[key] = v
 			}
 		}
 		if ref.Name == "" {
@@ -697,6 +732,10 @@ func parseInheritable(node *yaml.Node, file string) (*Task, error) {
 			inh.Debugger, err = parseDebugger(val, file)
 		case "vars":
 			inh.Vars, err = decodeMap(val, file, "vars")
+			if err == nil {
+				err = checkVarNames(val, file)
+			}
+			inh.VarOrigins = taskVarOrigins(val, file)
 		case "tags":
 			inh.Tags = decodeStringList(val)
 		case "environment":
@@ -792,6 +831,9 @@ func applyBlockInheritance(t *Task, inh *Task) {
 			merged[k] = v
 		}
 		t.Vars = merged
+	}
+	if len(inh.VarOrigins) > 0 {
+		t.VarOrigins = append(append([]template.KeyOrigin{}, inh.VarOrigins...), t.VarOrigins...)
 	}
 	if len(inh.Tags) > 0 {
 		t.Tags = append(append([]string{}, inh.Tags...), t.Tags...)
@@ -984,7 +1026,17 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 				task.LoopLabel = label
 			}
 			if pause, ok := m["pause"]; ok {
-				_ = pause // accepted; understudy does not pace loop items
+				task.LoopPause = pause
+			}
+			if bw := val.MapGet("break_when"); bw != nil && !bw.IsNull() {
+				task.BreakWhen, task.BreakWhenPos = decodeExprList(bw), exprPositions(bw, file)
+			}
+			// loop_control's own fields are origins of their errors
+			// and warnings.
+			for _, k := range []string{"loop_var", "index_var", "pause"} {
+				if n := val.MapGet(k); n != nil {
+					task.KeywordPos["loop_control."+k] = Pos{File: file, Line: n.Line, Col: n.Column}
+				}
 			}
 			if v, ok := m["extended"]; ok {
 				task.LoopExtended = v
@@ -994,6 +1046,11 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			}
 		case "register":
 			task.Register, _ = val.Str()
+			if task.Register != "" && !strings.Contains(task.Register, "{{") && !ValidVariableName(task.Register) {
+				msg, help := InvalidVariableName(task.Register)
+				return nil, &parseError{file: file, line: val.Line, col: val.Column, msg: "Invalid 'register' specified.",
+					cause: &parseError{file: file, line: val.Line, col: val.Column, msg: msg, help: help}}
+			}
 		case "ignore_errors":
 			b, _, err := decodeBoolKW(task, val, file, "ignore_errors")
 			if err != nil {
@@ -1053,7 +1110,11 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			if err != nil {
 				return nil, err
 			}
+			if err := checkVarNames(val, file); err != nil {
+				return nil, err
+			}
 			task.Vars = m
+			task.VarOrigins = taskVarOrigins(val, file)
 		case "environment":
 			v, err := decodeEnvironment(val)
 			if err != nil {
@@ -1072,7 +1133,7 @@ func parseTask(node *yaml.Node, file string, handler bool) (*Task, error) {
 			if !handler {
 				return nil, errAt(file, val, "'listen' is only valid on handlers")
 			}
-			task.Notify = nil // listen topics resolved at flush time (M5)
+			task.Listen = decodeStringList(val)
 		case "tags":
 			task.Tags = decodeStringList(val)
 		case "no_log":
@@ -1291,9 +1352,11 @@ func parseModuleArgs(task *Task, node *yaml.Node, file string) error {
 		task.Args = m
 		if node.Kind == yaml.MappingNode {
 			task.ArgPos = map[string]Pos{}
+			task.ArgKeyPos = map[string]Pos{}
 			for i := 0; i+1 < len(node.Content); i += 2 {
-				val := node.Content[i+1]
-				task.ArgPos[node.Content[i].Value] = Pos{File: file, Line: val.Line, Col: val.Column}
+				key, val := node.Content[i], node.Content[i+1]
+				task.ArgPos[key.Value] = Pos{File: file, Line: val.Line, Col: val.Column}
+				task.ArgKeyPos[key.Value] = Pos{File: file, Line: key.Line, Col: key.Column}
 			}
 		}
 		return nil
@@ -1740,4 +1803,98 @@ func parseDebugger(val *yaml.Node, file string) (string, error) {
 		return s, nil
 	}
 	return "", errAt(file, val, "debugger must be one of always, never, on_failed, on_unreachable or on_skipped, got %q", s)
+}
+
+// reservedKeyOrigins lists the keys of a vars mapping that use a reserved
+// name, where each was written.
+func reservedKeyOrigins(node *yaml.Node, file string) []template.KeyOrigin {
+	if node == nil {
+		return nil
+	}
+	var out []template.KeyOrigin
+	for _, k := range node.MapKeys() {
+		if !template.IsReservedName(k) {
+			continue
+		}
+		o := template.KeyOrigin{Name: k}
+		if kn := node.MapKeyNode(k); kn != nil {
+			o.File, o.Line, o.Col = file, kn.Line, kn.Column
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
+// ReservedKeyOrigins is reservedKeyOrigins for a vars file's document.
+func ReservedKeyOrigins(node *yaml.Node, file string) []template.KeyOrigin {
+	return reservedKeyOrigins(node, file)
+}
+
+// taskVarOrigins is reservedKeyOrigins for a task's or block's vars:
+// Task.get_vars leaves their tags and when out.
+func taskVarOrigins(node *yaml.Node, file string) []template.KeyOrigin {
+	var out []template.KeyOrigin
+	for _, o := range reservedKeyOrigins(node, file) {
+		if o.Name != "tags" && o.Name != "when" {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// variableNameHelp is validate_variable_name's help text.
+const variableNameHelp = "Variable names must be strings starting with a letter or underscore character, and contain only letters, numbers and underscores."
+
+// ValidVariableName is validate_variable_name's test: an ASCII Python
+// identifier that is not a Jinja keyword.
+func ValidVariableName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, c := range name {
+		switch {
+		case c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'):
+		case c >= '0' && c <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	switch name {
+	case "False", "None", "True", "false", "none", "not", "true":
+		return false
+	}
+	return true
+}
+
+// InvalidVariableName is validate_variable_name's message for name.
+func InvalidVariableName(name string) (msg, help string) {
+	return fmt.Sprintf("Invalid variable name %s.", pyQuoteName(name)), variableNameHelp
+}
+
+// pyQuoteName is repr() of a str key.
+func pyQuoteName(s string) string {
+	if strings.Contains(s, "'") && !strings.Contains(s, `"`) {
+		return `"` + s + `"`
+	}
+	return "'" + strings.ReplaceAll(s, "'", `\'`) + "'"
+}
+
+// checkVarNames is Base._load_vars: every vars: key must be a valid
+// variable name (an AnsibleError: exit 1).
+func checkVarNames(node *yaml.Node, file string) error {
+	if node == nil {
+		return nil
+	}
+	for _, k := range node.MapKeys() {
+		if ValidVariableName(k) {
+			continue
+		}
+		msg, help := InvalidVariableName(k)
+		e := &parseError{file: file, msg: msg, help: help, notParser: true}
+		if kn := node.MapKeyNode(k); kn != nil {
+			e.line, e.col = kn.Line, kn.Column
+		}
+		return e
+	}
+	return nil
 }

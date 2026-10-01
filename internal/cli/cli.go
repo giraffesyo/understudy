@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,30 +103,36 @@ Common options:
 
 // parsedArgs holds common flag values.
 type parsedArgs struct {
-	inventory  []string
-	limit      string
-	extraVars  map[string]any
-	forks      int
-	verbosity  int
-	check      bool
-	diff       bool
-	become     bool
-	becomeUser string
-	askBecome  bool
-	askPass    bool
-	askVault   bool
-	vaultFiles []string
-	remoteUser string
-	privateKey string
-	connection string
-	tags       string
-	skipTags   string
-	syntax     bool
-	listHosts  bool
-	listTasks  bool
-	module     string // adhoc -m
-	moduleArgs string // adhoc -a
-	positional []string
+	inventory []string
+	limit     string
+	extraVars map[string]any
+	// extraVarsErr is the first -e @file that could not be read: as
+	// ansible-core loads extra vars, it fails the inventory sources'
+	// parsing and then the run.
+	extraVarsErr error
+	// extraVarOrigins are where -e named reserved variables.
+	extraVarOrigins []template.KeyOrigin
+	forks           int
+	verbosity       int
+	check           bool
+	diff            bool
+	become          bool
+	becomeUser      string
+	askBecome       bool
+	askPass         bool
+	askVault        bool
+	vaultFiles      []string
+	remoteUser      string
+	privateKey      string
+	connection      string
+	tags            string
+	skipTags        string
+	syntax          bool
+	listHosts       bool
+	listTasks       bool
+	module          string // adhoc -m
+	moduleArgs      string // adhoc -a
+	positional      []string
 
 	becomeMethod   string
 	becomePassFile string
@@ -154,7 +161,18 @@ func boolFlag(set func(*parsedArgs)) func(*parsedArgs, string) error {
 var cliFlags = []cliFlag{
 	{[]string{"-i", "--inventory", "--inventory-file"}, true, func(p *parsedArgs, v string) error { p.inventory = append(p.inventory, v); return nil }},
 	{[]string{"-l", "--limit"}, true, func(p *parsedArgs, v string) error { p.limit = v; return nil }},
-	{[]string{"-e", "--extra-vars"}, true, func(p *parsedArgs, v string) error { return parseExtraVars(v, p.extraVars) }},
+	{[]string{"-e", "--extra-vars"}, true, func(p *parsedArgs, v string) error {
+		if path, ok := strings.CutPrefix(v, "@"); ok {
+			if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+				if p.extraVarsErr == nil {
+					abs, _ := filepath.Abs(path)
+					p.extraVarsErr = inventory.FileNotFoundError(abs)
+				}
+				return nil
+			}
+		}
+		return parseExtraVars(v, p.extraVars, &p.extraVarOrigins)
+	}},
 	{[]string{"-f", "--forks"}, true, func(p *parsedArgs, v string) (err error) { p.forks, err = strconv.Atoi(v); return }},
 	{[]string{"-t", "--tags"}, true, func(p *parsedArgs, v string) error { p.tags = joinCSV(p.tags, v); return nil }},
 	{[]string{"--skip-tags"}, true, func(p *parsedArgs, v string) error { p.skipTags = joinCSV(p.skipTags, v); return nil }},
@@ -370,21 +388,22 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		timeout = time.Duration(p.timeout) * time.Second
 	}
 	opts := executor.Options{
-		ForceHandlers: p.forceHandlers,
-		StartAtTask:   p.startAtTask,
-		Step:          p.step,
-		Forks:         forks,
-		CheckMode:     p.check,
-		Diff:          p.diff,
-		Verbosity:     p.verbosity,
-		ExtraVars:     p.extraVars,
-		Become:        p.become,
-		BecomeUser:    p.becomeUser,
-		BecomeMethod:  becomeMethod,
-		Connection:    p.connection,
-		BaseDir:       baseDir,
-		RolesPath:     cfg.RolesPath,
-		Inventory:     p.inventory,
+		ForceHandlers:   p.forceHandlers,
+		StartAtTask:     p.startAtTask,
+		Step:            p.step,
+		Forks:           forks,
+		CheckMode:       p.check,
+		Diff:            p.diff,
+		Verbosity:       p.verbosity,
+		ExtraVars:       p.extraVars,
+		ExtraVarOrigins: p.extraVarOrigins,
+		Become:          p.become,
+		BecomeUser:      p.becomeUser,
+		BecomeMethod:    becomeMethod,
+		Connection:      p.connection,
+		BaseDir:         baseDir,
+		RolesPath:       cfg.RolesPath,
+		Inventory:       p.inventory,
 		RefreshInventory: func() {
 			loadInventory(p, baseDir)
 		},
@@ -467,6 +486,14 @@ func buildVaultSecrets(p *parsedArgs) (*vault.Secrets, error) {
 	}
 	for _, f := range files {
 		pw, err := vault.LoadPasswordFile(f)
+		if errors.Is(err, fs.ErrNotExist) {
+			// get_file_vault_secret's error, warned about as the default
+			// vault id's secret and then raised.
+			abs, _ := filepath.Abs(f)
+			msg := fmt.Sprintf("The vault password file %s was not found", abs)
+			warnOnce("Error getting vault password file (default): " + msg + "\n")
+			return nil, errors.New(msg)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("vault password file: %w", err)
 		}
@@ -507,7 +534,7 @@ func splitCSV(s string) []string {
 }
 
 // parseExtraVars handles -e k=v, -e '{"json": true}', and -e @file.yml.
-func parseExtraVars(s string, into map[string]any) error {
+func parseExtraVars(s string, into map[string]any, origins *[]template.KeyOrigin) error {
 	switch {
 	case strings.HasPrefix(s, "@"):
 		data, err := os.ReadFile(s[1:])
@@ -517,6 +544,11 @@ func parseExtraVars(s string, into map[string]any) error {
 		v, err := yaml.Unmarshal(data, s[1:])
 		if err != nil {
 			return err
+		}
+		if abs, err := filepath.Abs(s[1:]); err == nil {
+			if node, err := yaml.ParseSingle(data, abs); err == nil {
+				*origins = append(*origins, playbook.ReservedKeyOrigins(node, abs)...)
+			}
 		}
 		m, ok := yaml.PlainMap(v)
 		if !ok {
@@ -531,6 +563,14 @@ func parseExtraVars(s string, into map[string]any) error {
 		if err := json.Unmarshal([]byte(s), &m); err != nil {
 			return fmt.Errorf("extra-vars JSON: %w", err)
 		}
+		if node, err := yaml.ParseSingle([]byte(s), ""); err == nil {
+			// JSON keys carry no origin.
+			for _, k := range node.MapKeys() {
+				if template.IsReservedName(k) {
+					*origins = append(*origins, template.KeyOrigin{Name: k})
+				}
+			}
+		}
 		for k, val := range m {
 			into[k] = val
 		}
@@ -542,6 +582,9 @@ func parseExtraVars(s string, into map[string]any) error {
 				return fmt.Errorf("extra-vars: expected key=value, got %q", pair)
 			}
 			into[pair[:eq]] = pair[eq+1:]
+			if template.IsReservedName(pair[:eq]) {
+				*origins = append(*origins, template.KeyOrigin{Name: pair[:eq], Label: "<CLI option '-e'>"})
+			}
 		}
 		return nil
 	}
@@ -575,6 +618,7 @@ func loadInventory(p *parsedArgs, playbookDir string) (*inventory.Inventory, err
 		UnparsedWarning:     cfg.InventoryUnparsedWarning,
 		UnparsedIsFailed:    cfg.InventoryUnparsedIsFailed,
 		AnyUnparsedIsFailed: cfg.InventoryAnyUnparsedIsFailed,
+		ExtraVarsErr:        p.extraVarsErr,
 		Warn:                warnOnce,
 		Verbose: func(level int, msg string) {
 			if p.verbosity >= level {
@@ -585,6 +629,10 @@ func loadInventory(p *parsedArgs, playbookDir string) (*inventory.Inventory, err
 	})
 	if err != nil {
 		return nil, err
+	}
+	if p.extraVarsErr != nil {
+		// The variable manager loads them again, for good.
+		return nil, errors.New(inventory.Inline(p.extraVarsErr))
 	}
 	inv.PatternMismatch = cfg.HostPatternMismatch
 	return inv, nil
@@ -831,7 +879,11 @@ func playbookCmd(args []string) int {
 
 // playHeader is the list modes' "play #N (pattern): name\tTAGS: [...]".
 func playHeader(i int, play *playbook.Play) string {
-	return fmt.Sprintf("play #%d (%s): %s\tTAGS: [%s]", i+1, play.HostPattern, play.Name, strings.Join(play.Tags, ", "))
+	name := play.Name
+	if strings.TrimSpace(name) == "" {
+		name = play.HostPattern // Play.get_name: the hosts, unnamed
+	}
+	return fmt.Sprintf("play #%d (%s): %s\tTAGS: [%s]", i+1, play.HostPattern, name, strings.Join(play.Tags, ", "))
 }
 
 // listTasks prints --list-tasks / --list-tags output. Tasks are filtered by
@@ -847,6 +899,9 @@ func listTasks(path string, plays []*playbook.Play, showTasks, showTags bool, wa
 		union := map[string]bool{}
 		for _, section := range [][]*playbook.Task{play.PreTasks, play.Tasks, play.PostTasks} {
 			for _, t := range expandImports(play, section) {
+				if t.Implicit {
+					continue // a role's role_complete marker
+				}
 				tags := effectiveTags(play, t)
 				for _, tg := range tags {
 					union[tg] = true
@@ -1055,7 +1110,7 @@ func expandImports(play *playbook.Play, tasks []*playbook.Task) []*playbook.Task
 		if cfg, err := config.Load(); err == nil {
 			rolesPath = cfg.RolesPath
 		}
-		ri, err := playbook.LoadRoleForInclude(name, play.Dir, rolesPath, from)
+		ri, err := playbook.LoadRoleForInclude(name, play.Dir, rolesPath, playbook.RoleIncludeOptions{TasksFrom: from})
 		if err != nil {
 			out = append(out, t)
 			continue
@@ -1172,6 +1227,13 @@ func loadErrorCode(err error) int {
 // "[ERROR]: <message>", then the Origin and the source excerpt when the
 // error points into a file.
 func printError(err error) {
+	var fe interface{ Formatted() string }
+	if errors.As(err, &fe) {
+		if f := fe.Formatted(); f != "" {
+			fmt.Fprint(os.Stderr, f)
+			return
+		}
+	}
 	var oe playbook.OriginError
 	if errors.As(err, &oe) {
 		help := ""

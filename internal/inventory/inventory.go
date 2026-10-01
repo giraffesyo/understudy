@@ -7,13 +7,17 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/giraffesyo/understudy/internal/template"
 )
 
 // Host is one managed host.
 type Host struct {
-	Name   string
-	Vars   map[string]any
-	groups map[string]*Group
+	Name string
+	Vars map[string]any
+	// VarOrigins are where its variables with reserved names were set.
+	VarOrigins []template.KeyOrigin
+	groups     map[string]*Group
 
 	// implicit marks the implicit localhost: created on demand when a
 	// pattern names localhost and the inventory has none. It belongs to no
@@ -26,12 +30,14 @@ func (h *Host) Implicit() bool { return h.implicit }
 
 // Group is a named set of hosts with vars and child groups.
 type Group struct {
-	Name     string
-	Vars     map[string]any
-	Hosts    map[string]*Host
-	Children map[string]*Group
-	Parents  map[string]*Group
-	depth    int
+	Name string
+	Vars map[string]any
+	// VarOrigins are where its variables with reserved names were set.
+	VarOrigins []template.KeyOrigin
+	Hosts      map[string]*Host
+	Children   map[string]*Group
+	Parents    map[string]*Group
+	depth      int
 
 	// Insertion order, which Ansible's "inventory" host order follows.
 	hostOrder  []*Host

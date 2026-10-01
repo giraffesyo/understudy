@@ -91,9 +91,12 @@ func (env *RunEnv) Context() context.Context {
 
 // Command is exec.Command bound to the run's context: when the run is
 // cancelled (its task timed out and was abandoned, as a worker is
-// terminated) the process is killed rather than left running.
+// terminated) the process is killed, with every process it started in
+// turn (it leads its own process group), rather than left running.
 func (env *RunEnv) Command(name string, args ...string) *exec.Cmd {
-	return exec.CommandContext(env.Context(), name, args...)
+	cmd := exec.CommandContext(env.Context(), name, args...)
+	ownGroup(cmd)
+	return cmd
 }
 
 // Environ is a shell-out's environment under the task's environment

@@ -75,7 +75,7 @@ func scriptModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	rc := 0
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
-			rc = ee.ExitCode()
+			rc = agentproto.ExitCode(ee)
 		} else {
 			return agentproto.Fail("script failed to start: %v", err)
 		}

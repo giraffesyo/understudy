@@ -142,6 +142,8 @@ func runJob(jobFile string, req *agentproto.TaskRequest, payload []byte, timeout
 		writeJobFile(jobFile, m)
 	case <-limit:
 		if detached {
+			// The module's commands lead their own process groups.
+			signalChildGroups(syscall.SIGKILL)
 			syscall.Kill(-os.Getpid(), syscall.SIGKILL)
 		}
 	}

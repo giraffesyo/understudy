@@ -675,7 +675,7 @@ func runValidate(env *RunEnv, cmdline string) (int, string, string) {
 	if err := c.Run(); err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
-			return ee.ExitCode(), stdout.String(), stderr.String()
+			return agentproto.ExitCode(ee), stdout.String(), stderr.String()
 		}
 		return 2, "", err.Error()
 	}

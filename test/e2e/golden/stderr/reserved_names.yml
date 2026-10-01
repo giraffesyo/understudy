@@ -1,0 +1,45 @@
+---
+# Variables named with a reserved name (a keyword or template global) are
+# warned about where each was named, once per origin: play vars,
+# vars_files, role defaults and vars, task and block vars (but not their
+# tags and when), set_fact, register and include_vars.
+- hosts: all
+  gather_facts: false
+  vars:
+    name: playvar
+    tags: x
+    vars: ok
+  vars_files:
+    - vars/reserved.yml
+  roles:
+    - reserved_role
+  tasks:
+    - debug: msg="{{ name }}"
+    - debug: msg=two
+      vars:
+        when: 1
+        tags: 2
+        delay: 3
+    - block:
+        - debug: msg=three
+      vars:
+        hosts: 1
+    - set_fact:
+        notify: 1
+        fine: 2
+    - command: echo hi
+      register: loop
+      changed_when: false
+    - set_fact:
+        timeout: 3
+      register: environment
+    - include_vars: vars/reserved_included.yml
+    - include_vars:
+        file: vars/reserved_included.yml
+        name: until
+- hosts: all
+  gather_facts: false
+  vars:
+    name: second
+  tasks:
+    - debug: msg="{{ name }}"

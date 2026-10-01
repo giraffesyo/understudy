@@ -1,0 +1,4 @@
+---
+- name: skipper task
+  debug: msg=skipper
+  when: false

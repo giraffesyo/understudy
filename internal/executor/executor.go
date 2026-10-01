@@ -73,23 +73,25 @@ func (st *HostStats) Processed() bool {
 
 // Options configure a run.
 type Options struct {
-	Forks        int
-	CheckMode    bool
-	Diff         bool
-	Verbosity    int
-	ExtraVars    map[string]any
-	Become       bool
-	BecomeUser   string
-	BecomeMethod string // --become-method ("" = sudo)
-	BecomePass   string
-	Connection   string // "" = per-host behavioral vars; "local" forces local
-	BaseDir      string // playbook directory
-	Tags         []string
-	SkipTags     []string
-	RolesPath    []string                  // roles_path search directories (after <playbook>/roles)
-	ConfigFile   string                    // ansible.cfg in effect ("" = none): ansible_config_file
-	Inventory    []string                  // inventory sources: ansible_inventory_sources
-	ConnOpts     connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
+	Forks     int
+	CheckMode bool
+	Diff      bool
+	Verbosity int
+	ExtraVars map[string]any
+	// ExtraVarOrigins are where the extra vars named reserved variables.
+	ExtraVarOrigins []template.KeyOrigin
+	Become          bool
+	BecomeUser      string
+	BecomeMethod    string // --become-method ("" = sudo)
+	BecomePass      string
+	Connection      string // "" = per-host behavioral vars; "local" forces local
+	BaseDir         string // playbook directory
+	Tags            []string
+	SkipTags        []string
+	RolesPath       []string                  // roles_path search directories (after <playbook>/roles)
+	ConfigFile      string                    // ansible.cfg in effect ("" = none): ansible_config_file
+	Inventory       []string                  // inventory sources: ansible_inventory_sources
+	ConnOpts        connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
 
 	ForceHandlers bool           // --force-handlers: notified handlers run on failed hosts too
 	StartAtTask   string         // --start-at-task: skip tasks until one matches
@@ -136,14 +138,18 @@ type Runner struct {
 	stats          map[string]*HostStats
 	order          []string
 	failed         map[string]bool
-	notified       map[string]map[string]bool // handler name -> hosts to run on
-	notifyOrder    map[string][]string        // host -> notifications saved, in order
-	inHandlers     bool                       // a handler flush is running
-	blockFailed    map[string]map[int]bool    // host -> block ID -> failure caught by rescue
-	nextBlockID    int                        // fresh IDs for blocks of included files
-	failedIn       map[string]map[int]bool    // host -> blocks it was inside when it failed hard
-	ended          map[string]bool            // meta: end_host (per play)
-	runOnceHosts   []string                   // hosts a running run_once task fans out to
+	notified       map[*playbook.Task]map[string]bool // handler -> hosts to run on
+	roleRan        map[string]map[string]bool         // role load key -> hosts a task of it ran on
+	roleDone       map[string]map[string]bool         // role load key -> hosts it completed on
+	notifyOrder    map[string][]string                // host -> notifications saved, in order
+	handlerNames   map[*playbook.Task]*string         // templated handler names (nil: unusable)
+	fatalErr       error                              // an error raised processing results: ends the run
+	inHandlers     bool                               // a handler flush is running
+	blockFailed    map[string]map[int]bool            // host -> block ID -> failure caught by rescue
+	nextBlockID    int                                // fresh IDs for blocks of included files
+	failedIn       map[string]map[int]bool            // host -> blocks it was inside when it failed hard
+	ended          map[string]bool                    // meta: end_host (per play)
+	runOnceHosts   []string                           // hosts a running run_once task fans out to
 	curPlay        *playbook.Play
 	warned         map[string]bool
 	freeSem        *turnstile   // free strategy: forks shared fairly across hosts
@@ -285,6 +291,9 @@ func (r *Runner) RunPlaybooks(ctx context.Context, books [][]*playbook.Play) (in
 			if err := r.runPlay(ctx, play); err != nil {
 				return 1, err
 			}
+			if r.fatalErr != nil {
+				return 1, r.fatalErr
+			}
 			if r.quitRequested() {
 				return r.quitCode, nil
 			}
@@ -342,6 +351,7 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 	r.playEnded = false
 	r.mu.Unlock()
 	r.Store.SetPlayVars(play.Vars)
+	reserved := append([]template.KeyOrigin{}, play.VarOrigins...)
 	for _, defaults := range play.RoleDefaults {
 		r.Store.AddRoleDefaults(defaults)
 	}
@@ -378,7 +388,13 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 			return fmt.Errorf("%s: vars file must contain a mapping", path)
 		}
 		r.Store.AddVarsFile(m)
+		if node, err := yaml.ParseSingle(data, path); err == nil {
+			reserved = append(reserved, playbook.ReservedKeyOrigins(node, path)...)
+		}
 	}
+	// The play's variables, before any host's, are checked for reserved
+	// names (VariableManager.get_vars warns as it merges them).
+	r.warnReserved(append(reserved, r.Opts.ExtraVarOrigins...))
 	// ansible-core reads vars_files and resolves the play's hosts before
 	// the banner: a file that fails to parse, or a pattern that is an
 	// error, ends the run without one.
@@ -569,8 +585,10 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 	if depth > maxIncludeDepth {
 		return fmt.Errorf("include_tasks nesting exceeds %d levels (include loop?)", maxIncludeDepth)
 	}
+	listRestrict := restrict
 	for i := 0; i < len(tasks); i++ {
 		task := tasks[i]
+		restrict := listRestrict
 		if r.playEnded || r.batchEnded {
 			return nil
 		}
@@ -579,13 +597,25 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 			for end < len(tasks) && hasBlockRef(tasks[end], ref.ID, level) {
 				end++
 			}
-			if err := r.runParallel(ctx, play, tasks[i:end], level, ref.ID, playHosts, restrict, depth); err != nil {
+			if err := r.runParallel(ctx, play, tasks[i:end], level, ref.ID, playHosts, listRestrict, depth); err != nil {
 				return err
 			}
 			i = end - 1
 			continue
 		}
 		if !r.tagsMatch(task, play) {
+			continue
+		}
+		if task.Role != nil && !task.Role.AllowDuplicates {
+			// A role that already completed on a host does not run
+			// there again (get_next_task_for_host skips its tasks).
+			restrict = r.roleNotDone(task, playHosts, restrict)
+			if len(restrict) == 0 {
+				continue
+			}
+		}
+		if task.Implicit && task.Module == "meta" && task.FreeForm == playbook.RoleCompleteAction {
+			r.roleComplete(task, playHosts, restrict)
 			continue
 		}
 		if r.Opts.StartAtTask != "" && !r.startedAt {
@@ -782,6 +812,12 @@ func (r *Runner) runTaskAcrossHosts(ctx context.Context, play *playbook.Play, ta
 				r.freeSem.acquire(host)
 				defer r.freeSem.release()
 			}
+			r.mu.Lock()
+			stopped := r.fatalErr != nil
+			r.mu.Unlock()
+			if stopped {
+				return nil // a result raised: no host starts after it
+			}
 			r.runTaskOnHost(gctx, play, task, host, playHosts)
 			return nil
 		})
@@ -917,78 +953,211 @@ func (r *Runner) catchInRescue(host string, task *playbook.Task) bool {
 func (r *Runner) resetNotified() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.notified = map[string]map[string]bool{}
+	r.notified = map[*playbook.Task]map[string]bool{}
 	r.notifyOrder = map[string][]string{}
+	r.handlerNames = nil
+	// The play's role cache: what ran and completed where.
+	r.roleRan = map[string]map[string]bool{}
+	r.roleDone = map[string]map[string]bool{}
 }
 
-// notifyHandlers marks handlers notified by one host (called on change).
-// announce counts the host's own results that notified them (0 for a
-// run_once fan-out): outside a flush each result's notifications are
-// saved ("Notification for handler ... has been saved." at -vv); during
-// one, a handler that notifies another queues it at once
-// (v2_playbook_on_notify).
-func (r *Runner) notifyHandlers(host string, names []string, announce int) {
+// notifyHandlers saves one host's notifications (called on change): each
+// of lists is one result's notify list (a loop's items that ran each
+// carry theirs), announced ("Notification for handler ... has been
+// saved." at -vv) when announce is set (not for a run_once fan-out).
+// During a flush, a handler that notifies others queues them at once
+// (v2_playbook_on_notify). A notification no handler answers, by name or
+// listen topic, ends the run with ansible-core's error; it reports false.
+func (r *Runner) notifyHandlers(host string, lists [][]string, announce bool) bool {
 	r.mu.Lock()
 	inHandlers := r.inHandlers
-	var queued []string
-	for _, name := range names {
-		if r.notified[name] == nil {
-			r.notified[name] = map[string]bool{}
-		}
-		fresh := !r.notified[name][host]
-		r.notified[name][host] = true
-		if inHandlers {
-			if fresh {
-				queued = append(queued, name)
-			}
-			continue
-		}
-		if !slices.Contains(r.notifyOrder[host], name) {
-			r.notifyOrder[host] = append(r.notifyOrder[host], name)
-		}
-	}
 	r.mu.Unlock()
-	for range announce {
+	for _, names := range lists {
 		for _, name := range names {
-			r.mu.Lock()
-			h := r.handlerNamed(name)
-			r.mu.Unlock()
-			if h == nil {
+			matches := r.searchHandlers(name)
+			if len(matches) == 0 {
+				r.fatal(fmt.Errorf("The requested handler '%s' was not found in either the main handlers list nor in the listening handlers list", name))
+				return false
+			}
+			if inHandlers {
+				for _, h := range matches {
+					if r.notifyHost(h, host) {
+						r.forwardNotified(h, host)
+					}
+				}
 				continue
 			}
-			if !inHandlers {
+			r.mu.Lock()
+			if !slices.Contains(r.notifyOrder[host], name) {
+				r.notifyOrder[host] = append(r.notifyOrder[host], name)
+			}
+			r.mu.Unlock()
+			if announce {
 				r.displayVerbose(2, fmt.Sprintf("Notification for handler %s has been saved.", name))
-			} else if slices.Contains(queued, name) {
-				ForwardHandlerNotified(r.Callback, h, host)
-				queued = slices.DeleteFunc(queued, func(q string) bool { return q == name })
 			}
 		}
 	}
+	return true
 }
 
-// handlerNamed is the current play's handler a notification names.
-func (r *Runner) handlerNamed(name string) *playbook.Task {
-	if r.curPlay == nil {
-		return nil
+// forwardNotified is v2_playbook_on_notify, naming the handler as its
+// name was templated.
+func (r *Runner) forwardNotified(h *playbook.Task, host string) {
+	if name, ok := r.handlerName(h); ok && name != h.Name {
+		c := *h
+		c.Name = name
+		h = &c
 	}
-	for _, h := range r.curPlay.Handlers {
-		if h.Name == name {
-			return h
+	ForwardHandlerNotified(r.Callback, h, host)
+}
+
+// notifyHost marks handler h to run on host, reporting whether that is
+// new (Handler.notify_host).
+func (r *Runner) notifyHost(h *playbook.Task, host string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.notified[h] == nil {
+		r.notified[h] = map[string]bool{}
+	}
+	if r.notified[h][host] {
+		return false
+	}
+	r.notified[h][host] = true
+	return true
+}
+
+// fatal ends the run at once with err (an AnsibleError raised while
+// processing results): no recap, exit 1.
+func (r *Runner) fatal(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fatalErr == nil {
+		r.fatalErr = err
+	}
+	r.aborted, r.playEnded = true, true
+}
+
+// searchHandlers is search_handlers_by_notification: the play's handlers
+// are searched block by block from the last loaded one; a handler whose
+// (templated) name, or role-qualified name, is the notification answers
+// alone, else every handler listening to it does (one per name).
+func (r *Runner) searchHandlers(notification string) []*playbook.Task {
+	r.mu.Lock()
+	play := r.curPlay
+	var handlers []*playbook.Task
+	if play != nil {
+		handlers = handlerSearchOrder(play.Handlers)
+	}
+	r.mu.Unlock()
+	var listening []*playbook.Task
+	seen := map[string]bool{}
+	for _, h := range handlers {
+		name, ok := r.handlerName(h)
+		if !ok {
+			continue
+		}
+		if name != "" && (notification == name || (h.RoleName != "" && notification == h.RoleName+" : "+name)) {
+			return []*playbook.Task{h}
 		}
 	}
-	return nil
+	for _, h := range handlers {
+		if !slices.Contains(h.Listen, notification) {
+			continue
+		}
+		name, _ := r.handlerName(h)
+		if name != "" && seen[name] {
+			continue
+		}
+		seen[name] = true
+		listening = append(listening, h)
+	}
+	return listening
+}
+
+// handlerSearchOrder lists handlers block by block, the last block first
+// (the last handler loaded with a name wins): consecutive handlers from
+// one file and top-level block form a block.
+func handlerSearchOrder(handlers []*playbook.Task) []*playbook.Task {
+	type group struct{ list []*playbook.Task }
+	var groups []*group
+	key := func(h *playbook.Task) string {
+		k := h.Src.File
+		if len(h.Blocks) > 0 {
+			k += fmt.Sprintf("#%d", h.Blocks[0].ID)
+		}
+		return k
+	}
+	last := ""
+	for _, h := range handlers {
+		if k := key(h); len(groups) == 0 || k != last {
+			groups = append(groups, &group{})
+			last = k
+		}
+		g := groups[len(groups)-1]
+		g.list = append(g.list, h)
+	}
+	var out []*playbook.Task
+	for i := len(groups) - 1; i >= 0; i-- {
+		out = append(out, groups[i].list...)
+	}
+	return out
+}
+
+// handlerName is a handler's name, templated once with the play's
+// variables; false when it cannot be (the handler is then unusable by
+// name, as ansible-core warns when it has no listen topics either).
+func (r *Runner) handlerName(h *playbook.Task) (string, bool) {
+	if !strings.Contains(h.Name, "{{") && !strings.Contains(h.Name, "{%") {
+		return h.Name, true
+	}
+	r.mu.Lock()
+	if r.handlerNames == nil {
+		r.handlerNames = map[*playbook.Task]*string{}
+	}
+	cached, ok := r.handlerNames[h]
+	r.mu.Unlock()
+	if ok {
+		if cached == nil {
+			return "", false
+		}
+		return *cached, true
+	}
+	ctx := r.Store.NewContext("", template.Position{File: h.Src.File, Line: h.Src.Line, Col: h.Src.Col})
+	v, err := ctx.TemplateString(h.Name)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err != nil {
+		r.handlerNames[h] = nil
+		if len(h.Listen) == 0 {
+			msg := err.Error()
+			if cause, ok := template.Cause(err); ok {
+				msg = cause
+			}
+			r.mu.Unlock()
+			r.warn(fmt.Sprintf("Handler '%s' is unusable because it has no listen topics and the name could not be templated "+
+				"(host-specific variables are not supported in handler names). The error: %s", h.Name, msg))
+			r.mu.Lock()
+		}
+		return "", false
+	}
+	name := fmt.Sprint(v)
+	r.handlerNames[h] = &name
+	return name, true
 }
 
 // announceNotified is flush_handlers expanding a host's saved
-// notifications into its handlers: a NOTIFIED HANDLER line for each.
+// notifications into the handlers they name: a NOTIFIED HANDLER line for
+// each newly notified.
 func (r *Runner) announceNotified(host string) {
 	r.mu.Lock()
 	names := r.notifyOrder[host]
 	delete(r.notifyOrder, host)
 	r.mu.Unlock()
 	for _, name := range names {
-		if h := r.handlerNamed(name); h != nil {
-			ForwardHandlerNotified(r.Callback, h, host)
+		for _, h := range r.searchHandlers(name) {
+			if r.notifyHost(h, host) {
+				r.forwardNotified(h, host)
+			}
 		}
 	}
 }
@@ -1015,10 +1184,12 @@ func (r *Runner) flushHandlers(ctx context.Context, play *playbook.Play, playHos
 		r.mu.Unlock()
 	}()
 	for _, handler := range handlers {
-		key := handler.Name
+		if r.playEnded {
+			return nil
+		}
 		r.mu.Lock()
-		hosts := r.notified[key]
-		delete(r.notified, key)
+		hosts := r.notified[handler]
+		delete(r.notified, handler)
 		r.mu.Unlock()
 		if len(hosts) == 0 {
 			continue
@@ -1042,7 +1213,7 @@ func (r *Runner) flushHandlers(ctx context.Context, play *playbook.Play, playHos
 			// A handler skipped at the step prompt did not run: its hosts
 			// stay notified for the next flush.
 			r.mu.Lock()
-			r.notified[key] = hosts
+			r.notified[handler] = hosts
 			r.mu.Unlock()
 			continue
 		}
@@ -1201,7 +1372,7 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 			override = map[string]any{}
 		}
 		pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
-		vctx := r.newHostContext(host, pos, playHosts)
+		vctx := r.newHostContext(host, pos, playHosts).WithRoleScope(task.ScopeDefaults, task.ScopeVars)
 		if len(task.Vars) > 0 {
 			vctx = vctx.WithOverlay(task.Vars)
 		}
@@ -1231,8 +1402,11 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 	// One TaskExecutor (and connection) per task and host, loop items
 	// included.
 	ctx = context.WithValue(ctx, connectedKey{}, new(string))
+	// Discovery updates the task's variables for its later loop items.
+	ctx = context.WithValue(ctx, discoveredCtxKey{}, new(string))
 	pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
-	base := r.newHostContext(host, pos, playHosts)
+	r.warnReservedFor(host, task)
+	base := r.newHostContext(host, pos, playHosts).WithRoleScope(task.ScopeDefaults, task.ScopeVars)
 	if len(task.Vars) > 0 {
 		base = base.WithOverlay(task.Vars)
 	}
@@ -1268,17 +1442,22 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 
 	lc, err := newLoopControl(task, base, items)
 	if err != nil {
-		return agentproto.Fail("%v", err), nil, task
+		return loopControlFailure(err), nil, task
 	}
+	r.checkLoopControl(task, base)
 
 	// Loop: aggregate per-item results Ansible-style.
 	var itemResults []any
+	var notify [][]string
 	anyChanged, anyFailed, allSkipped := false, false, true
 	for i, item := range items {
+		if i > 0 && lc.pause > 0 {
+			time.Sleep(lc.pause)
+		}
 		// Rebuild the per-item context from the store each iteration so a
 		// set_fact from an earlier item is visible to later ones (Ansible's
 		// accumulate-in-a-loop pattern).
-		itemCtx := r.newHostContext(host, pos, playHosts)
+		itemCtx := r.newHostContext(host, pos, playHosts).WithRoleScope(task.ScopeDefaults, task.ScopeVars)
 		if len(task.Vars) > 0 {
 			itemCtx = itemCtx.WithOverlay(task.Vars)
 		}
@@ -1287,6 +1466,10 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 		}
 		itemCtx = itemCtx.WithOverlay(lc.vars(i))
 		res := r.runOnce(ctx, play, task, host, itemCtx, item)
+		stop := r.breakWhen(task, itemCtx, res)
+		if !res.Failed {
+			notify = append(notify, res.Notify...)
+		}
 		// Per-item results carry the loop variable(s), as Ansible's do.
 		if res.Extra == nil {
 			res.Extra = map[string]any{}
@@ -1298,11 +1481,16 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 		anyChanged = anyChanged || res.Changed
 		anyFailed = anyFailed || res.Failed
 		allSkipped = allSkipped && res.Skipped
+		if stop {
+			break
+		}
 	}
 	if itemResults == nil {
 		itemResults = []any{}
 	}
-	return loopResult(itemResults, anyChanged, anyFailed, allSkipped), itemResults, task
+	agg := loopResult(itemResults, anyChanged, anyFailed, allSkipped)
+	agg.Notify = notify
+	return agg, itemResults, task
 }
 
 // loopResult is a loop's aggregate result (build_loop_result): the
@@ -1403,6 +1591,11 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			continue
 		}
 		args[k] = v
+	}
+	if task.Module == "set_fact" {
+		if bad := invalidSetFactName(task, args); bad != nil {
+			return bad
+		}
 	}
 	freeForm := task.FreeForm
 	if freeForm != "" {
@@ -1529,7 +1722,25 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 	}
 	res.DelegatedTo = delegated
 	res.ShowDiff = r.effectiveDiff(play, task)
+	if len(task.Notify) > 0 && !res.Failed && !res.Skipped {
+		res.Notify = [][]string{templateNotify(task, vctx)}
+	}
 	return res
+}
+
+// templateNotify is the task's notify list templated for one run (a loop
+// item's notify may name its item).
+func templateNotify(task *playbook.Task, vctx *vars.Context) []string {
+	out := make([]string, 0, len(task.Notify))
+	for _, n := range task.Notify {
+		if strings.Contains(n, "{{") || strings.Contains(n, "{%") {
+			if v, err := vctx.TemplateString(n); err == nil {
+				n = fmt.Sprint(v)
+			}
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 // applyChangedFailedWhen lets changed_when / failed_when override the
@@ -1628,6 +1839,7 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		return nil, target, err
 	}
 	connecting := r.connectingNote(ctx, inProcess, vctx, host, target)
+	disc := &discovery{}
 	return &actions.Context{
 		Host:          host,
 		Vars:          vctx,
@@ -1665,7 +1877,24 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 			}
 			connecting()
 			r.displayModuleRedirect(task, req.Module)
-			return r.runModule(ctx, host, target, kw, inProcess, b, task, envKeys, env, req, payload)
+			python := !noPythonModules[req.Module]
+			if python {
+				r.discoverInterpreter(ctx, disc, host, target, task, vctx, conn)
+				if req.PythonInterpreter == "" {
+					req.PythonInterpreter = disc.path
+				}
+			}
+			res, err := r.runModule(ctx, host, target, kw, inProcess, b, task, envKeys, env, req, payload)
+			if err == nil && res != nil && python && disc.report && res.Origin != "action" {
+				// _execute_module propagates the discovery to the
+				// controller as a fact in its result (a result the
+				// action plugin made itself has none).
+				if res.AnsibleFacts == nil {
+					res.AnsibleFacts = map[string]any{}
+				}
+				res.AnsibleFacts[discoveredKey] = disc.path
+			}
+			return res, err
 		},
 		Connecting: connecting,
 		SetFact: func(name string, value any) {
@@ -2166,6 +2395,9 @@ func (r *Runner) dispatch(ctx context.Context, task *playbook.Task, actx *action
 // record finalizes a task result for one host (non-loop path emits the
 // callback here; loops emitted per item already).
 func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result, loopItems []any) {
+	if !res.Skipped && (res.Extra == nil || res.Extra["unreachable"] != true) {
+		r.markRoleRan(task, host)
+	}
 	if res.Extra != nil && res.Extra["unreachable"] == true {
 		r.Callback.HostUnreachable(host, task, res.Msg)
 		r.mu.Lock()
@@ -2179,32 +2411,21 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 		return
 	}
 	ignored := task.IgnoreErrors && res.Failed
-	if res.Changed && !res.Failed && !res.Skipped && len(task.Notify) > 0 {
+	if task.Module == "set_fact" && !res.Failed && !res.Skipped {
+		r.warnReserved(setFactOrigins(task))
+	}
+	if task.Register != "" && template.IsReservedName(task.Register) {
+		p := task.KeywordPos["register"]
+		r.warnReserved([]template.KeyOrigin{{Name: task.Register, File: p.File, Line: p.Line, Col: p.Col}})
+	}
+	if res.Changed && !res.Failed && !res.Skipped && len(res.Notify) > 0 {
 		// Notifications are saved before the result prints, once per
-		// result that carries them: a loop's item results that ran.
-		times := 1
-		if loopItems != nil {
-			times = 0
-			list, _ := res.Extra["results"].([]any)
-			for _, it := range list {
-				var skipped any
-				switch m := it.(type) {
-				case *yaml.OMap:
-					skipped = m.Get("skipped")
-				case map[string]any:
-					skipped = m["skipped"]
-				}
-				if skipped != true {
-					times++
-				}
-			}
-		}
+		// result that carries them (its notify templated for it): a
+		// loop's item results that ran.
 		for _, h := range r.fanOut(host, task) {
-			n := 0
-			if h == host {
-				n = times
+			if !r.notifyHandlers(h, res.Notify, h == host) {
+				return // the run ends here, before the result prints
 			}
-			r.notifyHandlers(h, task.Notify, n)
 		}
 	}
 	if loopItems == nil {
@@ -2228,21 +2449,18 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 	// Only a successful result's facts are kept (a failed task's are
 	// reported but not applied).
 	if len(res.AnsibleFacts) > 0 && task.Module != "set_fact" && !res.Failed {
-		target := host
-		if res.DelegatedTo != "" {
-			target = res.DelegatedTo
-		}
-		stripped := make(map[string]any, len(res.AnsibleFacts))
-		for k, v := range res.AnsibleFacts {
-			if k == "ansible_local" {
-				stripped[k] = v // namespace_facts keeps ansible_local as-is
+		r.applyFacts(host, res.DelegatedTo, task, res.AnsibleFacts)
+	}
+	if loopItems != nil && task.Module != "set_fact" {
+		// A loop's facts are its items' (each item that did not fail).
+		for _, it := range loopItems {
+			m, ok := asStringMap(it)
+			if !ok || m["failed"] == true {
 				continue
 			}
-			stripped[strings.TrimPrefix(k, "ansible_")] = v
-		}
-		for _, h := range r.factHosts(host, target, task) {
-			r.Store.SetFacts(h, r.deprecatedFacts(res.AnsibleFacts))
-			r.Store.SetFacts(h, map[string]any{"ansible_facts": stripped})
+			if facts, ok := asStringMap(m["ansible_facts"]); ok && len(facts) > 0 {
+				r.applyFacts(host, res.DelegatedTo, task, facts)
+			}
 		}
 	}
 	if res.Failed && !ignored && r.catchInRescue(host, task) {
@@ -2614,6 +2832,173 @@ func whenSkip(vctx *vars.Context, when []string, pos map[string]template.Positio
 		}
 	}
 	return nil, nil
+}
+
+// invalidSetFactName is set_fact's failure for a fact name that is not a
+// valid variable name (the first, in the task's order), nil when all are.
+func invalidSetFactName(task *playbook.Task, args map[string]any) *agentproto.Result {
+	keys := slices.Collect(maps.Keys(args))
+	slices.SortFunc(keys, func(a, b string) int {
+		pa, pb := task.ArgKeyPos[a], task.ArgKeyPos[b]
+		if pa.Line != pb.Line {
+			return pa.Line - pb.Line
+		}
+		if pa.Col != pb.Col {
+			return pa.Col - pb.Col
+		}
+		return strings.Compare(a, b)
+	})
+	for _, k := range keys {
+		if k == "cacheable" || playbook.ValidVariableName(k) {
+			continue
+		}
+		msg, help := playbook.InvalidVariableName(k)
+		res := agentproto.Fail("Task failed: %s", msg)
+		res.Origin = "verbatim"
+		p, ok := task.ArgKeyPos[k]
+		if !ok {
+			p = argPos(task, k)
+		}
+		res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: msg, Help: help,
+			InnerFile: p.File, InnerLine: p.Line, InnerCol: p.Col}
+		return res
+	}
+	return nil
+}
+
+// setFactOrigins are the reserved names set_fact sets, where each was
+// written, in source order.
+func setFactOrigins(task *playbook.Task) []template.KeyOrigin {
+	var out []template.KeyOrigin
+	for k := range task.Args {
+		if k == "cacheable" || !template.IsReservedName(k) {
+			continue
+		}
+		p, ok := task.ArgKeyPos[k]
+		if !ok {
+			p = argPos(task, k)
+		}
+		out = append(out, template.KeyOrigin{Name: k, File: p.File, Line: p.Line, Col: p.Col})
+	}
+	slices.SortFunc(out, func(a, b template.KeyOrigin) int {
+		if a.Line != b.Line {
+			return a.Line - b.Line
+		}
+		return a.Col - b.Col
+	})
+	return out
+}
+
+// applyFacts records a result's facts for the hosts they belong to, both
+// prefixed at top level (inject_facts_as_vars) and under ansible_facts,
+// updating the facts already cached (host_cache |= facts).
+func (r *Runner) applyFacts(host, delegatedTo string, task *playbook.Task, facts map[string]any) {
+	target := host
+	if delegatedTo != "" {
+		target = delegatedTo
+	}
+	stripped := make(map[string]any, len(facts))
+	for k, v := range facts {
+		if k == "ansible_local" {
+			stripped[k] = v // namespace_facts keeps ansible_local as-is
+			continue
+		}
+		stripped[strings.TrimPrefix(k, "ansible_")] = v
+	}
+	for _, h := range r.factHosts(host, target, task) {
+		r.Store.SetFacts(h, r.deprecatedFacts(facts))
+		merged := stripped
+		if old, ok := r.Store.Fact(h, "ansible_facts"); ok {
+			if m, ok := asStringMap(old); ok {
+				merged = maps.Clone(m)
+				maps.Copy(merged, stripped)
+			}
+		}
+		r.Store.SetFacts(h, map[string]any{"ansible_facts": merged})
+	}
+}
+
+// markRoleRan records that a task of a role ran on host (its result was
+// ok or failed, not skipped or unreachable).
+func (r *Runner) markRoleRan(task *playbook.Task, host string) {
+	if task.Role == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.roleRan[task.Role.Key] == nil {
+		r.roleRan[task.Role.Key] = map[string]bool{}
+	}
+	r.roleRan[task.Role.Key][host] = true
+}
+
+// roleComplete is the implicit role_complete meta: the role completed on
+// each host one of its tasks ran on.
+func (r *Runner) roleComplete(task *playbook.Task, playHosts, restrict []string) {
+	active := r.activeOf(playHosts)
+	if restrict != nil {
+		active = intersect(active, restrict)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, h := range active {
+		if !r.roleRan[task.Role.Key][h] {
+			continue
+		}
+		if r.roleDone[task.Role.Key] == nil {
+			r.roleDone[task.Role.Key] = map[string]bool{}
+		}
+		r.roleDone[task.Role.Key][h] = true
+	}
+}
+
+// roleNotDone narrows the hosts a role task may run on (restrict, else
+// the play's) to those its role has not completed on.
+func (r *Runner) roleNotDone(task *playbook.Task, playHosts, restrict []string) []string {
+	hosts := restrict
+	if hosts == nil {
+		hosts = playHosts
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	done := r.roleDone[task.Role.Key]
+	out := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		if !done[h] {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// warnReserved shows warn_if_reserved's warning for each variable named
+// with a reserved name, once per distinct origin.
+func (r *Runner) warnReserved(origins []template.KeyOrigin) {
+	for _, o := range origins {
+		r.warnBlock(template.ReservedWarning(o))
+	}
+}
+
+// warnReservedFor checks the variables a task sees on host, as get_vars
+// does before the task runs: the play's roles' defaults, the host's
+// inventory variables (its groups' then its own), the roles' vars, then
+// the task's (and its blocks') vars.
+func (r *Runner) warnReservedFor(host string, task *playbook.Task) {
+	if play := r.curPlay; play != nil {
+		r.warnReserved(play.RoleDefaultOrigins)
+	}
+	if r.Inv != nil {
+		if h := r.Inv.Hosts[host]; h != nil {
+			for _, g := range r.Inv.OrderedGroups(h) {
+				r.warnReserved(g.VarOrigins)
+			}
+			r.warnReserved(h.VarOrigins)
+		}
+	}
+	if play := r.curPlay; play != nil {
+		r.warnReserved(play.RoleVarOrigins)
+	}
+	r.warnReserved(task.VarOrigins)
 }
 
 // isUnreachable reports whether a host has an unreachable result.

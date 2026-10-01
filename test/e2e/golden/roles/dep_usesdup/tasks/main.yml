@@ -1,0 +1,3 @@
+---
+- name: usesdup task
+  debug: msg=usesdup

@@ -1,0 +1,13 @@
+---
+# A notification no handler answers (by name or listen topic) ends the
+# run with ansible-core's error before the result prints: exit 1, no recap.
+- hosts: a
+  gather_facts: false
+  tasks:
+    - command: echo {{ item }}
+      loop: [1, 2]
+      notify: [real, "missing {{ item }}"]
+    - debug: msg=never
+  handlers:
+    - name: real
+      debug: msg=h

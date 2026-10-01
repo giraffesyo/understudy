@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/giraffesyo/understudy/internal/agentproto"
 )
 
 // Local runs commands on the control node itself (ansible_connection=local).
@@ -36,7 +38,7 @@ func (l *Local) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecRes
 	res := ExecResult{RC: 0, Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
-			res.RC = ee.ExitCode()
+			res.RC = agentproto.ExitCode(ee)
 			return res, nil
 		}
 		return res, fmt.Errorf("local exec: %w", err)

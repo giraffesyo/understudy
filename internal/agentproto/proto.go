@@ -94,6 +94,17 @@ type Result struct {
 	// context) "<<< caused by >>>" the inner one.
 	ErrorChain *ErrorChain `json:"-"`
 
+	// ErrorText, when set, is the error block's message in place of the
+	// result's, located at ErrorFile:ErrorLine:ErrorCol (an expression
+	// that failed to evaluate) rather than at the task.
+	ErrorText           string `json:"-"`
+	ErrorFile           string `json:"-"`
+	ErrorLine, ErrorCol int    `json:"-"`
+
+	// Notify is the notifications the result carries: its task's notify
+	// templated for it, one list per result (a loop's items that ran).
+	Notify [][]string `json:"-"`
+
 	// Control-plane display hints; never cross the agent wire.
 	Origin        string `json:"-"` // "action" (control-side) or "module"
 	VerboseAlways bool   `json:"-"` // shown with its JSON even at -v0 (debug, assert)
@@ -105,8 +116,14 @@ type Result struct {
 // ErrorChain is a two-level exception chain for error display.
 type ErrorChain struct {
 	Outer string // outer event message, shown with the source context
-	Inner string // cause message
-	Help  string // the cause's help text
+	// OuterFile/OuterLine/OuterCol locate the outer event, when it is not
+	// the task (a keyword's value).
+	OuterFile           string
+	OuterLine, OuterCol int
+	// OuterUnlocated: the outer event has no origin at all.
+	OuterUnlocated bool
+	Inner          string // cause message
+	Help           string // the cause's help text
 
 	// InnerFile/InnerLine/InnerCol locate the cause's origin, when known.
 	// InnerPathOnly marks an origin that names only the file.

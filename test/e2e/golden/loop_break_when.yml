@@ -1,0 +1,85 @@
+---
+# loop_control.break_when (each item's result registered while it is
+# evaluated, break_when_result recorded on it), pause between items, a
+# failing break_when expression, and failed debug loops' summary line.
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - debug: msg="{{ item }}"
+      loop: [1, 2, 3, 4]
+      loop_control:
+        break_when: item == 2
+      register: r
+    - debug: var=r
+    - name: a list of conditions, ANDed
+      debug: msg="{{ item }}"
+      loop: [1, 2, 3, 4]
+      loop_control:
+        break_when:
+          - item >= 2
+          - item is odd
+    - name: the registered result of the item
+      command: echo {{ item }}
+      loop: [1, 2, 3]
+      register: c
+      loop_control:
+        break_when: c.stdout == "2"
+    - debug: msg="{{ c.results | map(attribute='break_when_result') | list }}"
+    - name: templated condition
+      debug: msg="{{ item }}"
+      loop: [1, 2]
+      loop_control:
+        break_when: "{{ item == 1 }}"
+    - name: paused
+      debug: msg="{{ item }}"
+      loop: [1, 2]
+      loop_control:
+        pause: 0.2
+    - name: a failed item breaks too
+      command: "false"
+      loop: [1, 2]
+      loop_control:
+        break_when: true
+      ignore_errors: true
+    - name: skipped items are evaluated
+      debug: msg="{{ i }}"
+      loop: [1, 2]
+      loop_control:
+        loop_var: i
+        break_when: i == 1
+      when: i == 2
+    - name: a break_when that fails to evaluate
+      debug: msg=x
+      loop: [1, 2]
+      loop_control:
+        break_when: nope == 1
+      register: bad
+      ignore_errors: true
+    - debug: msg="{{ bad.results | map(attribute='break_when_result') | list }}"
+    - name: a list item fails to evaluate
+      command: echo hi
+      loop: [1, 2]
+      loop_control:
+        break_when:
+          - nope
+      ignore_errors: true
+    - name: failed debug loops print a summary
+      debug: msg="{{ item }}"
+      loop: [1, 2]
+      failed_when: true
+      ignore_errors: true
+    - name: an invalid pause
+      debug: msg=x
+      loop: [1]
+      loop_control:
+        pause: abc
+      ignore_errors: true
+    - name: include loops break too
+      include_tasks: includes/inc_a.yml
+      loop: [1, 2, 3]
+      loop_control:
+        break_when: item == 2
+    - name: a when expression that fails to evaluate
+      debug: msg=x
+      when: nope == 1
+      ignore_errors: true

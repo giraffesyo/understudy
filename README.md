@@ -228,8 +228,10 @@ understudy vault view group_vars/all/vault.yml --vault-password-file .vault-pass
 
 ## What's supported
 
-**Language & structure** — plays, roles (with `meta` dependencies, defaults,
-and vars, argument-spec validation, `roles_path`), `import_tasks`/`import_role` (static) and
+**Language & structure** — plays, roles (with `meta` dependencies — for
+`include_role`/`import_role` too — `allow_duplicates` and the play's role
+cache, defaults, and vars, private or `public`, argument-spec validation,
+`roles_path`), `import_tasks`/`import_role` (static) and
 `include_tasks`/`include_role` (dynamic: per-host targets, loops, `when`, `apply`),
 handlers with `notify`/`listen`, `block`/`rescue`/`always`, tags, `vars_prompt`, the `linear`, `free`,
 `host_pinned` and `debug` strategies (with the task debugger and the
@@ -240,7 +242,8 @@ rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 
 **Task keywords** — `when`, `loop` / `with_*` (`items`, `nested`, `together`, `subelements`,
 `sequence`, `dict`, `indexed_items`, `flattened`, `lines`, `fileglob`, ...) with
-`loop_control` (`loop_var`, `index_var`, `label`, `extended`), `register`,
+`loop_control` (`loop_var`, `index_var`, `label`, `extended`, `pause`,
+`break_when`), `register`,
 `until`/`retries`/`delay`, `changed_when`, `failed_when`, `ignore_errors`,
 `become`/`become_user`/`become_method`/`become_flags`/`become_exe`, `vars`,
 `environment` (mappings, templates or a list of them, merged play, role,
@@ -408,7 +411,8 @@ than silently diverging. Known boundaries:
   task's `ansible_python_interpreter`, else `ANSIBLE_PYTHON_INTERPRETER`,
   else discovery's `python3.14` ... `python3.9`, `/usr/bin/python3`
   order, or `ansible_interpreter_python_fallback`, searched in the login
-  user's PATH) and names it as that Python reports `sys.executable`
+  user's PATH; discovery reports the `discovered_interpreter_python` fact
+  and its warnings as ansible's does) and names it as that Python reports `sys.executable`
   (macOS's `/usr/bin/python3` shim is the developer directory's python3,
   Homebrew's Pythons their `opt` link) wherever ansible's messages do:
   `missing_required_lib` errors, `pip`'s `python -m pip` command and
@@ -489,8 +493,7 @@ than silently diverging. Known boundaries:
     python3-apt. `dnf` fails without the dnf Python package, and `dnf5`
     without libdnf5 first runs `dnf install -y python3-libdnf5` (or,
     with `auto_install_module_deps: false`, fails quoting
-    `sys.version`), as ansible's modules do. The discovered interpreter is not reported
-    as a `discovered_interpreter_python` fact.
+    `sys.version`), as ansible's modules do.
 - **`dnf` results**: the transaction runs through the dnf CLI, and
   `results` lists it as the modules do (`Installed: <nevra>`,
   `Removed: <nevra>`). dnf4's module iterates a set, so for multi-package
@@ -516,9 +519,13 @@ than silently diverging. Known boundaries:
   Go's RE2 (lookaround and backreferences in *patterns* are rejected with a
   clear error rather than mis-matched),
   iterated with Python's `re.sub`/`findall` match rules; a task that hits
-  its `timeout` has the process its module started killed (ansible-core
-  leaves it running, even after the playbook exits) — output is identical,
-  only the orphaned work is stopped.
+  its `timeout` has the processes its module started killed — each command
+  a module runs leads its own process group, so its background jobs and
+  pipeline stages go with it, on the control node and (the agent being
+  terminated in turn) on SSH targets (ansible-core leaves them running,
+  even after the playbook exits) — output is identical, only the orphaned
+  work is stopped. A Ctrl-C (or SIGTERM/SIGHUP) is passed on to those
+  process groups, so it still stops them as it would in the terminal's.
 - **Template error details**: filter errors name the Python class of
   their values as ansible-core's plugins see them — lazy containers and
   tagged scalars for variables, plain types for values computed in the
@@ -554,7 +561,9 @@ under **Verbose output** left out). It
 needs the `ansible` package (the corpus uses a few `community.general`
 plugins) and `passlib`, e.g. `pip install ansible passlib`, with the
 matching `ansible-core` release. Set `ANSIBLE_PYTHON_INTERPRETER` to that
-Python (CI does), or the output picks up interpreter-discovery warnings.
+Python (CI does): the harnesses pin it so most output does not depend on
+which Python discovery finds (`interpreter_discovery.yml` sets
+`ansible_python_interpreter: auto` to cover discovery itself).
 The pip playbooks run the module under the Python that runs
 `ansible-playbook` (it has `packaging`; the harness passes it as
 `GOLDEN_PACKAGING_PYTHON`) and install offline into virtualenvs.
@@ -564,7 +573,7 @@ package parameters, git over ssh, uri's Python-dependent output, pip
 against each distribution's Python and packaging, and on a
 booted systemd Rocky container `systemd`, `firewalld` and `selinux`) also
 run at `-v` against fresh Ubuntu, Alpine and Rocky Linux containers, one
-per tool, and must match byte for byte.
+per tool, discovering each target's Python, and must match byte for byte.
 
 CI (`.github/workflows/ci.yml`) runs gofmt, `go vet`, `make depcheck`, the
 unit suite on Linux and macOS, the cross-compile check, the golden suite

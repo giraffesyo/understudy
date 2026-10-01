@@ -151,7 +151,10 @@ func TestLinuxGoldenOutput(t *testing.T) {
 	pub, _ := os.ReadFile(keyFile + ".pub")
 	env := []string{"NO_COLOR=1", "ANSIBLE_NOCOLOR=1", "ANSIBLE_HOST_KEY_CHECKING=False",
 		"ANSIBLE_DEPRECATION_WARNINGS=False", "ANSIBLE_SYSTEM_WARNINGS=False",
-		"ANSIBLE_INVENTORY_UNPARSED_WARNING=False", "ANSIBLE_LOCALHOST_WARNING=False"}
+		"ANSIBLE_INVENTORY_UNPARSED_WARNING=False", "ANSIBLE_LOCALHOST_WARNING=False",
+		// The targets' Python is discovered (and reported as the
+		// discovered_interpreter_python fact), whatever the controller's.
+		"ANSIBLE_PYTHON_INTERPRETER=auto"}
 
 	for _, pb := range corpus {
 		data, _ := os.ReadFile(pb)
@@ -182,7 +185,7 @@ func TestLinuxGoldenOutput(t *testing.T) {
 					inv := filepath.Join(dir, "hosts")
 					os.WriteFile(inv, []byte(fmt.Sprintf(
 						"target ansible_host=127.0.0.1 ansible_port=%s ansible_user=%s "+
-							"ansible_ssh_private_key_file=%s ansible_python_interpreter=/usr/bin/python3\n",
+							"ansible_ssh_private_key_file=%s\n",
 						port, lgUser, keyFile)), 0o644)
 					args := append(append(pre, "-v", "-f", "1", "-i", inv, "-e", "distro="+distro), abs)
 					cmd := exec.Command(bin, args...)

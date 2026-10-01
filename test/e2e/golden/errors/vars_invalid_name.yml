@@ -1,0 +1,9 @@
+---
+# A vars: key that is not a valid variable name fails the load (exit 1).
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - debug: msg=x
+      vars:
+        fine: 1
+        1x: 2

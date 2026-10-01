@@ -163,7 +163,7 @@ func mkCommand(shell bool) ModuleFunc {
 		rc := 0
 		if err != nil {
 			if ee, ok := err.(*exec.ExitError); ok {
-				rc = ee.ExitCode()
+				rc = agentproto.ExitCode(ee)
 			} else {
 				return agentproto.Fail("failed to run command: %v", err)
 			}

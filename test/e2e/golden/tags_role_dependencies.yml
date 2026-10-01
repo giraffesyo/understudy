@@ -1,0 +1,18 @@
+---
+# --tags run_me,also with role dependencies: a dependency's tags (and its
+# parents') select its tasks; the role_complete markers always run.
+- hosts: all
+  gather_facts: false
+  roles:
+    - dep_top
+  tasks:
+    - include_role:
+        name: dep_top
+        apply:
+          tags: [run_me]
+      tags: [run_me]
+    - import_role:
+        name: dep_app
+      tags: [also]
+    - import_role:
+        name: dep_mid

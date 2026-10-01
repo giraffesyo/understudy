@@ -10,7 +10,10 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/giraffesyo/understudy/internal/agentproto"
 )
 
 // BecomeError is a privilege escalation failure on the local connection,
@@ -224,7 +227,14 @@ func execLocalSudo(ctx context.Context, cmd string, opts ExecOptions) (ExecResul
 	go func() {
 		select {
 		case <-ctx.Done():
-			c.Process.Kill()
+			// The become tool relays a SIGTERM to the agent, which takes
+			// the module's process groups down with it.
+			c.Process.Signal(syscall.SIGTERM)
+			select {
+			case <-waitDone:
+			case <-time.After(killGrace):
+				c.Process.Kill()
+			}
 		case <-waitDone:
 		}
 	}()
@@ -240,7 +250,7 @@ func execLocalSudo(ctx context.Context, cmd string, opts ExecOptions) (ExecResul
 		if !ok {
 			return res, fmt.Errorf("local exec: %w", werr)
 		}
-		res.RC = ee.ExitCode()
+		res.RC = agentproto.ExitCode(ee)
 	}
 	return res, ctx.Err()
 }
@@ -275,3 +285,7 @@ func stripThrough(data []byte, match string) []byte {
 	}
 	return bytes.TrimLeft(data[i+len(match):], " \t\r\n\v\f")
 }
+
+// killGrace is how long a cancelled command has to exit after its
+// SIGTERM before it is killed.
+const killGrace = 2 * time.Second

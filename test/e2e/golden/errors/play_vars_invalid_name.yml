@@ -1,0 +1,8 @@
+---
+# A play vars: key that is not a valid variable name fails the load.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    a b: 1
+  tasks:
+    - debug: msg=x

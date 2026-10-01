@@ -1,0 +1,5 @@
+---
+- name: app task
+  command: echo app
+  notify: base handler
+  changed_when: true
