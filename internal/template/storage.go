@@ -84,6 +84,8 @@ func (ec *EvalCtx) storableIn(v any, active map[cycleID]bool) (any, bool, error)
 		return string(t), true, nil
 	case pyTimedelta:
 		return nil, false, &StorageError{Type: "timedelta", Value: toStr(t), Pos: ec.pos}
+	case *pyTZ:
+		return nil, false, &StorageError{Type: "timezone", Value: toStr(t), Pos: ec.pos}
 	case *methodValue:
 		typ, r := t.pyTypeRepr()
 		return nil, false, &StorageError{Type: typ, Value: r, Pos: ec.pos}

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 	"github.com/giraffesyo/understudy/internal/vault"
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -744,6 +745,9 @@ func ntSplit(p string) (head, tail string) {
 	return d + r + strings.TrimRight(rest[:i], `/\`), rest[i:]
 }
 
+// PyGlob is glob.glob(pathname), for the fileglob lookup.
+func PyGlob(pathname string) []string { return pyGlob(pathname) }
+
 func hasMagic(s string) bool { return strings.ContainsAny(s, "*?[") }
 
 // pyGlob is glob.glob(pathname): directories are read in the order the
@@ -810,79 +814,20 @@ func globIn(dir, pattern string, dironly bool) []string {
 	}
 	names, _ := f.Readdirnames(-1)
 	f.Close()
-	re := fnmatchRegexp(pattern)
+	re, err := pyre.CompileFnmatch(pattern)
+	if err != nil {
+		return nil
+	}
 	var out []string
 	for _, n := range names {
 		if strings.HasPrefix(n, ".") && !strings.HasPrefix(pattern, ".") {
 			continue
 		}
-		if re.MatchString(n) {
+		if re.Match(n, 0, -1) != nil {
 			out = append(out, n)
 		}
 	}
 	return out
-}
-
-// fnmatchRegexp is fnmatch.translate.
-func fnmatchRegexp(pat string) *regexp.Regexp {
-	var b strings.Builder
-	b.WriteString(`(?s)^`)
-	r := []rune(pat)
-	for i := 0; i < len(r); i++ {
-		c := r[i]
-		switch c {
-		case '*':
-			for i+1 < len(r) && r[i+1] == '*' {
-				i++
-			}
-			b.WriteString(`.*`)
-		case '?':
-			b.WriteString(`.`)
-		case '[':
-			j := i + 1
-			if j < len(r) && r[j] == '!' {
-				j++
-			}
-			if j < len(r) && r[j] == ']' {
-				j++
-			}
-			for j < len(r) && r[j] != ']' {
-				j++
-			}
-			if j >= len(r) {
-				b.WriteString(`\[`)
-				continue
-			}
-			stuff := string(r[i+1 : j])
-			i = j
-			if stuff == "" {
-				b.WriteString(`[^\x{0}-\x{10FFFF}]`)
-				continue
-			}
-			if stuff == "!" {
-				b.WriteString(`.`)
-				continue
-			}
-			neg := false
-			if stuff[0] == '!' {
-				neg, stuff = true, stuff[1:]
-			}
-			stuff = strings.NewReplacer(`\`, `\\`, `[`, `\[`, `]`, `\]`, `^`, `\^`).Replace(stuff)
-			if neg {
-				b.WriteString("[^" + stuff + "]")
-			} else {
-				b.WriteString("[" + stuff + "]")
-			}
-		default:
-			b.WriteString(regexp.QuoteMeta(string(c)))
-		}
-	}
-	b.WriteString(`$`)
-	re, err := regexp.Compile(b.String())
-	if err != nil {
-		return regexp.MustCompile(`^\b\B$`)
-	}
-	return re
 }
 
 // pySplit is posixpath.split.

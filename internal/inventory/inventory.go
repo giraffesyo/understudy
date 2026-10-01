@@ -4,12 +4,12 @@ package inventory
 
 import (
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -126,7 +126,13 @@ func (inv *Inventory) warning(msg string) {
 }
 
 // invalidGroupChars is ansible-core's C.INVALID_VARIABLE_NAMES.
-var invalidGroupChars = regexp.MustCompile(`^[\d\W]|[^\w]`)
+var invalidGroupChars = pyre.MustCompile(`^[\d\W]|[^\w]`, 0)
+
+// replaceInvalidGroupChars is INVALID_VARIABLE_NAMES.sub('_', name).
+func replaceInvalidGroupChars(name string) string {
+	out, _, _ := invalidGroupChars.Sub("_", name, 0)
+	return out
+}
 
 // ensureGroup is InventoryData.add_group: a new group's name goes
 // through to_safe_group_name under TRANSFORM_INVALID_GROUP_CHARS (kept

@@ -3,9 +3,11 @@ package factcache
 import (
 	"fmt"
 	"math/big"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/giraffesyo/understudy/internal/omap"
 	"github.com/giraffesyo/understudy/internal/template"
@@ -20,8 +22,8 @@ import (
 const typeKey = "__ansible_type"
 
 // Untag is the plain value of a serialized one: tagged values unwrapped,
-// dates and times as their isoformat(), an encrypted string as its vault
-// payload. A type the profile does not deserialize is an error.
+// dates and times as the values fromisoformat() makes, an encrypted
+// string as its vault payload. A type the profile does not deserialize is an error.
 func Untag(v any) (any, error) {
 	switch t := v.(type) {
 	case *omap.OMap:
@@ -53,7 +55,8 @@ func Untag(v any) (any, error) {
 				"_AnsibleTaggedDate", "_AnsibleTaggedTime", "_AnsibleTaggedDateTime":
 				return Untag(t.Get("value"))
 			case "AnsibleSerializableDate", "AnsibleSerializableTime", "AnsibleSerializableDateTime":
-				return t.Get("iso8601"), nil
+				iso, _ := t.Get("iso8601").(string)
+				return fromISO(typ, iso)
 			case "EncryptedString":
 				s, _ := t.Get("value").(string)
 				return yaml.VaultedString{Ciphertext: s}, nil
@@ -212,14 +215,89 @@ func tagNode(v, raw any, pos *Origin) any {
 		}
 		return tagged("_AnsibleTaggedDict", out, first(containerOrigin(t), containerOrigin(rawMap), rawOrigin(raw), pos), false)
 	}
-	if dt, ok := v.(interface{ Isoformat() string }); ok {
-		m := omap.NewOMap()
-		m.Set("iso8601", dt.Isoformat())
-		m.Set("fold", int64(0))
-		m.Set(typeKey, "AnsibleSerializableDateTime")
-		return tagged("_AnsibleTaggedDateTime", m, first(rawOrigin(raw), pos), false)
+	switch t := v.(type) {
+	case yaml.Datetime:
+		return tagged("_AnsibleTaggedDateTime", serializable("AnsibleSerializableDateTime", t.Isoformat("T"), true), first(rawOrigin(raw), pos), false)
+	case yaml.Date:
+		return tagged("_AnsibleTaggedDate", serializable("AnsibleSerializableDate", t.Isoformat(), false), first(rawOrigin(raw), pos), false)
+	case yaml.Time:
+		return tagged("_AnsibleTaggedTime", serializable("AnsibleSerializableTime", t.Isoformat(), true), first(rawOrigin(raw), pos), false)
 	}
 	return v
+}
+
+// Plain is the serialized form of an untagged value (a module's facts):
+// the value itself, its dates and times in their serializable wrappers.
+func Plain(v any) any {
+	switch t := v.(type) {
+	case yaml.Datetime:
+		return serializable("AnsibleSerializableDateTime", t.Isoformat("T"), true)
+	case yaml.Date:
+		return serializable("AnsibleSerializableDate", t.Isoformat(), false)
+	case yaml.Time:
+		return serializable("AnsibleSerializableTime", t.Isoformat(), true)
+	case []any:
+		out := make([]any, len(t))
+		for i, item := range t {
+			out[i] = Plain(item)
+		}
+		return out
+	case map[string]any, *omap.OMap:
+		keys, get := mappingOf(t)
+		out := omap.NewOMap()
+		for _, k := range keys {
+			item, _ := get(k)
+			out.Set(k, Plain(item))
+		}
+		return out
+	}
+	return v
+}
+
+// serializable is a date's, datetime's or time's AnsibleSerializable
+// wrapper: its isoformat(), and fold (always 0 here) for the ones that
+// have it.
+func serializable(typ, iso string, fold bool) *omap.OMap {
+	m := omap.NewOMap()
+	m.Set("iso8601", iso)
+	if fold {
+		m.Set("fold", int64(0))
+	}
+	m.Set(typeKey, typ)
+	return m
+}
+
+var isoRe = regexp.MustCompile(`^(?:(\d{4})-(\d{2})-(\d{2}))?(?:T?(\d{2}):(\d{2}):(\d{2})(?:\.(\d{6}))?)?(?:([+-])(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{6}))?)?)?$`)
+
+// fromISO is date/datetime/time.fromisoformat for isoformat()'s output.
+func fromISO(typ, s string) (any, error) {
+	m := isoRe.FindStringSubmatch(s)
+	if m == nil || (m[1] == "" && m[4] == "") {
+		return nil, fmt.Errorf("Invalid isoformat string: %s", template.PyRepr(s))
+	}
+	n := func(i int) int { x, _ := strconv.Atoi(m[i]); return x }
+	var tz *yaml.TZ
+	if m[8] != "" {
+		off := time.Duration(n(9))*time.Hour + time.Duration(n(10))*time.Minute +
+			time.Duration(n(11))*time.Second + time.Duration(n(12))*time.Microsecond
+		if m[8] == "-" {
+			off = -off
+		}
+		var err error
+		if tz, err = yaml.NewTZ(off); err != nil {
+			return nil, err
+		}
+		if off == 0 {
+			tz = yaml.UTC
+		}
+	}
+	switch typ {
+	case "AnsibleSerializableDate":
+		return yaml.NewDate(n(1), n(2), n(3))
+	case "AnsibleSerializableTime":
+		return yaml.NewTime(n(4), n(5), n(6), n(7), tz)
+	}
+	return yaml.NewDatetime(n(1), n(2), n(3), n(4), n(5), n(6), n(7), tz)
 }
 
 // mappingOf is a mapping's keys in order (a plain map's sorted, as

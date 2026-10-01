@@ -116,7 +116,7 @@ func moduleFacts(facts map[string]any, gathered bool) *factcache.Facts {
 		if k == discoveredKey || k == gatheredKey {
 			continue
 		}
-		f.Set(k, facts[k], facts[k])
+		f.Set(k, facts[k], factcache.Plain(facts[k]))
 	}
 	if v, ok := facts[discoveredKey]; ok {
 		f.Set(discoveredKey, v, v)

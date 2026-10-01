@@ -2,7 +2,6 @@ package modules
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
@@ -73,15 +72,11 @@ func replaceModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		pattern = "(?P<subsection>.*)" + before
 	}
 	if pattern != "" {
-		sre, fail := pyCompile(pattern)
+		sre, fail := pyCompile(pattern, pyre.DOTALL)
 		if fail != nil {
 			return fail
 		}
-		sre, err = compilePyPattern("(?s)" + pattern)
-		if err != nil {
-			return agentproto.Fail("%v", err)
-		}
-		m := sre.FindStringSubmatchIndex(contents)
+		m := sre.Search(contents, 0, -1)
 		if m == nil {
 			return &agentproto.Result{Msg: "Pattern for before/after params did not match the given file: " + pattern,
 				Extra: map[string]any{"rc": int64(0)}}
@@ -91,17 +86,14 @@ func replaceModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		section = contents[lo:hi]
 	}
 
-	if _, fail := pyCompile(p.Str("regexp")); fail != nil {
+	re, fail := pyCompile(p.Str("regexp"), pyre.MULTILINE)
+	if fail != nil {
 		return fail
-	}
-	re, err := compilePyPattern("(?m)" + p.Str("regexp"))
-	if err != nil {
-		return agentproto.Fail("%v", err)
 	}
 	replaced, count, err := pySubn(re, p.Str("replace"), section)
 	if err != nil {
-		if te, ok := err.(*pyTplError); ok && te.IndexError {
-			return &agentproto.Result{Failed: true, Msg: "Task failed: Module failed: " + te.Msg}
+		if isIndexError(err) {
+			return &agentproto.Result{Failed: true, Msg: "Task failed: Module failed: " + err.Error()}
 		}
 		return agentproto.Fail("Unable to process replace due to error: %v", err)
 	}
@@ -130,7 +122,7 @@ func replaceModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 			return fail
 		}
 	}
-	msg, changed, fail := checkFileAttrs(env, loadFileAttrs(p, path, false), changed, msg, nil)
+	msg, changed, fail = checkFileAttrs(env, loadFileAttrs(p, path, false), changed, msg, nil)
 	if fail != nil {
 		return fail
 	}
@@ -148,36 +140,4 @@ func setMsgEmpty(res *agentproto.Result) {
 		res.Extra = map[string]any{}
 	}
 	res.Extra["msg"] = ""
-}
-
-// pySubn is Python's re.subn(pattern, repl, s): every non-overlapping match
-// replaced, repl interpreted with Python's escape and group syntax (parsed
-// up front, so a bad template fails even without matches).
-func pySubn(re *regexp.Regexp, repl, s string) (string, int, error) {
-	parts, err := parsePyTemplate(re, repl)
-	if err != nil {
-		return "", 0, err
-	}
-	matches := pyre.FindAllSubmatchIndex(re, s, -1)
-	if len(matches) == 0 {
-		return s, 0, nil
-	}
-	var b strings.Builder
-	last := 0
-	for _, m := range matches {
-		b.WriteString(s[last:m[0]])
-		b.WriteString(expandPyTemplate(parts, s, m))
-		last = m[1]
-	}
-	b.WriteString(s[last:])
-	return b.String(), len(matches), nil
-}
-
-// pyExpand is match.expand(template) for one match.
-func pyExpand(re *regexp.Regexp, repl, s string, m []int) (string, error) {
-	parts, err := parsePyTemplate(re, repl)
-	if err != nil {
-		return "", err
-	}
-	return expandPyTemplate(parts, s, m), nil
 }

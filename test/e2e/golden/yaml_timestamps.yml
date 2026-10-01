@@ -1,0 +1,71 @@
+# YAML 1.1 timestamps load as datetime.date / datetime.datetime and
+# sexagesimals as ints and floats, as PyYAML constructs them; how they
+# print, template, serialize, compare and travel to modules.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: 2001-12-14
+    dt: 2001-12-14t21:59:43.10-05:00
+    dtn: 2001-12-14 21:59:43
+    dtz: 2002-12-14T21:59:43Z
+    dtf: 2001-12-14 21:59:43.1234567 +5
+    sx: 190:20:30
+    sxf: -1:20:30.5
+    notsx: 1:60
+    oct: 0o17
+    quoted: "2001-12-14"
+    tagged: !!timestamp 2001-12-14t1:00:00
+    l: [2001-12-14, 1:20]
+  tasks:
+    - debug: var=d
+    - debug: var=dt
+    - debug: var=dtn
+    - debug: var=dtz
+    - debug: var=dtf
+    - debug: var=sx
+    - debug: var=sxf
+    - debug: var=notsx
+    - debug: var=oct
+    - debug: var=quoted
+    - debug: var=tagged
+    - debug: var=l
+    - debug:
+        msg: "{{ d }} {{ dt }} {{ d | type_debug }} {{ dt | type_debug }} {{ quoted | type_debug }} {{ d.year }} {{ dt.tzinfo }} {{ dtz.tzinfo }}"
+    - debug:
+        msg: "{{ l | to_json }} {{ [d, dt, dtn] | to_yaml }} {{ [d, dt] | to_nice_json }} {{ dict(a=dt) | to_nice_yaml }}"
+    - debug:
+        msg: "{{ d < dtn.date() }} {{ d == d }} {{ d == '2001-12-14' }} {{ d ~ 'x' }} {{ d | string }} {{ [d, dt] }}"
+    - debug:
+        msg: "{{ d.strftime('%Y/%m/%d %A %j %U') }} {{ d.weekday() }} {{ d.isoweekday() }} {{ d.toordinal() }} {{ d.replace(day=1) }} {{ d.max }}"
+    - debug:
+        msg: "{{ dt.utcoffset() }} {{ dt.date() }} {{ dt.time() }} {{ dt.replace(year=2020) }} {{ dt.isoformat() }} {{ dtn.isoformat(' ') }}"
+    - debug:
+        msg: "{{ dt - dtz }} {{ dtn - dtn }} {{ [dtn, dtn] | max }} {{ d | quote }} {{ d | upper }} {{ d | int }}"
+    - debug:
+        msg: "{{ dtn - dtz }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ d + 1 }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ d | length }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ d | to_datetime }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ d.nope }}"
+      ignore_errors: true
+    - set_fact:
+        kept: "{{ d }}"
+        kept_list: "{{ [d, dt] }}"
+    - debug:
+        msg: "{{ kept | type_debug }} {{ kept_list | map('type_debug') | list }}"
+    - debug: var=item
+      loop: [2001-12-14, 1:20, "{{ dt }}"]
+    - command:
+        argv: [echo, "{{ dt }}", "{{ d }}", "{{ dtn }}"]
+      register: echoed
+      changed_when: false
+    - debug: var=echoed.stdout
+    - debug: var=echoed.cmd

@@ -165,6 +165,14 @@ func pyReprIn(v any, active map[cycleID]bool) string {
 		return pyStrRepr(string(t))
 	case Markup:
 		return "Markup(" + pyStrRepr(string(t)) + ")"
+	case pyDatetime:
+		return datetimeRepr(t)
+	case pyDate:
+		return dateRepr(t)
+	case pyTime:
+		return timeRepr(t)
+	case *pyTZ:
+		return tzRepr(t)
 	case interface{ PyRepr() string }:
 		return t.PyRepr()
 	default:
@@ -380,7 +388,7 @@ func numArith(op tokKind, a, b any) (any, error) {
 		if op == tokPow {
 			name = "** or pow()" // Python names the builtin too
 		}
-		return nil, fmt.Errorf("unsupported operand type(s) for %s: '%s' and '%s'", name, typeName(a), typeName(b))
+		return nil, newOperandError("unsupported operand type(s) for "+name+": '%s' and '%s'", a, b)
 	}
 
 	if aInt && bInt {
@@ -562,6 +570,12 @@ func typeName(v any) string {
 		return "Markup"
 	case pyDatetime:
 		return "datetime.datetime"
+	case pyDate:
+		return "datetime.date"
+	case pyTime:
+		return "datetime.time"
+	case *pyTZ:
+		return "datetime.timezone"
 	case pyTimedelta:
 		return "datetime.timedelta"
 	case []any:
@@ -621,7 +635,7 @@ func compareOp(a, b any, op string) (int, error) {
 	if c, ok, err := pyObjCompare(a, b, op); ok {
 		return c, err
 	}
-	return 0, fmt.Errorf("'%s' not supported between instances of '%s' and '%s'", op, pyClassName(a, false), pyClassName(b, false))
+	return 0, newOperandError("'"+op+"' not supported between instances of '%s' and '%s'", a, b)
 }
 
 // Equal is Python's == for template values.

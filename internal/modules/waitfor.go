@@ -7,7 +7,6 @@ import (
 	"math"
 	"net"
 	"os"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 func init() {
@@ -74,16 +74,12 @@ func waitForModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		}
 		return &agentproto.Result{Failed: true, Msg: m, Extra: map[string]any{"elapsed": elapsed}}
 	}
-	var re *regexp.Regexp
+	// re.compile(to_bytes(search_regex), re.MULTILINE): a bytes pattern,
+	// matched against the bytes read (as latin1 text).
+	var re *pyre.Pattern
 	if p.Has("search_regex") {
-		if e := pyRegexSyntaxError(searchRegex); e != "" {
-			return agentproto.Fail("Invalid regular expression: %s", e)
-		}
-		compiled, err := compilePyPattern(searchRegex)
-		if err != nil {
-			return agentproto.Fail("Invalid regular expression: %v", err)
-		}
-		if re, err = regexp.Compile("(?m)" + compiled.String()); err != nil {
+		var err error
+		if re, err = pyre.CompileBytes([]byte(searchRegex), pyre.MULTILINE); err != nil {
 			return agentproto.Fail("Invalid regular expression: %v", err)
 		}
 	}
@@ -121,7 +117,7 @@ func waitForModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		for i, name := range re.SubexpNames()[1:] {
 			var v any
 			if m[2*(i+1)] >= 0 {
-				v = s[m[2*(i+1)]:m[2*(i+1)+1]]
+				v = string(pyre.Bytes(s[m[2*(i+1)]:m[2*(i+1)+1]]))
 			}
 			groups = append(groups, v)
 			if name != "" {
@@ -180,8 +176,8 @@ func waitForModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 						break wait
 					}
 					if data, err := os.ReadFile(path); err == nil {
-						s := string(data)
-						if m := re.FindStringSubmatchIndex(s); m != nil {
+						s := pyre.Latin1(data)
+						if m := re.Search(s, 0, -1); m != nil {
 							record(s, m)
 							break wait
 						}
@@ -206,7 +202,7 @@ func waitForModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 						if n > 0 {
 							data = append(data, buf[:n]...)
 							// A port match records no groups.
-							if re.Match(data) {
+							if re.Search(pyre.Latin1(data), 0, -1) != nil {
 								matched = true
 								break
 							}

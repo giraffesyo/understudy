@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
 	"github.com/giraffesyo/understudy/internal/modules/fsutil"
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 	"github.com/giraffesyo/understudy/internal/omap"
 )
 
@@ -72,7 +72,7 @@ var uriSpec = args.Spec{
 // from the controller as the request payload.
 const uriSrcPayloadKey = "_understudy_src_payload"
 
-var uriMethodRe = regexp.MustCompile(`^[A-Z]+$`)
+var uriMethodRe = pyre.MustCompile(`^[A-Z]+$`, 0)
 
 // uriModule ports ansible.builtin.uri. The request itself (urllib's
 // opener: redirects, auth handlers, cookies, TLS contexts) lives in
@@ -117,7 +117,7 @@ func uriModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		headers.set(k, uriPyStr(p.Dict("headers")[k]))
 	}
 
-	if !uriMethodRe.MatchString(method) {
+	if uriMethodRe.Match(method, 0, -1) == nil {
 		return agentproto.Fail("Parameter 'method' needs to be a single word in uppercase, like GET or POST.")
 	}
 

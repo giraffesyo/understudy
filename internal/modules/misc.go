@@ -3,12 +3,12 @@ package modules
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 func init() {
@@ -39,9 +39,9 @@ type modprobe struct {
 	state      string
 	changed    bool
 	warnings   []any
-	reModule   *regexp.Regexp
-	reParams   *regexp.Regexp
-	reParamVal *regexp.Regexp
+	reModule   *pyre.Pattern
+	reParams   *pyre.Pattern
+	reParamVal *pyre.Pattern
 }
 
 func (m *modprobe) result() map[string]any {
@@ -76,16 +76,17 @@ func modprobeModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		return agentproto.Fail("%v", err)
 	}
 	m := &modprobe{env: env, bin: bin, name: p.Str("name"), params: p.Str("params"), state: p.Str("state")}
-	compile := func(pat string) *regexp.Regexp {
-		re, err := regexp.Compile(pat)
-		if err != nil {
-			re = regexp.MustCompile(strings.Replace(pat, m.name, regexp.QuoteMeta(m.name), 1))
-		}
-		return re
+	// The name goes into the patterns as it is (a re.error crashes).
+	var fail *agentproto.Result
+	if m.reModule, fail = pyCompile(`^ *` + m.name + ` *(?:[#;].*)?\n?\Z`); fail != nil {
+		return fail
 	}
-	m.reModule = compile(`^ *` + m.name + ` *(?:[#;].*)?\n?\z`)
-	m.reParams = compile(`^options ` + m.name + ` \w+=\S+ *(?:[#;].*)?\n?\z`)
-	m.reParamVal = compile(`^options ` + m.name + ` (\w+=\S+) *(?:[#;].*)?\n?\z`)
+	if m.reParams, fail = pyCompile(`^options ` + m.name + ` \w+=\S+ *(?:[#;].*)?\n?\Z`); fail != nil {
+		return fail
+	}
+	if m.reParamVal, fail = pyCompile(`^options ` + m.name + ` (\w+=\S+) *(?:[#;].*)?\n?\Z`); fail != nil {
+		return fail
+	}
 
 	loaded, fail := m.moduleLoaded()
 	if fail != nil {
@@ -230,7 +231,7 @@ func readLinesKeepNL(path string) []string {
 func (m *modprobe) loadedPersistently() bool {
 	for _, f := range m.modulesFiles() {
 		for _, line := range readLinesKeepNL(f) {
-			if m.reModule.MatchString(line) {
+			if m.reModule.Match(line, 0, -1) != nil {
 				return true
 			}
 		}
@@ -242,8 +243,8 @@ func (m *modprobe) permanentParams() map[string]bool {
 	out := map[string]bool{}
 	for _, f := range m.modprobeFiles() {
 		for _, line := range readLinesKeepNL(f) {
-			if sm := m.reParamVal.FindStringSubmatch(line); sm != nil {
-				out[sm[1]] = true
+			if sm := m.reParamVal.Match(line, 0, -1); sm != nil {
+				out[line[sm[2]:sm[3]]] = true
 			}
 		}
 	}
@@ -270,13 +271,13 @@ func (m *modprobe) paramsIsSet() bool {
 // commentOut prefixes matching lines with '#' (disable_old_params /
 // disable_module_permanent), rewriting the file as the module does: the
 // kept lines joined with "\n".
-func (m *modprobe) commentOut(files []string, re *regexp.Regexp, check bool) {
+func (m *modprobe) commentOut(files []string, re *pyre.Pattern, check bool) {
 	sort.Strings(files)
 	for _, f := range files {
 		lines := readLinesKeepNL(f)
 		changed := false
 		for i, line := range lines {
-			if re.MatchString(line) {
+			if re.Match(line, 0, -1) != nil {
 				lines[i] = "#" + line
 				changed = true
 			}

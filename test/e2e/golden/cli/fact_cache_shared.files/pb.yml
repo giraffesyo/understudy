@@ -9,6 +9,7 @@
     - debug: var=from_extra
     - debug: var=ansible_facts
     - debug: var=ports
+    - debug: msg="{{ ansible_facts.built }} {{ ansible_facts.built.year }} {{ ansible_facts.built | type_debug }} {{ ansible_facts.day.isoformat() }}"
     - debug: msg=broken
       when: role
       ignore_errors: true

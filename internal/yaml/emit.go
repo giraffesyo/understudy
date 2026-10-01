@@ -212,7 +212,7 @@ func quoteIfNeeded(s string, _ int) string {
 
 func needsQuoting(s string) bool {
 	// Would resolve to a non-string type?
-	if _, isStr := resolveScalar(s).(string); !isStr {
+	if resolveTag(s, true) != tagStr {
 		return true
 	}
 	if strings.ContainsAny(s, "\n\t") {

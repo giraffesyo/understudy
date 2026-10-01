@@ -130,7 +130,10 @@ func (n *Node) decodeImplicit(st *decodeState, unsafe bool) (any, error) {
 		return n.decodeMapping(st, unsafe)
 	}
 	if n.Style == Plain || n.Tag != "" {
-		v := resolveScalar(n.Value)
+		v, err := resolveScalar(n.Value)
+		if err != nil {
+			return nil, err
+		}
 		if s, ok := v.(string); ok && unsafe {
 			return UnsafeString(s), nil
 		}
@@ -169,6 +172,8 @@ func (n *Node) decodeScalar(tag string, unsafe bool) (any, error) {
 		return nil, &Error{Msg: pyRepr(strings.ToLower(v))} // KeyError
 	case tagNull:
 		return nil, nil
+	case tagTime:
+		return constructTimestamp(v)
 	case tagBinary:
 		b, err := base64.StdEncoding.DecodeString(strings.Map(func(r rune) rune {
 			if r == '\n' || r == ' ' || r == '\r' || r == '\t' {
@@ -209,7 +214,10 @@ func constructInt(s string) (any, error) {
 	case value == "":
 		return nil, &Error{Msg: "string index out of range"}
 	case value[0] == '0':
-		base = 8
+		base = 8 // int(value, 8) takes a 0o prefix too
+		if len(value) > 1 && (value[1] == 'o' || value[1] == 'O') {
+			digits = value[2:]
+		}
 	case strings.Contains(value, ":"):
 		var total int64
 		for _, part := range strings.Split(value, ":") {
@@ -339,6 +347,10 @@ func keyString(k any) string {
 		return t
 	case UnsafeString:
 		return string(t)
+	case Datetime:
+		return t.Isoformat("T")
+	case Date:
+		return t.Isoformat()
 	}
 	return pyValueRepr(k)
 }
@@ -469,6 +481,10 @@ func (c *constructor) object(n *Node) error {
 	case "", "!":
 		if n.Kind != ScalarNode {
 			c.queue = append(c.queue, n)
+		} else if (n.Style == Plain || n.Tag != "") && resolveTag(n.Value, true) == tagTime {
+			// A timestamp is constructed now: a date that does not exist fails.
+			_, err := n.decode(false)
+			return err
 		}
 		return nil
 	}
@@ -585,6 +601,8 @@ func pyValueRepr(v any) string {
 			s += ".0"
 		}
 		return s
+	case interface{ Repr() string }:
+		return t.Repr()
 	}
 	return fmt.Sprint(v)
 }
