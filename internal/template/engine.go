@@ -142,6 +142,9 @@ type TemplateError struct {
 	// pluginHead and pluginDetail split a plugin failure whose exception
 	// was raised while handling another (see SplitCause).
 	pluginHead, pluginDetail, pluginValue string
+	// pluginAt is where the value the plugin's error is about was
+	// written, where known (shown in place of the value).
+	pluginAt Position
 }
 
 // Cause is the error as ansible-core words a template failure's cause:
@@ -296,6 +299,8 @@ type EvalCtx struct {
 	// filterVars marks which of the running filter's input and positional
 	// arguments were read from variables (see pyClassName).
 	filterVars []bool
+	// filterIn is the expression of the running filter's input.
+	filterIn Expr
 	// testKwargs are the running test's keyword arguments.
 	testKwargs map[string]any
 	// callKwargs names the running filter's keyword arguments, in call

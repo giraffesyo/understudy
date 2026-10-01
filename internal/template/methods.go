@@ -64,6 +64,9 @@ func lookupMethod(x any, name string) (boundMethod, bool) {
 			mm := mappingToMap(t)
 			return func(ec *EvalCtx, args []any, kwargs map[string]any) (any, error) {
 				out, err := m(keys, mm, args)
+				if err == nil && (name == "keys" || name == "items") {
+					out = typedKeys(t, out, name == "items")
+				}
 				return ec.dictMethodReads(name, mm, out, err)
 			}, true
 		}
@@ -413,4 +416,25 @@ func markupResult(v any) any {
 		}
 	}
 	return v
+}
+
+// typedKeys is keys() or items() of m with the keys that are not strings
+// as themselves.
+func typedKeys(m Mapping, out any, items bool) any {
+	l, ok := out.([]any)
+	if !ok {
+		return out
+	}
+	for i, x := range l {
+		if items {
+			if pair, ok := x.([]any); ok && len(pair) == 2 {
+				if s, ok := pair[0].(string); ok {
+					pair[0] = mapKey(m, s)
+				}
+			}
+		} else if s, ok := x.(string); ok {
+			l[i] = mapKey(m, s)
+		}
+	}
+	return out
 }

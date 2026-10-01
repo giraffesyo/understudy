@@ -3341,6 +3341,10 @@ func (e *conditionalError) chain(outer string) *agentproto.ErrorChain {
 		}
 		ec.Inner = fmt.Sprintf("%s '%s' expression failed: %s", article, e.keyword, head)
 		ec.Root = &agentproto.ErrorChain{Inner: detail, InnerValue: value}
+		if at, ok := template.PluginValueOrigin(e.err); ok {
+			// The value is shown where it was written.
+			ec.Root.InnerValue, ec.Root.InnerFile, ec.Root.InnerLine, ec.Root.InnerCol = "", at.File, at.Line, at.Col
+		}
 	}
 	return ec
 }

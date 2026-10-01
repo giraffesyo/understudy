@@ -230,6 +230,46 @@ func whileHandling(format string, args ...any) error {
 // filter plugin 'ansible.builtin.items2dict' failed.") and its cause's,
 // which ansible-core's error display shows as separate events, the cause
 // with the value it is about when it has one.
+// PluginValueOrigin is where the value a plugin's error is about was
+// written, when known: ansible-core shows it there rather than the value.
+func PluginValueOrigin(err error) (Position, bool) {
+	var te *TemplateError
+	if errors.As(err, &te) && te.Plugin && te.pluginAt.File != "" {
+		return te.pluginAt, true
+	}
+	return Position{}, false
+}
+
+// inputOrigin is where the running filter's input was written, through
+// the variables passing it along, where known.
+func (ec *EvalCtx) inputOrigin() Position {
+	if ec.filterIn == nil {
+		return Position{}
+	}
+	ref, ok := ec.originOfExpr(ec.filterIn, 0)
+	if !ok {
+		return Position{}
+	}
+	ref, _ = ec.templateRef(ref, 0)
+	return ref.Pos
+}
+
+// inputItemOrigin is where item key (an index or key) of the running
+// filter's input was written, where known.
+func (ec *EvalCtx) inputItemOrigin(key string) Position {
+	if ec.filterIn == nil {
+		return Position{}
+	}
+	ref, ok := ec.originOfExpr(ec.filterIn, 0)
+	if !ok {
+		return Position{}
+	}
+	if ref, ok = ec.childRef(ref, key, 0); !ok {
+		return Position{}
+	}
+	return ref.Pos
+}
+
 func SplitCause(err error) (head, detail, value string, ok bool) {
 	var te *TemplateError
 	if errors.As(err, &te) && te.Plugin && te.pluginHead != "" {
@@ -256,6 +296,7 @@ func pyRaiseFrom(msg, cause string) error {
 type objError struct {
 	pre        []string
 	msg, value string
+	at         Position // where the value was written (zero: unknown)
 }
 
 func (e *objError) Error() string {

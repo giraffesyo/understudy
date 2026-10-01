@@ -18,6 +18,9 @@ import (
 type OMap struct {
 	keys   []string
 	values map[string]any
+	// typed are the keys that are not strings (a filter's int or bool
+	// keys), by the string the map holds them under.
+	typed map[string]any
 }
 
 // NewOMap returns an empty ordered map.
@@ -31,6 +34,23 @@ func (m *OMap) Set(key string, val any) {
 		m.keys = append(m.keys, key)
 	}
 	m.values[key] = val
+}
+
+// SetTyped is Set for a key that is not a string: the map holds it
+// under key (its text), and TypedKey gives it back.
+func (m *OMap) SetTyped(key string, typed, val any) {
+	m.Set(key, val)
+	if m.typed == nil {
+		m.typed = map[string]any{}
+	}
+	m.typed[key] = typed
+}
+
+// TypedKey is the key that key (a key's text) stands for, when it is not
+// a string.
+func (m *OMap) TypedKey(key string) (any, bool) {
+	v, ok := m.typed[key]
+	return v, ok
 }
 
 // GetItem returns the value for a key.
@@ -51,6 +71,7 @@ func (m *OMap) Delete(key string) {
 		return
 	}
 	delete(m.values, key)
+	delete(m.typed, key)
 	for i, k := range m.keys {
 		if k == key {
 			m.keys = append(m.keys[:i], m.keys[i+1:]...)
@@ -108,6 +129,9 @@ func (m *OMap) MarshalJSON() ([]byte, error) {
 func (m *OMap) Clone() *OMap {
 	c := &OMap{keys: append([]string(nil), m.keys...), values: make(map[string]any, len(m.values))}
 	maps.Copy(c.values, m.values)
+	if m.typed != nil {
+		c.typed = maps.Clone(m.typed)
+	}
 	return c
 }
 
