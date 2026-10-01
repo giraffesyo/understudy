@@ -287,12 +287,24 @@ the become method (a program embedding the Go API serves as that child
 itself). On a macOS controller, `local` runs `user`, `group` and
 `hostname` with ansible-core's Darwin implementations (`dscl`,
 `dseditgroup`, `scutil`). Temporary files follow ansible's rules under
-become: a transfer is staged in the login user's `remote_tmp` (and
-reported there), and a become user that is neither an `admin_users`
-member nor the login user gets a directory in a `system_tmpdirs` dir,
-made readable to it by `_fixup_perms2`'s chain (setfacl, chown,
-`chmod +a`, `common_remote_group`, `allow_world_readable_tmpfiles`)
-with ansible's warnings and errors.
+become, on either connection: a transfer is staged in the login user's
+`remote_tmp` (and reported there), and a become user that is neither an
+`admin_users` member nor the login user gets a directory in a
+`system_tmpdirs` dir, made readable to it by `_fixup_perms2`'s chain
+(setfacl, chown, `chmod +a`, `common_remote_group`,
+`allow_world_readable_tmpfiles`) with ansible's warnings and errors. The
+login user stages a transferred file there, so where the module may
+write the directory (a common group's `g+rwx`) `copy` renames that file
+into place and then cannot `chmod` it, failing as ansible's does. Such a
+module gets no temporary directory of its own: it makes one under
+`remote_tmp` when it needs one (an unreadable working directory, a
+`lineinfile`/`replace`/`uri`/`get_url` temp file), creating `remote_tmp`
+with ansible's "Module remote_tmp ... did not exist" warning. A become
+user wrongly listed in `admin_users` cannot read the module staged in
+the login user's `remote_tmp`, and the task fails with ansible's
+"Module result deserialization failed" and Python's output. Pipelining
+is not modeled: temporary files behave as with ansible's default
+(`pipelining = False`).
 
 ## Architecture
 
@@ -414,12 +426,47 @@ than silently diverging. Known boundaries:
     is set); where the target has a Python, the backend is available only
     if ansible's would be (python `cryptography` >= 3.3, and `bcrypt` for
     passphrases, else ansible's errors).
+  - `pip`: names are parsed as the `packaging` library the task's Python
+    imports parses PEP 508 requirements (or setuptools' `pkg_resources`,
+    the module's fallback), and its release picks the rules: the
+    pyparsing grammar with `LegacyVersion`/`LegacySpecifier` before 22.0
+    (Rocky 9's 20.9), the hand-written parser after, 26.x's `name @ url`
+    spacing, quoting and specifier de-duplication. That decides each
+    name's text on pip's command line and, in check mode, whether an
+    installed version satisfies it (PEP 440 `==`/`!=` wildcards and local
+    versions, `~=`, `===`, prereleases); references packaging cannot
+    parse are resolved with `pip install --dry-run --report` where pip is
+    24.1 or later, as the module does. A virtual environment's Python
+    sees only its own site-packages unless it includes the system's.
+    Not modeled: packaging 22.x's short-lived quirks, and the module's
+    crashes (a non-PEP 440 installed version under packaging 22-25, a
+    marker string Python cannot unescape), which understudy treats as no
+    match or an invalid requirement.
+  - Errors that quote `sys.version` (`apt` and `dnf5` without their
+    bindings): CPython assembles it from strings compiled into the
+    interpreter or its libpython (`PY_VERSION`, the build date and time,
+    the compiler banner, with its newline on older builds), which
+    understudy reads off the ELF or Mach-O binary. Where they cannot be
+    found unambiguously (a stripped or non-CPython build) only the
+    `major.minor` version is shown.
+  - `setup`'s `ansible_python` facts describe the interpreter running
+    the module, named by its `sys.executable`; the type is always
+    `cpython` (a PyPy target would say `PyPy`).
+  - Name lookup failures (`uri`, `get_url`, `mysql_*`) read as Python's
+    `socket.gaierror`, worded by the target's C library (glibc, musl on
+    Alpine, macOS). The lookup itself is Go's resolver, which applies a
+    `resolv.conf` search list as glibc does, not as musl does.
   - Missing package-manager bindings: without python3-apt, `apt` and
-    `apt_repository` fail as ansible's do where they could not install it
-    (check mode, `install_python_apt: false`); understudy does not install
-    python3-apt itself. `dnf` fails without the dnf Python package, and
-    `dnf5` without libdnf5 first runs `dnf install -y python3-libdnf5`,
-    as ansible's modules do. The discovered interpreter is not reported
+    `apt_repository` fail as ansible's do where they cannot install it
+    (check mode, `install_python_apt: false`, `auto_install_module_deps:
+    false`, the latter quoting the Python's `sys.version`); otherwise
+    they install python3-apt with apt-get first, as ansible's modules do
+    (apt's warning goes with the process it respawns from, so it is not
+    shown). `package_facts` cannot use its apt backend without
+    python3-apt. `dnf` fails without the dnf Python package, and `dnf5`
+    without libdnf5 first runs `dnf install -y python3-libdnf5` (or,
+    with `auto_install_module_deps: false`, fails quoting
+    `sys.version`), as ansible's modules do. The discovered interpreter is not reported
     as a `discovered_interpreter_python` fact.
 - **`dnf` results**: the transaction runs through the dnf CLI, and
   `results` lists it as the modules do (`Installed: <nevra>`,
@@ -472,9 +519,13 @@ needs the `ansible` package (the corpus uses a few `community.general`
 plugins) and `passlib`, e.g. `pip install ansible passlib`, with the
 matching `ansible-core` release. Set `ANSIBLE_PYTHON_INTERPRETER` to that
 Python (CI does), or the output picks up interpreter-discovery warnings.
+The pip playbooks run the module under the Python that runs
+`ansible-playbook` (it has `packaging`; the harness passes it as
+`GOLDEN_PACKAGING_PYTHON`) and install offline into virtualenvs.
 With Docker available, `test/e2e/golden/linux/*.yml` (modules that need
 root or a real Linux target: `user`, `hostname`, `alternatives`, `dnf`,
-package parameters, git over ssh, uri's Python-dependent output, and on a
+package parameters, git over ssh, uri's Python-dependent output, pip
+against each distribution's Python and packaging, and on a
 booted systemd Rocky container `systemd`, `firewalld` and `selinux`) also
 run at `-v` against fresh Ubuntu, Alpine and Rocky Linux containers, one
 per tool, and must match byte for byte.
