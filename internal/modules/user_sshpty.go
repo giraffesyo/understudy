@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/ptyutil"
 )
 
@@ -144,7 +145,7 @@ loop:
 	rc := 0
 	if waitErr != nil {
 		if ee, ok := waitErr.(*exec.ExitError); ok {
-			rc = ee.ExitCode()
+			rc = agentproto.ExitCode(ee)
 		} else {
 			return &one, "", waitErr.Error()
 		}

@@ -1,0 +1,7 @@
+---
+# register: naming an invalid variable is a parser error (exit 4).
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - command: echo hi
+      register: bad-reg

@@ -1,0 +1,7 @@
+---
+dependencies:
+  - role: dep_base
+    p: 1
+  - role: dep_base
+    vars:
+      p: 2

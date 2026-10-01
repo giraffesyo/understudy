@@ -1,0 +1,10 @@
+# Variables with reserved names are warned about at their INI line.
+h1 ansible_connection=local async=1 plain=2
+h2 ansible_connection=local
+[g]
+h1
+h2
+[g:vars]
+roles=2
+[all:vars]
+port=22

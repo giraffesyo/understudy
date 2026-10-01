@@ -467,19 +467,18 @@ func (ec *EvalCtx) evalCompare(t *compareExpr) (any, error) {
 }
 
 func (ec *EvalCtx) compareOnce(op string, l, r any, off int) (bool, error) {
-	// == and != tolerate Undefined (it equals only another Undefined);
-	// ordering comparisons reject it.
-	if op == "==" {
-		return equal(l, r), nil
-	}
-	if op == "!=" {
-		return !equal(l, r), nil
-	}
+	// Comparing an undefined value raises (StrictUndefined's __eq__ too).
 	if err := ec.rejectUndefined(l, off); err != nil {
 		return false, err
 	}
 	if err := ec.rejectUndefined(r, off); err != nil {
 		return false, err
+	}
+	if op == "==" {
+		return equal(l, r), nil
+	}
+	if op == "!=" {
+		return !equal(l, r), nil
 	}
 	switch op {
 	case "in", "not in":

@@ -1,0 +1,4 @@
+---
+- name: first host only
+  debug: msg=ran
+  when: inventory_hostname == ansible_play_hosts_all[0]

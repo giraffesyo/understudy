@@ -1,0 +1,31 @@
+---
+# A command a signal killed reports rc as Python's Popen.returncode: the
+# negated signal number. A shell pipeline reports its last stage the
+# shell's way (128 + the signal).
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: SIGTERM
+      command: sh -c 'kill -TERM $$'
+      ignore_errors: true
+    - name: SIGKILL in a shell
+      shell: kill -KILL $$
+      ignore_errors: true
+    - name: the shell reports a killed pipeline stage
+      shell: "exec 2>/dev/null; true | sh -c 'kill -TERM $$'"
+      ignore_errors: true
+    - name: async job
+      command: sh -c 'kill -INT $$'
+      async: 10
+      poll: 1
+      register: job
+      ignore_errors: true
+    - debug: var=job.rc
+    - name: until retries see the negative rc
+      shell: kill -HUP $$
+      register: r
+      until: r.rc == -1
+      retries: 1
+      delay: 0
+      ignore_errors: true
+    - debug: msg="{{ r.rc }} {{ r.attempts }}"

@@ -183,7 +183,7 @@ func (e *factEnv) execCommand(argv ...string) (int, string, string) {
 	rc := 0
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
-			rc = ee.ExitCode()
+			rc = agentproto.ExitCode(ee)
 		} else {
 			return -1, "", err.Error()
 		}

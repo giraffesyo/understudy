@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/template"
 )
@@ -229,7 +230,7 @@ func shellOut(cmd string) (string, int, error) {
 	c.Stderr = os.Stderr
 	err := c.Run()
 	if ee, ok := err.(*exec.ExitError); ok {
-		return stdout.String(), ee.ExitCode(), nil
+		return stdout.String(), agentproto.ExitCode(ee), nil
 	}
 	return stdout.String(), 0, err
 }

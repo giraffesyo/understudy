@@ -228,7 +228,14 @@ func (s *SSH) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResul
 
 	select {
 	case <-ctx.Done():
-		session.Signal(ssh.SIGKILL)
+		// A terminated agent takes the module's process groups down
+		// with it; whatever ignores the SIGTERM is killed.
+		session.Signal(ssh.SIGTERM)
+		select {
+		case <-errCh:
+		case <-time.After(killGrace):
+			session.Signal(ssh.SIGKILL)
+		}
 		return ExecResult{}, ctx.Err()
 	case err := <-errCh:
 		res := ExecResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}

@@ -1,0 +1,22 @@
+---
+# Names that are not valid variable names fail the task at run time:
+# set_fact's fact names, loop_control's loop_var and index_var.
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - set_fact:
+        good: 1
+        bad-name: 1
+      ignore_errors: true
+    - debug: msg="{{ good is defined }}"
+    - debug: msg=x
+      loop: [1]
+      loop_control:
+        loop_var: bad-lv
+      ignore_errors: true
+    - debug: msg=x
+      loop: [1]
+      loop_control:
+        index_var: "true"
+      ignore_errors: true
+    - debug: msg=after

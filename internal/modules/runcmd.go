@@ -5,6 +5,8 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+
+	"github.com/giraffesyo/understudy/internal/agentproto"
 )
 
 // cmdOpts are the run_command keyword arguments the ported modules use.
@@ -50,7 +52,7 @@ func runCommand(env *RunEnv, argv []string, o cmdOpts) (int, string, string) {
 	err := cmd.Run()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
-			return ee.ExitCode(), stdout.String(), stderr.String()
+			return agentproto.ExitCode(ee), stdout.String(), stderr.String()
 		}
 		return 257, stdout.String(), err.Error()
 	}
@@ -121,7 +123,7 @@ func runCapture(env *RunEnv, dir string, argv ...string) (string, string, int) {
 	c.Stdout, c.Stderr = &stdout, &stderr
 	if err := c.Run(); err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
-			return stdout.String(), stderr.String(), ee.ExitCode()
+			return stdout.String(), stderr.String(), agentproto.ExitCode(ee)
 		}
 		return stdout.String(), err.Error(), 1
 	}

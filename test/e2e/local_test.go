@@ -1026,12 +1026,14 @@ func TestParallelBlockOptIn(t *testing.T) {
 }
 
 // TestTimedOutCommandIsKilled: a task that times out is abandoned, and
-// the process its in-process module started is killed with it rather
-// than left running (so its later side effects never happen).
+// the processes its in-process module started (the command's whole
+// process group) are killed with it rather than left running (so their
+// later side effects never happen).
 func TestTimedOutCommandIsKilled(t *testing.T) {
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "pid")
 	marker := filepath.Join(dir, "marker")
+	bgMarker := filepath.Join(dir, "bg-marker")
 	start := time.Now()
 	code, out, stats := run(t, `
 - hosts: all
@@ -1046,13 +1048,17 @@ func TestTimedOutCommandIsKilled(t *testing.T) {
       shell: sleep 2 && touch `+marker+`
       timeout: 1
       ignore_errors: true
+    - name: a background job of the shell script
+      shell: (sleep 2 && touch `+bgMarker+`) & wait
+      timeout: 1
+      ignore_errors: true
     - assert:
         that: r.timedout.period == 1
 `, executor.Options{})
 	if code != 0 {
 		t.Fatalf("exit=%d\n%s", code, out)
 	}
-	if st := stats["localhost"]; st == nil || st.Ignored != 2 {
+	if st := stats["localhost"]; st == nil || st.Ignored != 3 {
 		t.Errorf("stats = %+v\n%s", st, out)
 	}
 	if d := time.Since(start); d > 10*time.Second {
@@ -1078,5 +1084,9 @@ func TestTimedOutCommandIsKilled(t *testing.T) {
 	time.Sleep(2500 * time.Millisecond)
 	if _, err := os.Stat(marker); err == nil {
 		t.Error("the timed-out shell script kept running and created its marker")
+	}
+	// So was its background job: the whole process group goes.
+	if _, err := os.Stat(bgMarker); err == nil {
+		t.Error("the timed-out shell script's background job kept running and created its marker")
 	}
 }

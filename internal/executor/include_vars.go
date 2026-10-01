@@ -35,6 +35,8 @@ type includeVarsRun struct {
 	ignore      []string
 	extensions  []string
 	ignoreExt   bool
+	// origins are where the loaded files named reserved variables.
+	origins []template.KeyOrigin
 }
 
 // runIncludeVars is ansible-core's include_vars action: load a vars file
@@ -172,6 +174,15 @@ func (r *Runner) runIncludeVars(task *playbook.Task, actx *actions.Context, args
 	res.Extra["ansible_facts"] = results
 	if actx.SetIncludeVars != nil && len(results) > 0 {
 		actx.SetIncludeVars(results)
+		// set_host_variable checks each name it sets.
+		if name != "" {
+			if template.IsReservedName(name) {
+				p := argPos(task, "name")
+				r.warnReserved([]template.KeyOrigin{{Name: name, File: p.File, Line: p.Line, Col: p.Col}})
+			}
+		} else {
+			r.warnReserved(iv.origins)
+		}
 	}
 	if !iv.showContent {
 		res.Extra["_ansible_no_log"] = true
@@ -260,6 +271,9 @@ func (iv *includeVarsRun) loadFile(path string, validateExt bool) (bool, string,
 		return true, template.PyRepr(path) + " must be stored as a dictionary/hash", nil
 	}
 	iv.included = append(iv.included, path)
+	if node, err := yaml.ParseSingle(data, path); err == nil {
+		iv.origins = append(iv.origins, playbook.ReservedKeyOrigins(node, path)...)
+	}
 	return false, "", m
 }
 

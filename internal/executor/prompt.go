@@ -127,3 +127,18 @@ func (r *Runner) warn(msg string) {
 	r.warned[msg] = true
 	fmt.Fprintf(os.Stderr, "[WARNING]: %s\n", msg)
 }
+
+// warnBlock prints a fully formatted warning (Display.warning's block,
+// origin and help included) to stderr, once per distinct block.
+func (r *Runner) warnBlock(block string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.warned == nil {
+		r.warned = map[string]bool{}
+	}
+	if r.warned[block] {
+		return
+	}
+	r.warned[block] = true
+	fmt.Fprint(os.Stderr, block)
+}

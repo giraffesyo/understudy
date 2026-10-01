@@ -12,6 +12,7 @@ type Play struct {
 	Name        string
 	HostPattern string
 	Vars        map[string]any
+	VarOrigins  []template.KeyOrigin // where vars: named reserved variables
 	VarsFiles   []string
 	GatherFacts *bool // nil = default (true)
 	// GatherArgs holds the play's gather_subset / gather_timeout /
@@ -47,6 +48,10 @@ type Play struct {
 	// Filled by ResolveRoles: per-role vars for the store's role layers.
 	RoleDefaults []map[string]any
 	RoleVars     []map[string]any
+	// RoleDefaultOrigins and RoleVarOrigins are where the roles' defaults
+	// and vars named reserved variables.
+	RoleDefaultOrigins []template.KeyOrigin
+	RoleVarOrigins     []template.KeyOrigin
 	// Role names for the ansible_play_role_names / ansible_dependent_role_names
 	// magic variables (roles: entries, and roles pulled in as dependencies).
 	PlayRoleNames      []string
@@ -88,37 +93,53 @@ type BlockRef struct {
 
 // Task is one task (or handler).
 type Task struct {
-	Name           string
-	Module         string
-	Action         string         // module as written (FQCN kept): unnamed task banners
-	Args           map[string]any // raw (untemplated) module args
-	FreeForm       string         // raw params for command/shell/raw
-	When           []string       // list of expressions, ANDed
-	Loop           any            // raw list or template string; nil if absent
-	LoopWith       string         // lookup plugin name for with_<X> loops ("" = plain loop)
-	LoopVar        string         // default "item"
-	IndexVar       string         // loop_control.index_var (0-based); "" = none
-	LoopLabel      any            // loop_control.label (raw template); nil = show the item
-	LoopExtended   any            // loop_control.extended as written (nil = unset)
-	LoopAllItems   any            // loop_control.extended_allitems as written (nil = true)
-	Async          int            // async timeout seconds (0 = synchronous)
-	Poll           int            // poll interval; -1 = unset, 0 = fire-and-forget
-	CheckMode      *bool          // per-task check_mode override (nil = inherit run)
-	Diff           *bool          // per-task diff override (nil = inherit run)
-	Register       string
-	IgnoreErrors   bool
-	FailedWhen     []string
-	ChangedWhen    []string
-	Until          string
-	Retries        int
-	RetriesSet     bool   // retries keyword given (else 3 when until is set)
-	Debugger       string // debugger keyword (task, else inherited block/play)
-	Delay          int
-	Become         BecomeFields
-	Vars           map[string]any
-	Environment    []any // environment entries, enclosing blocks' and role's first
-	Timeout        any   // timeout keyword, raw: an int or a template (nil = inherit)
-	Notify         []string
+	Name         string
+	Module       string
+	Action       string         // module as written (FQCN kept): unnamed task banners
+	Args         map[string]any // raw (untemplated) module args
+	FreeForm     string         // raw params for command/shell/raw
+	When         []string       // list of expressions, ANDed
+	Loop         any            // raw list or template string; nil if absent
+	LoopWith     string         // lookup plugin name for with_<X> loops ("" = plain loop)
+	LoopVar      string         // default "item"
+	IndexVar     string         // loop_control.index_var (0-based); "" = none
+	LoopLabel    any            // loop_control.label (raw template); nil = show the item
+	LoopExtended any            // loop_control.extended as written (nil = unset)
+	LoopAllItems any            // loop_control.extended_allitems as written (nil = true)
+	LoopPause    any            // loop_control.pause as written (nil = no pause)
+	BreakWhen    []string       // loop_control.break_when conditions
+	BreakWhenPos map[string]Pos // source position of each break_when condition
+	Async        int            // async timeout seconds (0 = synchronous)
+	Poll         int            // poll interval; -1 = unset, 0 = fire-and-forget
+	CheckMode    *bool          // per-task check_mode override (nil = inherit run)
+	Diff         *bool          // per-task diff override (nil = inherit run)
+	Register     string
+	IgnoreErrors bool
+	FailedWhen   []string
+	ChangedWhen  []string
+	Until        string
+	Retries      int
+	RetriesSet   bool   // retries keyword given (else 3 when until is set)
+	Debugger     string // debugger keyword (task, else inherited block/play)
+	Delay        int
+	Become       BecomeFields
+	Vars         map[string]any
+	VarOrigins   []template.KeyOrigin // where its (and its blocks') vars: named reserved variables
+	Environment  []any                // environment entries, enclosing blocks' and role's first
+	Timeout      any                  // timeout keyword, raw: an int or a template (nil = inherit)
+	Notify       []string
+	Listen       []string // a handler's listen topics
+	// Role is the role load the task belongs to (nil outside roles).
+	Role *RoleInstance
+	// ScopeDefaults and ScopeVars are the defaults and vars of a private
+	// role (include_role without public) its tasks alone see.
+	ScopeDefaults, ScopeVars []map[string]any
+	// Implicit marks a task ansible-core adds itself (a role's
+	// role_complete marker): never displayed or listed.
+	Implicit bool
+	// roleParams are the role params already set on the task (a
+	// dependency's own win over its parents').
+	roleParams     map[string]bool
 	Tags           []string
 	NoLog          bool
 	Delegate       string
@@ -134,6 +155,7 @@ type Task struct {
 	Synthesized    bool           // built without a source of its own (get_path shows the play's)
 	LoadNotes      []string       // -vv lines loading it printed (plugin redirects, static imports)
 	ArgPos         map[string]Pos // source position of each map-form module arg value
+	ArgKeyPos      map[string]Pos // source position of each map-form module arg name
 	ArgsPos        Pos            // the module's value (k=v or free-form string args share it)
 	ActionPos      Pos            // the module's key (or action:/local_action:)
 	KeywordPos     map[string]Pos // source position of each task keyword's value (when, ...)
@@ -195,8 +217,11 @@ func (t *Task) Identity() *Task {
 type RoleRef struct {
 	Name   string
 	Params map[string]any // role vars from the ref (high precedence)
-	When   []string
-	Tags   []string
+	// InlineParams and Vars are where Params came from (old-style inline
+	// params, the vars: keyword): part of the role load's identity.
+	InlineParams, Vars map[string]any
+	When               []string
+	Tags               []string
 	// CheckMode/Diff are the role entry's check_mode/diff keywords.
 	CheckMode, Diff *bool
 	Environment     []any // the role entry's environment entries

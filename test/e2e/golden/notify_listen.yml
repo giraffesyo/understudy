@@ -1,0 +1,54 @@
+---
+# Notifications: by name (the last block's handler wins a name collision,
+# a role's handlers load before the play's), by role-qualified name, by
+# listen topic (every listener, once per name), templated per loop item,
+# templated handler names, and handlers notifying listeners.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    hn: dyn
+  roles:
+    - handlerrole
+  tasks:
+    - command: echo hi
+      notify: [playh, shared]
+    - command: echo hi
+      notify: "handlerrole : rh"
+    - meta: flush_handlers
+    - command: echo {{ item }}
+      loop: [a, b]
+      notify: "h {{ item }}"
+    - command: echo hi
+      notify: [topic, dyn]
+    - command: echo hi
+      changed_when: false
+      notify: never
+    - command: "false"
+      notify: never
+      ignore_errors: true
+  handlers:
+    - name: playh
+      debug: msg=play
+    - name: shared
+      debug: msg=play-shared
+    - name: h a
+      debug: msg=ha
+    - name: h b
+      debug: msg=hb
+    - name: h c
+      debug: msg=hc
+    - name: l1
+      command: echo l1
+      listen: topic
+      notify: chained
+    - name: l2
+      debug: msg=l2
+      listen: [topic, other]
+    - name: l1
+      debug: msg=l1-again
+      listen: topic
+    - name: "{{ hn }}"
+      debug: msg=dynamic
+    - name: c
+      debug: msg=chained
+      listen: chained

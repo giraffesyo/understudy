@@ -194,3 +194,22 @@ func pyTypeName(v any) string {
 	}
 	return fmt.Sprintf("'%T'", v)
 }
+
+// FileNotFoundError is AnsibleFileNotFound for a controller file that
+// does not exist (path absolute).
+func FileNotFoundError(path string) error {
+	return &chainError{
+		msg:  fmt.Sprintf("Unable to retrieve file contents. Could not find or access '%s' on the Ansible Controller: [Errno 2] No such file or directory: '%s'", path, path),
+		help: "If you are using a module and expect the file to exist on the remote, see the remote_src option.",
+	}
+}
+
+// Inline is the error's message with its help text after it, on one line,
+// as a top-level [ERROR] shows a file-not-found error.
+func Inline(err error) string {
+	var ce *chainError
+	if errors.As(err, &ce) && ce.help != "" {
+		return ce.msg + " " + ce.help
+	}
+	return err.Error()
+}

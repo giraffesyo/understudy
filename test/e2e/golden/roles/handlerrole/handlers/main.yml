@@ -1,0 +1,5 @@
+---
+- name: rh
+  debug: msg=role-handler
+- name: shared
+  debug: msg=role-shared

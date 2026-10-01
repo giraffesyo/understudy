@@ -1,9 +1,13 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/vars"
@@ -17,13 +21,47 @@ type loopControl struct {
 	items    []any
 	extended bool
 	allItems bool
+	pause    time.Duration
 }
 
-// newLoopControl resolves loop_control.extended (default false) and
-// extended_allitems (default true) for a loop over items.
+// loopControlError is a loop_control field that failed post-validation:
+// the task's result.
+type loopControlError struct{ res *agentproto.Result }
+
+func (e *loopControlError) Error() string { return e.res.Msg }
+
+// loopControlFailure is the task result for a loop_control that failed
+// to validate.
+func loopControlFailure(err error) *agentproto.Result {
+	var le *loopControlError
+	if errors.As(err, &le) {
+		return le.res
+	}
+	return agentproto.Fail("%v", err)
+}
+
+// newLoopControl post-validates loop_control for a loop over items, in
+// the order LoopControl declares its fields: pause (a float, default 0),
+// extended (default false) and extended_allitems (default true).
 func newLoopControl(task *playbook.Task, vctx *vars.Context, items []any) (*loopControl, error) {
 	lc := &loopControl{task: task, items: items, allItems: true}
 	var err error
+	if lc.pause, err = loopPause(task, vctx); err != nil {
+		return nil, err
+	}
+	// LoopControl.post_validate then checks the variable names.
+	for _, lv := range []struct{ key, name string }{{"loop_var", task.LoopVar}, {"index_var", task.IndexVar}} {
+		if lv.name == "" || playbook.ValidVariableName(lv.name) {
+			continue
+		}
+		msg, help := playbook.InvalidVariableName(lv.name)
+		outer := fmt.Sprintf("Invalid '%s'.", lv.key)
+		res := agentproto.Fail("Invalid '%s': %s", lv.key, msg)
+		p := task.KeywordPos["loop_control."+lv.key]
+		res.ErrorChain = &agentproto.ErrorChain{Outer: outer, OuterUnlocated: true, Inner: msg, Help: help,
+			InnerFile: p.File, InnerLine: p.Line, InnerCol: p.Col}
+		return nil, &loopControlError{res}
+	}
 	if lc.extended, err = loopFlag(task.LoopExtended, false, "extended", vctx); err != nil {
 		return nil, err
 	}
@@ -100,6 +138,9 @@ func (lc *loopControl) label(itemCtx *vars.Context, i int) any {
 			return l
 		}
 	}
+	if lc.task.IndexVar == lc.task.LoopVar {
+		return int64(i) // the index variable overwrote the item's
+	}
 	return lc.items[i]
 }
 
@@ -128,4 +169,145 @@ func (lc *loopControl) ansibleLoop(i int) *yaml.OMap {
 		m.Set("previtem", lc.items[i-1])
 	}
 	return m
+}
+
+// loopPause is loop_control.pause: seconds, converted as a FieldAttribute
+// of isa 'float' does.
+func loopPause(task *playbook.Task, vctx *vars.Context) (time.Duration, error) {
+	raw := task.LoopPause
+	if raw == nil {
+		return 0, nil
+	}
+	pos := task.KeywordPos["loop_control.pause"]
+	v := raw
+	if s, ok := raw.(string); ok && (strings.Contains(s, "{{") || strings.Contains(s, "{%")) {
+		var err error
+		if v, err = vctx.At(pos).TemplateValue(raw); err != nil {
+			return 0, err
+		}
+		v = template.Undeprecate(v)
+	}
+	var f float64
+	ok := true
+	switch t := v.(type) {
+	case nil:
+	case bool:
+		if t {
+			f = 1
+		}
+	case int64:
+		f = float64(t)
+	case int:
+		f = float64(t)
+	case float64:
+		f = t
+	case yaml.UnsafeString:
+		f, ok = pyFloat(string(t))
+	case string:
+		f, ok = pyFloat(t)
+	default:
+		ok = false
+	}
+	if !ok {
+		inner := fmt.Sprintf("The value %s could not be converted to 'float'.", template.PyRepr(v))
+		res := agentproto.Fail("Error processing keyword 'pause': %s", inner)
+		res.ErrorChain = &agentproto.ErrorChain{
+			Outer: "Error processing keyword 'pause'.", OuterFile: pos.File, OuterLine: pos.Line, OuterCol: pos.Col,
+			Inner: inner, InnerFile: pos.File, InnerLine: pos.Line, InnerCol: pos.Col,
+		}
+		return 0, &loopControlError{res}
+	}
+	if f <= 0 {
+		return 0, nil
+	}
+	return time.Duration(f * float64(time.Second)), nil
+}
+
+// pyFloat is Python's float() of a string.
+func pyFloat(s string) (float64, bool) {
+	s = strings.ReplaceAll(strings.TrimSpace(s), "_", "")
+	f, err := strconv.ParseFloat(s, 64)
+	return f, err == nil
+}
+
+// connectionVars is ansible-core's COMMON_CONNECTION_VARS.
+var connectionVars = map[string]bool{
+	"ansible_connection": true, "ansible_host": true, "ansible_user": true, "ansible_shell_executable": true,
+	"ansible_port": true, "ansible_pipelining": true, "ansible_password": true, "ansible_timeout": true,
+	"ansible_shell_type": true, "ansible_module_compression": true, "ansible_private_key_file": true,
+}
+
+// checkLoopControl is TaskExecutor._check_loop_control: a loop or index
+// variable that shadows a variable already defined for the task, is
+// reserved, or names both is warned about.
+func (r *Runner) checkLoopControl(task *playbook.Task, vctx *vars.Context) {
+	type loopVariable struct{ key, name string }
+	vars := []loopVariable{{"loop_var", task.LoopVar}, {"index_var", task.IndexVar}}
+	for _, lv := range vars {
+		if lv.name == "" {
+			continue
+		}
+		var conflict string
+		_, defined := vctx.Get(lv.name)
+		switch {
+		case defined:
+			conflict = "already in use"
+		case lv.name == "ansible_index_var" || lv.name == "ansible_loop" || lv.name == "ansible_loop_var":
+			conflict = "reserved"
+		case connectionVars[lv.name]:
+			conflict = "reserved"
+		case task.LoopVar == task.IndexVar:
+			conflict = "used more than once"
+		default:
+			continue
+		}
+		msg := fmt.Sprintf("The variable %s is %s.", template.PyRepr(lv.name), conflict)
+		help := fmt.Sprintf("You should set the `%s` value in the `loop_control` option for the task "+
+			"to something else to avoid variable collisions and unexpected behavior.", lv.key)
+		var block string
+		if pos, ok := task.KeywordPos["loop_control."+lv.key]; ok && pos.Line > 0 {
+			block = fmt.Sprintf("[WARNING]: %s\nOrigin: %s:%d:%d\n\n%s\n%s\n\n", msg, pos.File, pos.Line, pos.Col,
+				template.SourceExcerpt(pos.File, pos.Line, pos.Col), help)
+		} else {
+			// The default loop_var has no origin: its value stands in.
+			block = fmt.Sprintf("[WARNING]: %s\nOrigin: <unknown>\n\n%s\n\n%s\n\n", msg, lv.name, help)
+		}
+		r.warnBlock(block)
+	}
+}
+
+// breakWhen evaluates loop_control.break_when after an item ran (with the
+// item's result registered), recording break_when_result on it; true
+// ends the loop. A condition that fails to evaluate fails the item and
+// ends the loop too.
+func (r *Runner) breakWhen(task *playbook.Task, itemCtx *vars.Context, res *agentproto.Result) bool {
+	if len(task.BreakWhen) == 0 {
+		return false
+	}
+	ctx := itemCtx
+	if task.Register != "" {
+		ctx = ctx.WithOverlay(registerOverlay(task, res))
+	}
+	for _, cond := range task.BreakWhen {
+		pos := task.BreakWhenPos[cond]
+		ok, err := ctx.At(template.Position{File: pos.File, Line: pos.Line, Col: pos.Col}).EvalWhen([]string{cond})
+		if err != nil {
+			ce := &conditionalError{keyword: "break_when", pos: template.Position{File: pos.File, Line: pos.Line, Col: pos.Col}, err: err}
+			setExtra(res, "break_when_result", template.ConditionalCause(err))
+			if res.Failed {
+				setExtra(res, "break_when_suppressed_exception", "(traceback unavailable)")
+			}
+			res.Failed = true
+			res.ErrorText = ce.message()
+			res.ErrorFile, res.ErrorLine, res.ErrorCol = pos.File, pos.Line, pos.Col
+			setExtra(res, "exception", "(traceback unavailable)")
+			return true
+		}
+		if !ok {
+			setExtra(res, "break_when_result", false)
+			return false
+		}
+	}
+	setExtra(res, "break_when_result", true)
+	return true
 }
