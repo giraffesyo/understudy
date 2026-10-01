@@ -42,6 +42,9 @@
     - name: dnf5 is not installed here
       dnf: {name: tree, use_backend: dnf4, bogus: 1}
       ignore_errors: true
+    - name: dnf5 without libdnf5, not allowed to install it
+      dnf5: {name: tree, auto_install_module_deps: false}
+      ignore_errors: true
     - name: cache update alone
       dnf: {update_cache: true}
       when: false

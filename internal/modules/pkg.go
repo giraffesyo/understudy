@@ -166,13 +166,80 @@ func aptModuleAs(env *RunEnv, rawArgs map[string]any, name string) *agentproto.R
 	if fail != nil {
 		return fail
 	}
-	if env.CheckMode && aptBindingsMissing(env) {
-		// Without python3-apt the module would install it first, which
-		// check mode does not do.
+	if aptBindingsMissing(env) {
+		if fail := aptInstallBindings(env, p); fail != nil {
+			return fail
+		}
+	}
+	return runPkg(env, pkgManagers["apt"], p, raw, "")
+}
+
+// aptBindingInterpreters are the system Pythons the apt module probes for
+// python3-apt.
+var aptBindingInterpreters = []any{"/usr/bin/python3", "/usr/bin/python"}
+
+// aptInstallBindings is the apt module without python3-apt: check mode
+// fails; with auto_install_module_deps it updates the cache (unless
+// update_cache is false) and installs python3-apt with apt-get, then
+// carries on under the Python that can import it (the warnings it gave
+// stay with the process it replaced); otherwise, or if the bindings
+// are still missing, it fails naming the Python and its sys.version.
+func aptInstallBindings(env *RunEnv, p *args.Parsed) *agentproto.Result {
+	if env.CheckMode {
 		return agentproto.Fail("python3-apt must be installed to use check mode. " +
 			"If run normally this module can auto-install it, see the auto_install_module_deps option.")
 	}
-	return runPkg(env, pkgManagers["apt"], p, raw, "")
+	var warnings []any
+	withWarnings := func(res *agentproto.Result) *agentproto.Result {
+		if len(warnings) > 0 {
+			if res.Extra == nil {
+				res.Extra = map[string]any{}
+			}
+			res.Extra["warnings"] = warnings
+		}
+		return res
+	}
+	if p.Bool("auto_install_module_deps") {
+		aptGet := aptGetPath()
+		run := func(argv ...string) *agentproto.Result {
+			rc, out, errOut := runAptCmd(env, argv...)
+			if rc == 0 {
+				return nil
+			}
+			quoted := make([]string, len(argv))
+			for i, a := range argv {
+				quoted[i] = shlexQuote(a)
+			}
+			return withWarnings(&agentproto.Result{Failed: true, Msg: heuristicLogSanitize(strings.TrimRight(errOut, " \t\r\n\v\f")),
+				RC: agentproto.IntPtr(rc), Stdout: out, Stderr: errOut, Extra: map[string]any{"cmd": strings.Join(quoted, " ")}})
+		}
+		if p.Has("update_cache") && !p.Bool("update_cache") {
+			warnings = append(warnings, "Auto-installing missing dependency without updating cache: python3-apt")
+		} else {
+			warnings = append(warnings, "Updating cache and auto-installing missing dependency: python3-apt")
+			if fail := run(aptGet, "update"); fail != nil {
+				return fail
+			}
+		}
+		argv := []string{aptGet, "install", "python3-apt", "-y", "-q", aptDpkgOptions(p)}
+		if p.Has("install_recommends") {
+			if p.Bool("install_recommends") {
+				argv = append(argv, "-o", "APT::Install-Recommends=yes")
+			} else {
+				argv = append(argv, "-o", "APT::Install-Recommends=no")
+			}
+		}
+		if fail := run(argv...); fail != nil {
+			return fail
+		}
+		if !aptBindingsMissing(env) {
+			return nil
+		}
+	}
+	return withWarnings(agentproto.Fail("Could not import the python3-apt module using %s (%s). "+
+		"Ensure python3-apt package is installed (either manually or via the auto_install_module_deps option) "+
+		"or that you have specified the correct ansible_python_interpreter. (attempted %s).",
+		targetPythonExecutable(env), pySysVersionMessage(env), pyReprValue(aptBindingInterpreters)))
 }
 
 // aptBindingsMissing reports whether the apt modules would find no
@@ -293,29 +360,42 @@ func dnfBindings(env *RunEnv, p *args.Parsed, backend string) *agentproto.Result
 			Msg:   "Could not import the dnf python module. Please install `python3-dnf` package. (attempted " + pyReprValue(attempted) + ")",
 			Extra: map[string]any{"results": []any{}}}
 	}
-	if pyModuleInstalled(nil, "libdnf5") {
+	// Without any Python, understudy's native code stands in.
+	if !targetHasPython(env) || pyModuleInstalled(env, "libdnf5") {
 		return nil
 	}
 	switch {
 	case env.CheckMode:
 		return agentproto.Fail("python3-libdnf5 must be installed to use check mode. " +
 			"If run normally this module can auto-install it, see the auto_install_module_deps option.")
-	case !p.Bool("auto_install_module_deps"):
-		return nil
+	case p.Bool("auto_install_module_deps"):
+		argv := []string{"dnf", "install", "-y", "python3-libdnf5"}
+		if _, err := lookPath("dnf"); err != nil {
+			return &agentproto.Result{Failed: true, Msg: "Error executing command.", RC: agentproto.IntPtr(2),
+				Cause: "[Errno 2] No such file or directory: b'dnf'",
+				Extra: map[string]any{"cmd": strings.Join(argv, " ")}}
+		}
+		rc, out, errOut := runCommand(env, argv, cmdOpts{Env: localeEnv(bestParsableLocale(env))})
+		if rc != 0 {
+			return &agentproto.Result{Failed: true, Msg: heuristicLogSanitize(strings.TrimRight(errOut, " \t\r\n\v\f")),
+				RC: agentproto.IntPtr(rc), Stdout: out, Stderr: errOut, Extra: map[string]any{"cmd": strings.Join(argv, " ")}}
+		}
+		// The module then carries on under the Python that can import
+		// the bindings it installed.
+		if pyModuleInstalled(env, "libdnf5") {
+			return nil
+		}
 	}
-	argv := []string{"dnf", "install", "-y", "python3-libdnf5"}
-	if _, err := lookPath("dnf"); err != nil {
-		return &agentproto.Result{Failed: true, Msg: "Error executing command.", RC: agentproto.IntPtr(2),
-			Cause: "[Errno 2] No such file or directory: b'dnf'",
-			Extra: map[string]any{"cmd": strings.Join(argv, " ")}}
-	}
-	rc, out, errOut := runCommand(env, argv, cmdOpts{Env: localeEnv(bestParsableLocale(env))})
-	if rc != 0 {
-		return &agentproto.Result{Failed: true, Msg: heuristicLogSanitize(strings.TrimRight(errOut, " \t\r\n\v\f")),
-			RC: agentproto.IntPtr(rc), Stdout: out, Stderr: errOut, Extra: map[string]any{"cmd": strings.Join(argv, " ")}}
-	}
-	return nil
+	return &agentproto.Result{Failed: true, Msg: fmt.Sprintf("Could not import the libdnf5 python module using %s (%s). "+
+		"Ensure python3-libdnf5 package is installed (either manually or via the auto_install_module_deps option) "+
+		"or that you have specified the correct ansible_python_interpreter. (attempted %s).",
+		targetPythonExecutable(env), pySysVersionMessage(env), pyReprValue(dnf5BindingInterpreters)),
+		Extra: map[string]any{"failures": []any{}}}
 }
+
+// dnf5BindingInterpreters are the system Pythons the dnf5 module probes
+// for libdnf5.
+var dnf5BindingInterpreters = []any{"/usr/libexec/platform-python", "/usr/bin/python3", "/usr/bin/python"}
 
 // pyModuleInstalled reports whether a Python package (a directory with
 // an __init__.py) is importable from the task's Python (env non-nil) or
