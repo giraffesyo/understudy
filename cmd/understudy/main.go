@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"runtime/pprof"
 	"strconv"
 
 	"github.com/giraffesyo/understudy/internal/cli"
@@ -23,6 +24,16 @@ func main() {
 	if len(os.Args) == 3 && os.Args[1] == modules.LocalAgentArg && os.Args[2] == "run" {
 		modules.ExitWithParent()
 		os.Exit(modules.ServeFrame(os.Stdin, os.Stdout))
+	}
+	// UNDERSTUDY_CPUPROFILE=<file> writes a CPU profile of the run (for
+	// performance work; read it with `go tool pprof`).
+	if path := os.Getenv("UNDERSTUDY_CPUPROFILE"); path != "" {
+		if f, err := os.Create(path); err == nil && pprof.StartCPUProfile(f) == nil {
+			code := cli.Main()
+			pprof.StopCPUProfile()
+			f.Close()
+			os.Exit(code)
+		}
 	}
 	os.Exit(cli.Main())
 }
