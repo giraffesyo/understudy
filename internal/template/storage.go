@@ -85,6 +85,13 @@ func (ec *EvalCtx) storableIn(v any, active map[cycleID]bool) (any, bool, error)
 			ec.engine.Warning(pos, "Type 'Markup' is unsupported in variable storage, converting to 'str'.")
 		}
 		return string(t), true, nil
+	case pyDatetime:
+		// Stored, it carries tags.
+		if !t.tagged {
+			t.tagged = true
+			return t, true, nil
+		}
+		return v, false, nil
 	case pyTimedelta:
 		return nil, false, &StorageError{Type: "timedelta", Value: toStr(t), Pos: ec.pos}
 	case *methodValue:

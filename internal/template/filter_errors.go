@@ -91,6 +91,9 @@ func pyClassName(v any, fromVar bool) string {
 	case Markup:
 		return "Markup"
 	case pyDatetime:
+		if t.tagged || fromVar {
+			return "_AnsibleTaggedDateTime"
+		}
 		return "datetime.datetime"
 	case pyTimedelta:
 		return "datetime.timedelta"

@@ -32,6 +32,9 @@ type pyTZ struct {
 type pyDatetime struct {
 	t  time.Time
 	tz *pyTZ
+	// tagged: a value variable storage holds (ansible-core's
+	// _AnsibleTaggedDateTime), not one an expression just made.
+	tagged bool
 }
 
 // pyTimedelta is a datetime.timedelta in microseconds.
@@ -285,7 +288,7 @@ func (d pyDatetime) add(us int64) (pyDatetime, error) {
 	if t.Year() < 1 || t.Year() > 9999 {
 		return pyDatetime{}, errDateOverflow
 	}
-	return pyDatetime{t: t, tz: d.tz}, nil
+	return pyDatetime{t: t, tz: d.tz, tagged: d.tagged}, nil
 }
 
 // pyObjArith is a - b, a + b and the like for datetimes and timedeltas
