@@ -116,8 +116,9 @@ type Options struct {
 	NoColor bool
 	// RefreshInventory re-parses the inventory sources for meta:
 	// refresh_inventory, as ansible-core's InventoryManager does (its
-	// plugins' output and warnings included). nil: nothing to re-read.
-	RefreshInventory func()
+	// plugins' output and warnings included), returning the inventory
+	// that replaces the run's. nil: nothing to re-read.
+	RefreshInventory func() (*inventory.Inventory, error)
 }
 
 // Runner executes playbooks.
@@ -172,6 +173,7 @@ type Runner struct {
 	dbgMu          sync.Mutex
 	custom         map[string]*yaml.OMap // set_stats: host ("_run": the run's) -> stats
 	playVarOrigins []template.KeyOrigin  // where the play's vars and vars_files name reserved variables
+	refreshedHosts []string              // the play's hosts after a meta: refresh_inventory (nil: none ran)
 	playEnded      bool                  // meta: end_play
 	batchEnded     bool                  // meta: end_batch
 	mu             sync.Mutex
@@ -358,6 +360,7 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 	r.curPlay = play
 	r.ended = map[string]bool{}
 	r.playEnded = false
+	r.refreshedHosts = nil
 	r.mu.Unlock()
 	r.Store.SetPlayVars(play.Vars)
 	reserved := append([]template.KeyOrigin{}, play.VarOrigins...)
@@ -1278,9 +1281,17 @@ func (r *Runner) newHostContext(host string, pos template.Position, playHosts []
 		for i, h := range playHosts {
 			list[i] = h
 		}
-		c.SetMagic("ansible_play_hosts", list)
+		all := list
+		if refreshed := r.playHostsRefreshed(); refreshed != nil {
+			// After meta: refresh_inventory, the play's hosts are the
+			// refreshed inventory's, and its batch those still in it.
+			all = strList(refreshed)
+			playHosts = intersect(playHosts, refreshed)
+			list = strList(playHosts)
+		}
+		c.SetMagic("ansible_play_hosts", all)
 		c.SetMagic("play_hosts", deprecate(deprecatedPlayHosts, list))
-		c.SetMagic("ansible_play_hosts_all", list)
+		c.SetMagic("ansible_play_hosts_all", all)
 	}
 	c.SetMagic("playbook_dir", r.Opts.BaseDir)
 	c.SetMagic("ansible_check_mode", r.Opts.CheckMode)
@@ -1310,6 +1321,55 @@ func (r *Runner) newHostContext(host string, pos template.Position, playHosts []
 		c.SetMagic("hostvars", newHostVars(r, pos, playHosts))
 	}
 	return c
+}
+
+// playHostsRefreshed is the play's hosts in the refreshed inventory, nil
+// unless meta: refresh_inventory ran in the play.
+func (r *Runner) playHostsRefreshed() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.refreshedHosts
+}
+
+// refreshInventory is meta: refresh_inventory: the inventory sources
+// parsed again replace the run's inventory (its hosts, groups and
+// variables). A play host the refreshed inventory no longer matches runs
+// nothing more in the play; one it newly matches runs from the next play
+// (PlayIterator gives it no tasks in this one).
+func (r *Runner) refreshInventory(play *playbook.Play, playHosts []string) error {
+	inv, err := r.Opts.RefreshInventory()
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.Inv = inv
+	r.mu.Unlock()
+	r.implicitMu.Lock()
+	r.implicitSet = false
+	r.implicitMu.Unlock()
+	for _, name := range inv.SortedHostNames() {
+		r.Store.SetInventoryVars(name, inv.EffectiveVars(inv.Hosts[name]))
+	}
+	hosts, err := r.resolvePlayHosts(play)
+	if err != nil {
+		return err
+	}
+	keep := map[string]bool{}
+	for _, h := range hosts {
+		keep[h] = true
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, h := range playHosts {
+		if !keep[h] {
+			r.ended[h] = true
+		}
+	}
+	if hosts == nil {
+		hosts = []string{}
+	}
+	r.refreshedHosts = hosts
+	return nil
 }
 
 // hostVars is the lazy `hostvars` magic variable.

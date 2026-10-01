@@ -349,8 +349,8 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		BaseDir:         baseDir,
 		RolesPath:       cfg.RolesPath,
 		Inventory:       p.inventory,
-		RefreshInventory: func() {
-			loadInventory(p, baseDir)
+		RefreshInventory: func() (*inventory.Inventory, error) {
+			return loadInventory(p, baseDir)
 		},
 		Tags:     splitCSV(p.tags),
 		SkipTags: splitCSV(p.skipTags),

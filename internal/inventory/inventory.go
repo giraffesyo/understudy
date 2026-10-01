@@ -358,15 +358,18 @@ func (inv *Inventory) GroupNames(h *Host) []string {
 
 // GroupsMap builds the `groups` magic variable: group name -> host names
 // in inventory order, with implicit all/ungrouped included.
-func (inv *Inventory) GroupsMap() map[string]any {
-	out := make(map[string]any, len(inv.Groups))
-	for name, g := range inv.Groups {
+func (inv *Inventory) GroupsMap() *yaml.OMap {
+	out := yaml.NewOMap()
+	for _, g := range inv.groupOrder {
+		if inv.Groups[g.Name] != g {
+			continue // a group since removed
+		}
 		hosts := inv.groupHostNames(g)
 		items := make([]any, len(hosts))
 		for i, h := range hosts {
 			items[i] = h
 		}
-		out[name] = items
+		out.Set(g.Name, items)
 	}
 	return out
 }

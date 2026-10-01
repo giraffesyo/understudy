@@ -1,0 +1,15 @@
+---
+# noop, refresh_inventory and reset_connection run whatever their when:
+# says, and warn that they do not support it.
+- hosts: all
+  gather_facts: false
+  tasks:
+    - meta: noop
+      when: false
+    - meta: refresh_inventory
+      when: false
+    - meta: reset_connection
+      when: nope is defined
+    - meta: noop
+      when: false
+    - debug: msg=done
