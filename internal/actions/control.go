@@ -143,6 +143,9 @@ func runAssert(_ context.Context, actx *Context, args map[string]any, _ string) 
 				res := agentproto.Fail("Task failed: %s", cause)
 				res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: cause,
 					InnerFile: pos.File, InnerLine: pos.Line, InnerCol: pos.Col}
+				if be, broken := template.IsBrokenConditional(err); broken {
+					res.ErrorChain.Help = be.Help
+				}
 				return res
 			}
 		default:

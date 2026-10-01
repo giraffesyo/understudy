@@ -43,6 +43,10 @@ type Config struct {
 	// InjectFactsSet: inject_facts_as_vars is configured (ini or
 	// ANSIBLE_INJECT_FACT_VARS) rather than left at its default.
 	InjectFactsSet bool
+	// AllowBrokenConditionals is allow_broken_conditionals /
+	// ANSIBLE_ALLOW_BROKEN_CONDITIONALS: a conditional that is not a
+	// boolean warns rather than failing.
+	AllowBrokenConditionals bool
 
 	// Inventory settings: localhost_warning, [inventory]
 	// inventory_unparsed_warning, unparsed_is_failed,
@@ -186,6 +190,8 @@ func applyINI(cfg *Config, content string) {
 				cfg.DeprecationWarnings = iniBool(val, cfg.DeprecationWarnings)
 			case "inject_facts_as_vars":
 				cfg.InjectFactsSet = true
+			case "allow_broken_conditionals":
+				cfg.AllowBrokenConditionals = iniBool(val, cfg.AllowBrokenConditionals)
 			case "task_timeout":
 				if n, err := strconv.Atoi(val); err == nil {
 					cfg.TaskTimeout = n
@@ -312,6 +318,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if os.Getenv("ANSIBLE_INJECT_FACT_VARS") != "" {
 		cfg.InjectFactsSet = true
+	}
+	if v := os.Getenv("ANSIBLE_ALLOW_BROKEN_CONDITIONALS"); v != "" {
+		cfg.AllowBrokenConditionals = iniBool(v, cfg.AllowBrokenConditionals)
 	}
 	if v := os.Getenv("ANSIBLE_TASK_TIMEOUT"); v != "" {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {

@@ -1700,6 +1700,10 @@ func decodeInt(node *yaml.Node, file, key string) (int64, error) {
 // list (a bare string becomes a one-element list; a list stays; booleans
 // become "True"/"False").
 func decodeExprList(node *yaml.Node) []string {
+	if v, err := node.Decode(); err == nil && v == nil {
+		// when: with no value: no conditions.
+		return nil
+	}
 	if items, ok := node.Seq(); ok {
 		out := make([]string, 0, len(items))
 		for _, it := range items {
@@ -1743,7 +1747,8 @@ func exprString(node *yaml.Node) string {
 	case nil:
 		return ""
 	default:
-		return fmt.Sprintf("%v", t)
+		// Not a string: a broken conditional when evaluated.
+		return template.NonStringConditional(t)
 	}
 }
 

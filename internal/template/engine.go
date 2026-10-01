@@ -85,6 +85,9 @@ type Engine struct {
 	// Verbose receives Display.verbose messages plugins print at a given
 	// verbosity (nil: none).
 	Verbose func(verbosity int, msg string)
+	// AllowBrokenConditionals is ALLOW_BROKEN_CONDITIONALS: a conditional
+	// that is not a boolean warns (deprecated) rather than failing.
+	AllowBrokenConditionals bool
 }
 
 // New returns an Engine with the built-in filters, tests, and globals.

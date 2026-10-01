@@ -3,6 +3,7 @@ package yaml
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -203,6 +204,9 @@ func (c *composer) composeNode(ev event) (*Node, error) {
 		panic("yaml: unexpected event while composing")
 	}
 	n.Style = ev.style
+	if !strings.HasPrefix(c.p.s.name, "<") {
+		n.file = c.p.s.name // a file's, not a string's (from_yaml)
+	}
 	if ev.anchor != "" {
 		c.anchors[ev.anchor] = n
 	}

@@ -736,8 +736,14 @@ func mergeVarsFile(path string, into map[string]any) error {
 	if !ok {
 		return fmt.Errorf("%s: vars file must contain a mapping", path)
 	}
+	origins := yaml.ChildOrigins(into)
+	if origins == nil {
+		origins = map[string]yaml.ChildPos{}
+	}
 	for k, val := range m {
 		into[k] = val
+		yaml.MergeChildOrigin(origins, k, m)
 	}
+	yaml.SetChildOrigins(into, origins)
 	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/template"
+	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
 // Host is one managed host.
@@ -391,14 +392,20 @@ func (inv *Inventory) groupHostNames(g *Group) []string {
 // The caller layers these under play/task/extra vars.
 func (inv *Inventory) EffectiveVars(h *Host) map[string]any {
 	out := map[string]any{}
+	origins := map[string]yaml.ChildPos{}
 	for _, g := range inv.OrderedGroups(h) {
 		for k, v := range g.Vars {
 			out[k] = v
+			yaml.MergeChildOrigin(origins, k, g.Vars)
 		}
 	}
 	for k, v := range h.Vars {
 		out[k] = v
+		yaml.MergeChildOrigin(origins, k, h.Vars)
 	}
+	// Where each value came from rides along (a broken conditional
+	// names it).
+	yaml.SetChildOrigins(out, origins)
 	return out
 }
 

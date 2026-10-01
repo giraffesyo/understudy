@@ -26,6 +26,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/connection"
 	"github.com/giraffesyo/understudy/internal/executor"
 	"github.com/giraffesyo/understudy/internal/inventory"
+	"github.com/giraffesyo/understudy/internal/omap"
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/vault"
@@ -112,27 +113,29 @@ type parsedArgs struct {
 	extraVarsErr error
 	// extraVarOrigins are where -e named reserved variables.
 	extraVarOrigins []template.KeyOrigin
-	forks           int
-	verbosity       int
-	check           bool
-	diff            bool
-	become          bool
-	becomeUser      string
-	askBecome       bool
-	askPass         bool
-	askVault        bool
-	vaultFiles      []string
-	remoteUser      string
-	privateKey      string
-	connection      string
-	tags            string
-	skipTags        string
-	syntax          bool
-	listHosts       bool
-	listTasks       bool
-	module          string // adhoc -m
-	moduleArgs      string // adhoc -a
-	positional      []string
+	// extraVarValues are where each -e variable's value came from.
+	extraVarValues map[string]template.Position
+	forks          int
+	verbosity      int
+	check          bool
+	diff           bool
+	become         bool
+	becomeUser     string
+	askBecome      bool
+	askPass        bool
+	askVault       bool
+	vaultFiles     []string
+	remoteUser     string
+	privateKey     string
+	connection     string
+	tags           string
+	skipTags       string
+	syntax         bool
+	listHosts      bool
+	listTasks      bool
+	module         string // adhoc -m
+	moduleArgs     string // adhoc -a
+	positional     []string
 
 	becomeMethod   string
 	becomePassFile string
@@ -171,7 +174,10 @@ var cliFlags = []cliFlag{
 				return nil
 			}
 		}
-		return parseExtraVars(v, p.extraVars, &p.extraVarOrigins)
+		if p.extraVarValues == nil {
+			p.extraVarValues = map[string]template.Position{}
+		}
+		return parseExtraVars(v, p.extraVars, &p.extraVarOrigins, p.extraVarValues)
 	}},
 	{[]string{"-f", "--forks"}, true, func(p *parsedArgs, v string) (err error) { p.forks, err = strconv.Atoi(v); return }},
 	{[]string{"-t", "--tags"}, true, func(p *parsedArgs, v string) error { p.tags = joinCSV(p.tags, v); return nil }},
@@ -397,6 +403,7 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		Verbosity:       p.verbosity,
 		ExtraVars:       p.extraVars,
 		ExtraVarOrigins: p.extraVarOrigins,
+		ExtraVarValues:  p.extraVarValues,
 		Become:          p.become,
 		BecomeUser:      p.becomeUser,
 		BecomeMethod:    becomeMethod,
@@ -410,10 +417,11 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		Tags:     splitCSV(p.tags),
 		SkipTags: splitCSV(p.skipTags),
 
-		NoColor:               callback.NoColor(),
-		NoDeprecationWarnings: !cfg.DeprecationWarnings,
-		InjectFactsSet:        cfg.InjectFactsSet,
-		TaskTimeout:           cfg.TaskTimeout,
+		NoColor:                 callback.NoColor(),
+		NoDeprecationWarnings:   !cfg.DeprecationWarnings,
+		InjectFactsSet:          cfg.InjectFactsSet,
+		AllowBrokenConditionals: cfg.AllowBrokenConditionals,
+		TaskTimeout:             cfg.TaskTimeout,
 	}
 	if cfg.Source != "" {
 		if abs, err := filepath.Abs(cfg.Source); err == nil {
@@ -534,21 +542,30 @@ func splitCSV(s string) []string {
 }
 
 // parseExtraVars handles -e k=v, -e '{"json": true}', and -e @file.yml.
-func parseExtraVars(s string, into map[string]any, origins *[]template.KeyOrigin) error {
+func parseExtraVars(s string, into map[string]any, origins *[]template.KeyOrigin, values map[string]template.Position) error {
 	switch {
 	case strings.HasPrefix(s, "@"):
 		data, err := os.ReadFile(s[1:])
 		if err != nil {
 			return fmt.Errorf("extra-vars file: %w", err)
 		}
-		v, err := yaml.Unmarshal(data, s[1:])
+		abs, err := filepath.Abs(s[1:])
+		if err != nil {
+			abs = s[1:]
+		}
+		// ansible-core's loader reads JSON first: its values carry just
+		// the file as their origin (not a line and column).
+		isJSON := json.Valid(data)
+		name := abs
+		if isJSON {
+			name = ""
+		}
+		v, err := yaml.Unmarshal(data, name)
 		if err != nil {
 			return err
 		}
-		if abs, err := filepath.Abs(s[1:]); err == nil {
-			if node, err := yaml.ParseSingle(data, abs); err == nil {
-				*origins = append(*origins, playbook.ReservedKeyOrigins(node, abs)...)
-			}
+		if node, err := yaml.ParseSingle(data, abs); err == nil {
+			*origins = append(*origins, playbook.ReservedKeyOrigins(node, abs)...)
 		}
 		m, ok := yaml.PlainMap(v)
 		if !ok {
@@ -556,12 +573,22 @@ func parseExtraVars(s string, into map[string]any, origins *[]template.KeyOrigin
 		}
 		for k, val := range m {
 			into[k] = val
+			if isJSON {
+				values[k] = template.Position{File: abs}
+			} else if file, line, col, ok := yaml.ChildOrigin(m, k); ok {
+				values[k] = template.Position{File: file, Line: line, Col: col}
+			}
 		}
 		return nil
 	case strings.HasPrefix(strings.TrimSpace(s), "{"):
-		var m map[string]any
-		if err := json.Unmarshal([]byte(s), &m); err != nil {
+		// Python's json: ints stay ints, keys keep their order.
+		jv, err := omap.UnmarshalJSON([]byte(s))
+		if err != nil {
 			return fmt.Errorf("extra-vars JSON: %w", err)
+		}
+		m, ok := yaml.PlainMap(jv)
+		if !ok {
+			return fmt.Errorf("extra-vars JSON: not an object")
 		}
 		if node, err := yaml.ParseSingle([]byte(s), ""); err == nil {
 			// JSON keys carry no origin.
@@ -573,6 +600,7 @@ func parseExtraVars(s string, into map[string]any, origins *[]template.KeyOrigin
 		}
 		for k, val := range m {
 			into[k] = val
+			values[k] = template.Position{File: "<CLI option '-e'>"}
 		}
 		return nil
 	default:
@@ -582,6 +610,7 @@ func parseExtraVars(s string, into map[string]any, origins *[]template.KeyOrigin
 				return fmt.Errorf("extra-vars: expected key=value, got %q", pair)
 			}
 			into[pair[:eq]] = pair[eq+1:]
+			values[pair[:eq]] = template.Position{File: "<CLI option '-e'>"}
 			if template.IsReservedName(pair[:eq]) {
 				*origins = append(*origins, template.KeyOrigin{Name: pair[:eq], Label: "<CLI option '-e'>"})
 			}

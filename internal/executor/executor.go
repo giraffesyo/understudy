@@ -80,18 +80,20 @@ type Options struct {
 	ExtraVars map[string]any
 	// ExtraVarOrigins are where the extra vars named reserved variables.
 	ExtraVarOrigins []template.KeyOrigin
-	Become          bool
-	BecomeUser      string
-	BecomeMethod    string // --become-method ("" = sudo)
-	BecomePass      string
-	Connection      string // "" = per-host behavioral vars; "local" forces local
-	BaseDir         string // playbook directory
-	Tags            []string
-	SkipTags        []string
-	RolesPath       []string                  // roles_path search directories (after <playbook>/roles)
-	ConfigFile      string                    // ansible.cfg in effect ("" = none): ansible_config_file
-	Inventory       []string                  // inventory sources: ansible_inventory_sources
-	ConnOpts        connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
+	// ExtraVarValues are where each extra var's value came from.
+	ExtraVarValues map[string]template.Position
+	Become         bool
+	BecomeUser     string
+	BecomeMethod   string // --become-method ("" = sudo)
+	BecomePass     string
+	Connection     string // "" = per-host behavioral vars; "local" forces local
+	BaseDir        string // playbook directory
+	Tags           []string
+	SkipTags       []string
+	RolesPath      []string                  // roles_path search directories (after <playbook>/roles)
+	ConfigFile     string                    // ansible.cfg in effect ("" = none): ansible_config_file
+	Inventory      []string                  // inventory sources: ansible_inventory_sources
+	ConnOpts       connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
 
 	ForceHandlers bool           // --force-handlers: notified handlers run on failed hosts too
 	StartAtTask   string         // --start-at-task: skip tasks until one matches
@@ -100,6 +102,8 @@ type Options struct {
 
 	// NoDeprecationWarnings is deprecation_warnings=False.
 	NoDeprecationWarnings bool
+	// AllowBrokenConditionals is ALLOW_BROKEN_CONDITIONALS.
+	AllowBrokenConditionals bool
 	// InjectFactsSet is INJECT_FACTS_AS_VARS set explicitly (not left at
 	// its deprecated default): top-level facts then do not warn.
 	InjectFactsSet bool
@@ -177,6 +181,7 @@ func NewRunner(inv *inventory.Inventory, cb Callback, opts Options) *Runner {
 		opts.Forks = 5
 	}
 	engine := template.New()
+	engine.AllowBrokenConditionals = opts.AllowBrokenConditionals
 	r := &Runner{
 		Inv:      inv,
 		Engine:   engine,
@@ -191,6 +196,7 @@ func NewRunner(inv *inventory.Inventory, cb Callback, opts Options) *Runner {
 	}
 	if opts.ExtraVars != nil {
 		r.Store.SetExtraVars(opts.ExtraVars)
+		r.Store.SetValueOrigins(vars.LExtraVars, "", opts.ExtraVarValues)
 	}
 	connOpts := opts.ConnOpts
 	connOpts.Connection = opts.Connection
@@ -1941,8 +1947,19 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		},
 		Connecting: connecting,
 		SetFact: func(name string, value any) {
+			// The fact carries where its value came from: the argument
+			// (or the value a template in it passed along).
+			raw, written := task.Args[name]
+			var origin template.OriginRef
+			if written {
+				origin = vctx.ValueOrigin(raw, argPos(task, name))
+			}
 			for _, h := range r.factHosts(host, target, task) {
-				r.Store.SetHostFact(h, name, value)
+				if written {
+					r.Store.SetHostFactOrigin(h, name, value, origin)
+				} else {
+					r.Store.SetHostFact(h, name, value)
+				}
 			}
 		},
 		SetIncludeVars: func(vars map[string]any) {
@@ -2803,7 +2820,25 @@ func (e *conditionalError) result() *agentproto.Result {
 func (e *conditionalError) chain(outer string) *agentproto.ErrorChain {
 	ec := &agentproto.ErrorChain{Outer: outer, Inner: e.message(),
 		InnerFile: e.pos.File, InnerLine: e.pos.Line, InnerCol: e.pos.Col}
-	if head, detail, ok := template.SplitCause(e.err); ok {
+	if be, ok := template.IsBrokenConditional(e.err); ok {
+		// The broken conditional is its own event, at the conditional,
+		// with how to allow it.
+		article := "A"
+		if e.keyword == "until" {
+			article = "An"
+		}
+		ec.Inner = fmt.Sprintf("%s '%s' expression failed.", article, e.keyword)
+		ec.Root = brokenConditionalChain(be)
+	} else if ie, ok := e.err.(*template.IndirectConditionalError); ok {
+		// The expression a template made fails where its text came from.
+		article := "A"
+		if e.keyword == "until" {
+			article = "An"
+		}
+		cause, _ := template.Cause(ie.Err)
+		ec.Inner = fmt.Sprintf("%s '%s' expression failed: Error while evaluating conditional.", article, e.keyword)
+		ec.Root = &agentproto.ErrorChain{Inner: cause, InnerFile: ie.Pos.File, InnerLine: ie.Pos.Line, InnerCol: ie.Pos.Col}
+	} else if head, detail, ok := template.SplitCause(e.err); ok {
 		article := "A"
 		if e.keyword == "until" {
 			article = "An"
@@ -2824,13 +2859,17 @@ func (e *conditionalError) actionResult(res *agentproto.Result) *agentproto.Resu
 	return &out
 }
 
+// brokenConditionalChain is a broken conditional's event: its message at
+// the conditional, with its help.
+func brokenConditionalChain(be *template.BrokenConditionalError) *agentproto.ErrorChain {
+	return &agentproto.ErrorChain{Inner: be.Msg, Help: be.Help,
+		InnerFile: be.Pos.File, InnerLine: be.Pos.Line, InnerCol: be.Pos.Col}
+}
+
 // evalConditionals evaluates a conditional keyword's list: all must
 // hold, each evaluated at its own origin.
 func evalConditionals(task *playbook.Task, vctx *vars.Context, keyword string, conds []string) (bool, *conditionalError) {
 	for _, cond := range conds {
-		if cond == "" {
-			continue
-		}
 		pos := conditionalPos(task, keyword, cond)
 		ok, err := vctx.At(pos).EvalWhen([]string{cond})
 		if err != nil {
@@ -2857,9 +2896,6 @@ func conditionalPos(task *playbook.Task, keyword, cond string) template.Position
 // boolean itself). nil means the task runs.
 func whenSkip(vctx *vars.Context, when []string, pos map[string]template.Position) (*agentproto.Result, *conditionalError) {
 	for _, cond := range when {
-		if cond == "" {
-			continue
-		}
 		ok, err := vctx.At(pos[cond]).EvalWhen([]string{cond})
 		if err != nil {
 			return nil, &conditionalError{keyword: "when", pos: pos[cond], err: err}

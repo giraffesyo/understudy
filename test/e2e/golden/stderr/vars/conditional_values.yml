@@ -1,0 +1,5 @@
+---
+file_int: 8
+file_str: from a file
+file_dict:
+  nested: [1, 2]

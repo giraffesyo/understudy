@@ -1,0 +1,94 @@
+---
+# With ALLOW_BROKEN_CONDITIONALS (the .env file sets it), a broken
+# conditional is a deprecation warning instead of an error, and the
+# result's truthiness decides; an empty one is true.
+- name: broken conditionals allowed
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/conditional_values.yml
+  vars:
+    vint: 1
+    vzero: 0
+    vstr: "yes"
+    vempty: ""
+    vlist: [1]
+    vdict: {x: 1, s: str, l: [a, b]}
+    vnone:
+    vtmpl: "{{ 'x' }}"
+    vtmpl2: "{{ vint + 1 }}"
+    vpass: "{{ vlist }}"
+    vexpr: "vint == 1"
+  tasks:
+    - include_vars: vars/conditional_values.yml
+    - set_fact:
+        sf_str: abc
+        sf_int: 7
+        sf_calc: "{{ 1 + 1 }}"
+        sf_pass: "{{ vdict }}"
+    - command: echo hi
+      register: r
+      changed_when: false
+    - {debug: {msg: x}, when: "'abc'", ignore_errors: true}
+    - {debug: {msg: x}, when: vint, ignore_errors: true}
+    - {debug: {msg: x}, when: vzero, ignore_errors: true}
+    - {debug: {msg: x}, when: vstr, ignore_errors: true}
+    - {debug: {msg: x}, when: vempty, ignore_errors: true}
+    - {debug: {msg: x}, when: vlist, ignore_errors: true}
+    - {debug: {msg: x}, when: vdict.x, ignore_errors: true}
+    - {debug: {msg: x}, when: "vdict['s']", ignore_errors: true}
+    - {debug: {msg: x}, when: "vdict.l[1]", ignore_errors: true}
+    - {debug: {msg: x}, when: vnone, ignore_errors: true}
+    - {debug: {msg: x}, when: vtmpl, ignore_errors: true}
+    - {debug: {msg: x}, when: vtmpl2, ignore_errors: true}
+    - {debug: {msg: x}, when: vpass, ignore_errors: true}
+    - {debug: {msg: x}, when: vlist | length, ignore_errors: true}
+    - {debug: {msg: x}, when: "nope | default(vstr)", ignore_errors: true}
+    - {debug: {msg: x}, when: sf_str, ignore_errors: true}
+    - {debug: {msg: x}, when: sf_int, ignore_errors: true}
+    - {debug: {msg: x}, when: sf_calc, ignore_errors: true}
+    - {debug: {msg: x}, when: sf_pass, ignore_errors: true}
+    - {debug: {msg: x}, when: sf_pass.l, ignore_errors: true}
+    - {debug: {msg: x}, when: r.stdout, ignore_errors: true}
+    - {debug: {msg: x}, when: r.rc, ignore_errors: true}
+    - {debug: {msg: x}, when: inventory_hostname, ignore_errors: true}
+    - {debug: {msg: x}, when: workdir, ignore_errors: true}
+    - {debug: {msg: x}, when: file_int, ignore_errors: true}
+    - {debug: {msg: x}, when: file_str, ignore_errors: true}
+    - {debug: {msg: x}, when: file_dict.nested, ignore_errors: true}
+    - {debug: {msg: x}, when: item, loop: ["a"], ignore_errors: true}
+    - {debug: {msg: x}, when: "{{ vexpr }}", ignore_errors: true}
+    - {debug: {msg: x}, when: "{{ vint }}", ignore_errors: true}
+    - {debug: {msg: x}, when: "{{ vstr }}", ignore_errors: true}
+    - {debug: {msg: x}, when: "{{ '' }}", ignore_errors: true}
+    - {debug: {msg: x}, when: "", ignore_errors: true}
+    - {debug: {msg: x}, when: "  ", ignore_errors: true}
+    - {debug: {msg: x}, when: 1, ignore_errors: true}
+    - {debug: {msg: x}, when: [true, "'a'"], ignore_errors: true}
+    - debug: {msg: x}
+      when:
+    - debug: {msg: x}
+      changed_when: "[1]"
+      ignore_errors: true
+    - debug: {msg: x}
+      failed_when: vzero
+      ignore_errors: true
+    - debug: {msg: x}
+      register: r2
+      until: vstr
+      retries: 1
+      delay: 0
+      ignore_errors: true
+    - debug: {msg: x}
+      loop: [1, 2]
+      loop_control:
+        break_when: vstr
+      ignore_errors: true
+    - assert:
+        that: "'abc'"
+      ignore_errors: true
+    - assert:
+        that:
+          - true
+          - vstr
+      ignore_errors: true
