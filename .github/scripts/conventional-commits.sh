@@ -38,9 +38,16 @@ title)
 	;;
 range)
 	[ $# -eq 1 ] || usage
+	# Commits from before the convention (release-please's bootstrap-sha
+	# and its ancestors) are not checked.
+	since=()
+	boot=$(sed -n 's/.*"bootstrap-sha": *"\([0-9a-f]*\)".*/\1/p' release-please-config.json 2>/dev/null || true)
+	if [ -n "$boot" ] && git cat-file -e "$boot^{commit}" 2>/dev/null; then
+		since=("^$boot")
+	fi
 	while IFS= read -r s; do
 		check "$s"
-	done < <(git log --no-merges --format=%s "$1")
+	done < <(git log --no-merges --format=%s "$1" "${since[@]}")
 	;;
 *)
 	usage
