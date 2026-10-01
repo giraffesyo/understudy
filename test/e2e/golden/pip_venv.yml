@@ -101,6 +101,15 @@
       loop:
         - "{{ workdir }}/fx/proj"
         - "{{ workdir }}/fx/wheels/goldpkg-1.0-py3-none-any.whl"
+    - name: a pip the module cannot ask its version
+      copy:
+        dest: "{{ workdir }}/fakepip"
+        mode: "0755"
+        content: "#!/bin/sh\n[ \"$1\" = -c ] && exit 1\necho goldpkg==1.0\n"
+    - name: check mode resolving a vcs url crashes the module there
+      pip: {name: "git+https://example.invalid/x.git", executable: "{{ workdir }}/fakepip"}
+      check_mode: true
+      ignore_errors: true
     - name: executable instead of a virtualenv
       pip: {name: Gold-Dash, executable: "{{ venv }}/bin/pip", chdir: "{{ workdir }}"}
     - name: break_system_packages is an environment variable
@@ -122,6 +131,20 @@
     - debug: {msg: "{{ venv2.stat.mode }}"}
     - name: nothing to do
       pip: {name: [], virtualenv: "{{ workdir }}/venv2"}
+    - name: a virtualenv command with arguments, asked for its options
+      copy:
+        dest: "{{ workdir }}/fakevirtualenv"
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          if [ "$1" = --help ]; then echo "usage: virtualenv [-p PYTHON] dest"; echo "  --no-site-packages  (legacy)"; exit 0; fi
+          for a; do dest=$a; done
+          echo "virtualenv $*"
+          mkdir -p "$dest/bin" && touch "$dest/bin/activate" && ln -s "$(dirname "$dest")/venv/bin/pip3" "$dest/bin/pip3"
+    - name: virtualenv_command gets -p with the module's Python
+      pip: {name: golddep, virtualenv: "{{ workdir }}/venv4", virtualenv_command: "{{ workdir }}/fakevirtualenv --quiet"}
+    - name: and virtualenv_python when given
+      pip: {name: golddep, virtualenv: "{{ workdir }}/venv5", virtualenv_command: "{{ workdir }}/fakevirtualenv", virtualenv_python: python3.99}
     - name: a bad umask
       pip: {name: goldpkg, virtualenv: "{{ venv }}", umask: "0o8"}
       ignore_errors: true
