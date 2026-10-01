@@ -106,3 +106,24 @@ func anyList(ss []string) []any {
 	}
 	return out
 }
+
+// runCapture runs argv (looked up on PATH) in dir under the task's
+// environment: (stdout, stderr, rc).
+func runCapture(env *RunEnv, dir string, argv ...string) (string, string, int) {
+	path, err := lookPath(argv[0])
+	if err != nil {
+		return "", err.Error(), 127
+	}
+	c := env.Command(path, argv[1:]...)
+	c.Dir = dir
+	applyEnv(c, env)
+	var stdout, stderr bytes.Buffer
+	c.Stdout, c.Stderr = &stdout, &stderr
+	if err := c.Run(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return stdout.String(), stderr.String(), ee.ExitCode()
+		}
+		return stdout.String(), err.Error(), 1
+	}
+	return stdout.String(), stderr.String(), 0
+}

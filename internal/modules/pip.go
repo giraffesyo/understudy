@@ -1,12 +1,10 @@
 package modules
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -217,7 +215,7 @@ func pipModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		// Only creating an empty virtualenv.
 		return &agentproto.Result{Changed: true, Extra: map[string]any{
 			"cmd": anyList(venvCmd), "name": pipNameResult(name, nameGiven), "version": nilUnless(version, versionGiven),
-			"state": state, "requirements": nilIfEmptyGiven(requirements, hasReq && rawArgs["requirements"] != nil),
+			"state": state, "requirements": nilUnless(requirements, rawArgs["requirements"] != nil),
 			"virtualenv": nilIfEmpty(venv), "stdout": out, "stderr": errOut}}
 	default:
 		return &agentproto.Result{Extra: map[string]any{"warnings": []any{"No valid name or requirements file found."}}}
@@ -303,7 +301,7 @@ func pipModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	}
 	return &agentproto.Result{Changed: changed || venvCreated, Extra: map[string]any{
 		"cmd": anyList(cmd), "name": pipNameResult(name, nameGiven), "version": nilUnless(version, versionGiven),
-		"state": state, "requirements": nilIfEmptyGiven(requirements, hasReq && rawArgs["requirements"] != nil),
+		"state": state, "requirements": nilUnless(requirements, rawArgs["requirements"] != nil),
 		"virtualenv": nilIfEmpty(venv), "stdout": out, "stderr": errOut}}
 }
 
@@ -372,14 +370,9 @@ func pipNameResult(name []string, given bool) any {
 	return anyList(name)
 }
 
+// nilUnless is an option's value as the result reports it: None when the
+// option was not given.
 func nilUnless(s string, given bool) any {
-	if !given {
-		return nil
-	}
-	return s
-}
-
-func nilIfEmptyGiven(s string, given bool) any {
 	if !given {
 		return nil
 	}
@@ -855,25 +848,6 @@ func (p *pipPackage) isPresent(installed []string) (bool, error) {
 		}
 	}
 	return false, nil
-}
-
-func runCapture(env *RunEnv, dir string, argv ...string) (string, string, int) {
-	path, err := lookPath(argv[0])
-	if err != nil {
-		return "", err.Error(), 127
-	}
-	c := env.Command(path, argv[1:]...)
-	c.Dir = dir
-	applyEnv(c, env)
-	var stdout, stderr bytes.Buffer
-	c.Stdout, c.Stderr = &stdout, &stderr
-	if err := c.Run(); err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			return stdout.String(), stderr.String(), ee.ExitCode()
-		}
-		return stdout.String(), err.Error(), 1
-	}
-	return stdout.String(), stderr.String(), 0
 }
 
 func nilIfEmpty(s string) any {
