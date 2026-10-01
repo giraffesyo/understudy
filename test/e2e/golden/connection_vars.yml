@@ -1,0 +1,79 @@
+---
+# The connection settings join a task's variables under the names they
+# do not set: PlayContext.update_vars (every name of each setting) for
+# when and the task's arguments, the connection plugin's own names for
+# debug's var, changed_when and failed_when; neither shows in vars or
+# hostvars. A delegated host's label names its address where its
+# connection plugin has a host option that resolves to another name.
+- hosts: targets
+  gather_facts: false
+  tasks:
+    - name: every name of the settings, for the arguments
+      debug:
+        msg: >-
+          {{ ansible_host }} {{ ansible_ssh_host }} {{ ansible_port | default('-') }}
+          {{ ansible_ssh_port | default('-') }} {{ ansible_user | default('-') }}
+          {{ ansible_ssh_user | default('-') }} {{ ansible_connection }}
+          {{ ansible_pipelining }} {{ ansible_ssh_pipelining }} {{ ansible_timeout }}
+          {{ ansible_ssh_timeout }} {{ ansible_module_compression }}
+          {{ ansible_shell_executable }} {{ ansible_connection_user | default('-') }}
+          {{ ansible_private_key_file | default('-') }} {{ ansible_shell_type | default('-') }}
+          {{ ansible_ssh_pass | default('-') }}
+
+    - name: and for the conditional
+      debug:
+        msg: "{{ inventory_hostname }}"
+      when: ansible_ssh_host is defined and ansible_ssh_timeout is defined and ansible_port is not defined
+
+    - name: debug var reads the connection plugin's names
+      debug:
+        var: ansible_port
+      when: inventory_hostname != 'h3'
+
+    - name: changed_when too
+      debug:
+        msg: changed
+      changed_when: ansible_user is defined and ansible_host != inventory_hostname
+
+    - name: set_fact copies them
+      set_fact:
+        copied: "{{ ansible_host }}:{{ ansible_port | default(22) }}"
+
+    - debug:
+        var: copied
+
+    - name: neither vars nor hostvars list them
+      debug:
+        msg: >-
+          {{ vars | dict2items | map(attribute='key') | select('match', 'ansible_(ssh_)?(host|port|user|timeout|pipelining)$') | sort }}
+          {{ 'ansible_host' in hostvars[inventory_hostname] }}
+          {{ hostvars[inventory_hostname].ansible_port | default('-') }}
+
+    - name: a delegated task takes the delegated host's settings
+      debug:
+        msg: "{{ ansible_host }} {{ ansible_port | default('-') }} {{ ansible_ssh_port | default('-') }}"
+      delegate_to: h2
+
+    - name: labels name the address of a host whose plugin has a host option
+      debug:
+        msg: "{{ ansible_host }} {{ ansible_connection }}"
+      delegate_to: "{{ item }}"
+      loop: [s1, s2, s3, s4, l1, n1, nowhere]
+      when: inventory_hostname == 'h1'
+
+    - set_fact:
+        delegated: true
+      delegate_to: s2
+      run_once: true
+
+    - assert:
+        that: ansible_host == '192.0.2.11'
+      delegate_to: s1
+      run_once: true
+
+- hosts: h1
+  gather_facts: false
+  tasks:
+    - name: names the plugin does not set back stay undefined for debug var
+      debug:
+        var: ansible_ssh_host

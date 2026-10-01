@@ -180,6 +180,9 @@ func (d *Default) HostResult(host string, task *playbook.Task, res *agentproto.R
 
 	if res.DelegatedTo != "" && res.DelegatedTo != host {
 		host += " -> " + res.DelegatedTo
+		if res.DelegatedAddr != "" {
+			host += "(" + res.DelegatedAddr + ")"
+		}
 	}
 	defer d.warnings(res)
 	isItem := item != nil || (res.Extra != nil && res.Extra["ansible_loop_var"] != nil)

@@ -122,10 +122,11 @@ func (m *Manager) AgentWith(ctx context.Context, host string, kw Keywords) (*Age
 }
 
 // RemoteUser is the remote_user configured for a host under the
-// connection keywords: ansible_user (or ansible_ssh_user), else the
-// remote_user keyword, else -u / remote_user; "" when none is.
+// connection keywords: ansible_ssh_user, else ansible_user (the last of
+// the option's variables set wins), else the remote_user keyword, else
+// -u / remote_user; "" when none is.
 func (m *Manager) RemoteUser(host string, kw Keywords) string {
-	return m.strVar(host, "ansible_user", m.strVar(host, "ansible_ssh_user", firstNonEmpty(kw.RemoteUser, m.Opts.RemoteUser)))
+	return m.strVar(host, "ansible_ssh_user", m.strVar(host, "ansible_user", firstNonEmpty(kw.RemoteUser, m.Opts.RemoteUser)))
 }
 
 func (m *Manager) strVar(host, name, fallback string) string {
@@ -178,12 +179,12 @@ func (m *Manager) dial(ctx context.Context, host string, kw Keywords) (Connectio
 			Host:            m.strVar(host, "ansible_ssh_host", m.strVar(host, "ansible_host", host)),
 			Port:            m.intVar(host, "ansible_ssh_port", m.intVar(host, "ansible_port", 22)),
 			User:            m.RemoteUser(host, kw),
-			Password:        m.strVar(host, "ansible_password", m.strVar(host, "ansible_ssh_pass", m.Opts.Password)),
+			Password:        m.strVar(host, "ansible_ssh_password", m.strVar(host, "ansible_ssh_pass", m.strVar(host, "ansible_password", m.Opts.Password))),
 			HostKeyChecking: m.Opts.HostKeyChecking,
 			Timeout:         m.Opts.Timeout,
 			KeyPassphrase:   m.Opts.KeyPassphrase,
 		}
-		if key := m.strVar(host, "ansible_ssh_private_key_file", m.Opts.PrivateKey); key != "" {
+		if key := m.strVar(host, "ansible_ssh_private_key_file", m.strVar(host, "ansible_private_key_file", m.Opts.PrivateKey)); key != "" {
 			cfg.PrivateKeys = append(cfg.PrivateKeys, key)
 		}
 		// OpenSSH client options: host vars override the CLI flags.
