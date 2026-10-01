@@ -243,7 +243,7 @@ func adhocParser(cfg *config.Config) *argParser {
 // CLI.parse does, then post_process_args' checks (--forks). done reports
 // the command is over (help, version, an error), with its exit code.
 func parseCommand(ap *argParser, cfg *config.Config, args []string) (p *parsedArgs, code int, done bool) {
-	p = &parsedArgs{extraVars: map[string]any{}, prog: ap.prog}
+	p = &parsedArgs{extraVars: map[string]any{}, prog: ap.prog, verbosity: cfg.Verbosity}
 	ap.deprecationsOn = cfg.DeprecationWarnings
 	res := ap.parse(args, p)
 	if res.exit {
