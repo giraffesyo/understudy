@@ -5,105 +5,201 @@ on:
     branches: [main, canary]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Weekly, so a new govulncheck finding or ansible-core drift shows up
+    # without a push.
+    - cron: "17 6 * * 1"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # The golden suite byte-compares against this ansible-core. It tracks the
-  # LATEST ansible-core release: bump it when a new one ships (and
-  # ANSIBLE_VERSION to the community package release that requires it; the
-  # corpus uses a few community.general plugins).
-  ANSIBLE_CORE_VERSION: "2.21.4"
-  ANSIBLE_VERSION: "14.4.0"
+  # CI-only tools, run with `go run <module>@<version>` so go.mod stays
+  # free of them (dependabot does not bump these; do it by hand).
+  STATICCHECK: honnef.co/go/tools/cmd/staticcheck@v0.8.1 # 2026.2.1
+  GOVULNCHECK: golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
 jobs:
   lint:
-    name: gofmt / vet / depcheck
+    name: gofmt / mod verify / vet / staticcheck / depcheck
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
-          go-version-file: go.mod
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-key: lint
+      - name: go mod verify
+        run: go mod verify
       - name: gofmt
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
-            echo "gofmt needed on:"; echo "$unformatted"; exit 1
+            echo "::error::gofmt needed on: $(echo "$unformatted" | tr '\n' ' ')"
+            gofmt -d .
+            exit 1
           fi
       - name: depcheck (agent imports stay minimal)
         run: make depcheck
       - name: build agents (embedded by the control binary)
         run: make agents
       - name: go vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          go vet -tags e2e ./test/e2e/
+          go vet -tags golden ./test/e2e/
+      - name: staticcheck
+        run: |
+          go run "$STATICCHECK" ./...
+          go run "$STATICCHECK" -tags e2e ./test/e2e/
+          go run "$STATICCHECK" -tags golden ./test/e2e/
+
+  vuln:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-key: vuln
+      - run: make agents
+      - name: govulncheck (stdlib of the Go release builds use, and modules)
+        run: go run "$GOVULNCHECK" ./...
 
   test:
-    name: unit + local e2e (${{ matrix.os }})
+    name: unit + local e2e (${{ matrix.os }}, Go ${{ matrix.go }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - { os: ubuntu-latest, go: stable }
+          - { os: macos-latest, go: stable }
+          # The minimum go.mod declares.
+          - { os: ubuntu-latest, go: go.mod }
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - if: runner.os == 'Linux'
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
-          go-version-file: go.mod
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        with:
+          go-version: ${{ matrix.go != 'go.mod' && matrix.go || '' }}
+          go-version-file: ${{ matrix.go == 'go.mod' && 'go.mod' || '' }}
+          cache-key: test
       - run: make build
       - run: make test
 
-  cross:
-    name: cross-compile
+  race:
+    name: unit (race detector)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
-          go-version-file: go.mod
-      - name: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-key: race
+      - run: make build
+      - run: go test -race -count=1 -timeout 40m ./...
+
+  cross:
+    name: cross-compile (every release platform)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-key: cross
+      - name: make cross (RELEASE_PLATFORMS in the Makefile)
         run: make cross
 
   golden:
     name: golden (vs ansible-playbook)
     runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      # A missing ansible-playbook, docker or bin/understudy fails the suite
+      # instead of skipping it.
+      UNDERSTUDY_REQUIRE_PREREQS: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
-          go-version-file: go.mod
-      - uses: actions/setup-python@v5
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-key: golden
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
-      - name: install ansible-core ${{ env.ANSIBLE_CORE_VERSION }}
-        # passlib: password_hash falls back to it for algorithms libxcrypt
-        # lacks, as on a typical controller.
+      - name: install ansible-core (pinned, hash-checked; .github/golden/requirements.in)
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install "ansible-core==${ANSIBLE_CORE_VERSION}" "ansible==${ANSIBLE_VERSION}" passlib
-          ansible-playbook --version
+          python -m pip install --require-hashes --no-deps -r .github/golden/requirements.txt
+          want=$(sed -n 's/^ansible-core==//p' .github/golden/requirements.in)
+          got=$(ansible-playbook --version | head -n 1)
+          echo "$got"
+          case "$got" in
+            *"[core $want]"*) ;;
+            *) echo "::error::expected ansible-core $want, got: $got"; exit 1 ;;
+          esac
       - run: make build
       - name: golden suite
         # The harness runs ansible-playbook on pipes (it refuses non-blocking
         # stdio) with an explicit interpreter, so interpreter discovery (a
         # Python-only artifact) stays out of the compared output.
         run: |
-          export ANSIBLE_PYTHON_INTERPRETER="$(command -v python3)"
+          ANSIBLE_PYTHON_INTERPRETER="$(command -v python3)"
+          export ANSIBLE_PYTHON_INTERPRETER
           go test -count=1 -tags golden -timeout 60m ./test/e2e/
 
   e2e:
     name: e2e (Docker)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      UNDERSTUDY_REQUIRE_PREREQS: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
-          go-version-file: go.mod
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-key: e2e
       - run: make build
       - name: SSH + systemd container suites
         run: go test -count=1 -tags e2e -timeout 45m ./test/e2e/

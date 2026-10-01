@@ -1,0 +1,13 @@
+# The golden suite (CI's `golden` job) byte-compares understudy against this
+# ansible-core. It tracks the LATEST ansible-core release: bump ansible-core
+# when a new one ships, and ansible to the community package release that
+# requires it (the corpus uses a few community.general plugins). passlib:
+# password_hash falls back to it for algorithms libxcrypt lacks, as on a
+# typical controller.
+#
+# After editing, regenerate the hashed lock CI installs from:
+#   uv pip compile --generate-hashes --python-version 3.13 \
+#     --python-platform x86_64-unknown-linux-gnu requirements.in -o requirements.txt
+ansible-core==2.21.4
+ansible==14.4.0
+passlib==1.7.4

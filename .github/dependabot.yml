@@ -1,0 +1,51 @@
+version: 2
+
+# Weekly, one grouped PR per ecosystem, against the default branch (canary);
+# a release must be a week old before it is proposed (cooldown).
+# Commit prefixes are Conventional Commits types, so release-please files
+# them: Go module bumps ship in the binary (fix(deps), a changelog entry);
+# workflow and golden-suite bumps do not (ci(deps), test(deps), hidden).
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      go-modules:
+        patterns: ["*"]
+    commit-message:
+      prefix: fix
+      include: scope
+
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/setup-go
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+      include: scope
+
+  # The ansible-core the golden suite compares against (it tracks the latest
+  # release). After merging, regenerate requirements.txt's hashes if the PR
+  # did not (see the comment in requirements.in).
+  - package-ecosystem: pip
+    directory: /.github/golden
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      golden-ansible:
+        patterns: ["*"]
+    commit-message:
+      prefix: test
+      include: scope
