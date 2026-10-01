@@ -360,6 +360,7 @@ var filterSignatures = map[string]pySig{
 	"center":               {name: "do_center", params: []string{"value", "width"}, required: 1},
 	"checksum":             {name: "secure_hash_s", params: []string{"data", "hash_func"}, required: 1},
 	"combinations":         {style: cClinic, name: "combinations", params: []string{"iterable", "r"}, required: 2},
+	"combine":              {name: "combine", varargs: true, varkw: true},
 	"comment":              {name: "comment", params: []string{"text", "style"}, required: 1, varkw: true},
 	"commonpath":           {name: "commonpath", params: []string{"paths"}, required: 1},
 	"count":                {style: cExactlyOne, name: "len"},
@@ -473,6 +474,12 @@ var filterSignatures = map[string]pySig{
 }
 
 var testSignatures = map[string]pySig{
+	"!=":              {style: cOperator, name: "ne"},
+	"<":               {style: cOperator, name: "lt"},
+	"<=":              {style: cOperator, name: "le"},
+	"==":              {style: cOperator, name: "eq"},
+	">":               {style: cOperator, name: "gt"},
+	">=":              {style: cOperator, name: "ge"},
 	"abs":             {name: "isabs", params: []string{"s"}, required: 1},
 	"all":             {style: cExactlyOne, name: "all"},
 	"any":             {style: cExactlyOne, name: "any"},

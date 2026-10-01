@@ -1,0 +1,1053 @@
+[
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuyvPXIbu7xe6/CED2DzX8z6Si09MlzlW"
+ },
+ {
+  "password": "",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuubyCG3zY1GIXMyxfivm.ClDiInHzxjiq"
+ },
+ {
+  "password": "mypassword",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuu9oZQP0E7UMk4NbKn6RLt8mFl9OFuldW"
+ },
+ {
+  "password": "s3cr3t!",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuX.puQ0.3yJfaGNmWHm9L1wX2vQGTcRa"
+ },
+ {
+  "password": "ünïcødé",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuWIF4ZoMpF83zJAHK3PlYaLF.yrcEA6S"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuu.gc7UY/21CSNJGJg21jJzx9QiOpJ9bO"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuubzadhGtS2zEF.gu0yd0opP6cVzb.e0i"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuubzadhGtS2zEF.gu0yd0opP6cVzb.e0i"
+ },
+ {
+  "password": "a\u0000b",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: bcrypt does not allow NULL bytes in password",
+  "cause": "bcrypt does not allow NULL bytes in password"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuu",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuyvPXIbu7xe6/CED2DzX8z6Si09MlzlW"
+ },
+ {
+  "password": "",
+  "salt": "abcdefghijklmnopqrstuu",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuubyCG3zY1GIXMyxfivm.ClDiInHzxjiq"
+ },
+ {
+  "password": "mypassword",
+  "salt": "abcdefghijklmnopqrstuu",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuu9oZQP0E7UMk4NbKn6RLt8mFl9OFuldW"
+ },
+ {
+  "password": "s3cr3t!",
+  "salt": "abcdefghijklmnopqrstuu",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuX.puQ0.3yJfaGNmWHm9L1wX2vQGTcRa"
+ },
+ {
+  "password": "ünïcødé",
+  "salt": "abcdefghijklmnopqrstuu",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuWIF4ZoMpF83zJAHK3PlYaLF.yrcEA6S"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuu",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuu.gc7UY/21CSNJGJg21jJzx9QiOpJ9bO"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuu",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuubzadhGtS2zEF.gu0yd0opP6cVzb.e0i"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuu",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuubzadhGtS2zEF.gu0yd0opP6cVzb.e0i"
+ },
+ {
+  "password": "a\u0000b",
+  "salt": "abcdefghijklmnopqrstuu",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: bcrypt does not allow NULL bytes in password",
+  "cause": "bcrypt does not allow NULL bytes in password"
+ },
+ {
+  "password": "pw",
+  "salt": "ABCDEFGHIJKLMNOPQRSTU.",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$ABCDEFGHIJKLMNOPQRSTU.DbLWlh2BacBlHK3kQlHsAqka6R0A0U6"
+ },
+ {
+  "password": "",
+  "salt": "ABCDEFGHIJKLMNOPQRSTU.",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$ABCDEFGHIJKLMNOPQRSTU.2uzVYAxqjIiFqB9NsVS3RI78mgsfG.y"
+ },
+ {
+  "password": "mypassword",
+  "salt": "ABCDEFGHIJKLMNOPQRSTU.",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$ABCDEFGHIJKLMNOPQRSTU.Yyg9AF89fWp0Gin1lGryyF1EPPlyDEa"
+ },
+ {
+  "password": "s3cr3t!",
+  "salt": "ABCDEFGHIJKLMNOPQRSTU.",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$ABCDEFGHIJKLMNOPQRSTU.tOmi76psneVXLnJKmA3gW6tr4armbqC"
+ },
+ {
+  "password": "ünïcødé",
+  "salt": "ABCDEFGHIJKLMNOPQRSTU.",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$ABCDEFGHIJKLMNOPQRSTU.bNxzNNg7gXQ7XmVUMq7uL4jgynOW16a"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "ABCDEFGHIJKLMNOPQRSTU.",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$ABCDEFGHIJKLMNOPQRSTU.quVByrNS6607.DdLY4l1QoFjhNUQKCS"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "ABCDEFGHIJKLMNOPQRSTU.",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$ABCDEFGHIJKLMNOPQRSTU.dmI92loUaaCm/USi7VdDoxL2aHpTjXK"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "ABCDEFGHIJKLMNOPQRSTU.",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$ABCDEFGHIJKLMNOPQRSTU.dmI92loUaaCm/USi7VdDoxL2aHpTjXK"
+ },
+ {
+  "password": "a\u0000b",
+  "salt": "ABCDEFGHIJKLMNOPQRSTU.",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: bcrypt does not allow NULL bytes in password",
+  "cause": "bcrypt does not allow NULL bytes in password"
+ },
+ {
+  "password": "pw",
+  "salt": "./0123456789ABCDEFGHIJ",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$./0123456789ABCDEFGHI.KsajPXz5Kc.xzPFu17iM.GFwoBlfbHy"
+ },
+ {
+  "password": "",
+  "salt": "./0123456789ABCDEFGHIJ",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$./0123456789ABCDEFGHI.6ok./gJXGomkXfHMAYmB5Qsc6wezrHS"
+ },
+ {
+  "password": "mypassword",
+  "salt": "./0123456789ABCDEFGHIJ",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$./0123456789ABCDEFGHI.QuLjDE0UFOMjQOgVeuURyAMAYUisFji"
+ },
+ {
+  "password": "s3cr3t!",
+  "salt": "./0123456789ABCDEFGHIJ",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$./0123456789ABCDEFGHI.HhQc2Xy6PMU0NqP8KSGnVuVXfkAKjz2"
+ },
+ {
+  "password": "ünïcødé",
+  "salt": "./0123456789ABCDEFGHIJ",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$./0123456789ABCDEFGHI.vfx1m75FJRRRD8FOB5BxYcBjbf/.SHa"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "./0123456789ABCDEFGHIJ",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$./0123456789ABCDEFGHI.NgMD3LmbyKKder4bN6cY8AUtXPuKKz2"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "./0123456789ABCDEFGHIJ",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$./0123456789ABCDEFGHI..jhvl7otbHz7myf85jFmj/1UC0exOL."
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "./0123456789ABCDEFGHIJ",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$./0123456789ABCDEFGHI..jhvl7otbHz7myf85jFmj/1UC0exOL."
+ },
+ {
+  "password": "a\u0000b",
+  "salt": "./0123456789ABCDEFGHIJ",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: bcrypt does not allow NULL bytes in password",
+  "cause": "bcrypt does not allow NULL bytes in password"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstu9",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuyvPXIbu7xe6/CED2DzX8z6Si09MlzlW"
+ },
+ {
+  "password": "",
+  "salt": "abcdefghijklmnopqrstu9",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuubyCG3zY1GIXMyxfivm.ClDiInHzxjiq"
+ },
+ {
+  "password": "mypassword",
+  "salt": "abcdefghijklmnopqrstu9",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuu9oZQP0E7UMk4NbKn6RLt8mFl9OFuldW"
+ },
+ {
+  "password": "s3cr3t!",
+  "salt": "abcdefghijklmnopqrstu9",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuX.puQ0.3yJfaGNmWHm9L1wX2vQGTcRa"
+ },
+ {
+  "password": "ünïcødé",
+  "salt": "abcdefghijklmnopqrstu9",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuWIF4ZoMpF83zJAHK3PlYaLF.yrcEA6S"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstu9",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuu.gc7UY/21CSNJGJg21jJzx9QiOpJ9bO"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstu9",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuubzadhGtS2zEF.gu0yd0opP6cVzb.e0i"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstu9",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuubzadhGtS2zEF.gu0yd0opP6cVzb.e0i"
+ },
+ {
+  "password": "a\u0000b",
+  "salt": "abcdefghijklmnopqrstu9",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: bcrypt does not allow NULL bytes in password",
+  "cause": "bcrypt does not allow NULL bytes in password"
+ },
+ {
+  "password": "pw",
+  "salt": "abc",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too small (bcrypt requires exactly 22 chars)",
+  "cause": "salt too small (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "",
+  "salt": "abc",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too small (bcrypt requires exactly 22 chars)",
+  "cause": "salt too small (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "mypassword",
+  "salt": "abc",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too small (bcrypt requires exactly 22 chars)",
+  "cause": "salt too small (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "s3cr3t!",
+  "salt": "abc",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too small (bcrypt requires exactly 22 chars)",
+  "cause": "salt too small (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "ünïcødé",
+  "salt": "abc",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too small (bcrypt requires exactly 22 chars)",
+  "cause": "salt too small (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abc",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too small (bcrypt requires exactly 22 chars)",
+  "cause": "salt too small (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abc",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too small (bcrypt requires exactly 22 chars)",
+  "cause": "salt too small (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abc",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too small (bcrypt requires exactly 22 chars)",
+  "cause": "salt too small (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "a\u0000b",
+  "salt": "abc",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too small (bcrypt requires exactly 22 chars)",
+  "cause": "salt too small (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuvw",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too large (bcrypt requires exactly 22 chars)",
+  "cause": "salt too large (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "",
+  "salt": "abcdefghijklmnopqrstuvw",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too large (bcrypt requires exactly 22 chars)",
+  "cause": "salt too large (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "mypassword",
+  "salt": "abcdefghijklmnopqrstuvw",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too large (bcrypt requires exactly 22 chars)",
+  "cause": "salt too large (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "s3cr3t!",
+  "salt": "abcdefghijklmnopqrstuvw",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too large (bcrypt requires exactly 22 chars)",
+  "cause": "salt too large (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "ünïcødé",
+  "salt": "abcdefghijklmnopqrstuvw",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too large (bcrypt requires exactly 22 chars)",
+  "cause": "salt too large (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuvw",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too large (bcrypt requires exactly 22 chars)",
+  "cause": "salt too large (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuvw",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too large (bcrypt requires exactly 22 chars)",
+  "cause": "salt too large (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuvw",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too large (bcrypt requires exactly 22 chars)",
+  "cause": "salt too large (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "a\u0000b",
+  "salt": "abcdefghijklmnopqrstuvw",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: salt too large (bcrypt requires exactly 22 chars)",
+  "cause": "salt too large (bcrypt requires exactly 22 chars)"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstu!",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "substring not found"
+ },
+ {
+  "password": "",
+  "salt": "abcdefghijklmnopqrstu!",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "substring not found"
+ },
+ {
+  "password": "mypassword",
+  "salt": "abcdefghijklmnopqrstu!",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "substring not found"
+ },
+ {
+  "password": "s3cr3t!",
+  "salt": "abcdefghijklmnopqrstu!",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "substring not found"
+ },
+ {
+  "password": "ünïcødé",
+  "salt": "abcdefghijklmnopqrstu!",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "substring not found"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstu!",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "substring not found"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstu!",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "substring not found"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstu!",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "substring not found"
+ },
+ {
+  "password": "a\u0000b",
+  "salt": "abcdefghijklmnopqrstu!",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "substring not found"
+ },
+ {
+  "password": "pw",
+  "salt": "!bcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: invalid characters in bcrypt salt",
+  "cause": "invalid characters in bcrypt salt"
+ },
+ {
+  "password": "",
+  "salt": "!bcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: invalid characters in bcrypt salt",
+  "cause": "invalid characters in bcrypt salt"
+ },
+ {
+  "password": "mypassword",
+  "salt": "!bcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: invalid characters in bcrypt salt",
+  "cause": "invalid characters in bcrypt salt"
+ },
+ {
+  "password": "s3cr3t!",
+  "salt": "!bcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: invalid characters in bcrypt salt",
+  "cause": "invalid characters in bcrypt salt"
+ },
+ {
+  "password": "ünïcødé",
+  "salt": "!bcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: invalid characters in bcrypt salt",
+  "cause": "invalid characters in bcrypt salt"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "!bcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: invalid characters in bcrypt salt",
+  "cause": "invalid characters in bcrypt salt"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "!bcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: invalid characters in bcrypt salt",
+  "cause": "invalid characters in bcrypt salt"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "!bcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: invalid characters in bcrypt salt",
+  "cause": "invalid characters in bcrypt salt"
+ },
+ {
+  "password": "a\u0000b",
+  "salt": "!bcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: invalid characters in bcrypt salt",
+  "cause": "invalid characters in bcrypt salt"
+ },
+ {
+  "password": "pw",
+  "salt": "",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$ENCk6s9ju7vXHV7AkTUUGOnJmG/oEJkRt5aPkcyswjIM2nMQX1hVO"
+ },
+ {
+  "password": "",
+  "salt": "",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$sFUWxG9HvmhPJCLY6FpNpeBvXuc3KWo0gC63mOUxR5HcURvCtU5Cy"
+ },
+ {
+  "password": "mypassword",
+  "salt": "",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$mrzstAXCXnBbg/rP52YG7.y.97h0P8U1WG/t7lQm6ybVt9BSjftKK"
+ },
+ {
+  "password": "s3cr3t!",
+  "salt": "",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$ThkoMS8DkTF68V3UaLuOUOLXS0kYnJ1ltGmPjvLntLGxZjoriNfUS"
+ },
+ {
+  "password": "ünïcødé",
+  "salt": "",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$Nh55aTZRsndIMl9XKTjb.e7Ux8ux6DWtKZ1Q2CtBc2wgfyAxX2A.m"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$8pmm3NASyuZHcwnCDQc8XuGY7Gl4IaCfWSP9WAMg5e0PBB4pbFpaC"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$2jGlu5Q7SYywmqeqY65vsuQEX8G3WlfM5Gf5HURbNc0tSXpXz6.Qi"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$xpPoBCAM/U36BUGRB6yTbeZJr1BCEZxmGFx2PjDbI0iVCveekq/UK"
+ },
+ {
+  "password": "a\u0000b",
+  "salt": "",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: bcrypt does not allow NULL bytes in password",
+  "cause": "bcrypt does not allow NULL bytes in password"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": null,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$12$abcdefghijklmnopqrstuunYdhHrPrQsWwVD7FJZar2U048CuDd2m"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuyvPXIbu7xe6/CED2DzX8z6Si09MlzlW"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 5,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$05$abcdefghijklmnopqrstuuHIrMEWpUCQe2YqFR3sXwQ75u4od..9q"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 10,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$10$abcdefghijklmnopqrstuuj7m4XYqbm74SxoBcXyw8to0CQ061DVG"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 3,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: bcrypt: min_desired_rounds (3) is too low, must be at least 4",
+  "cause": "bcrypt: min_desired_rounds (3) is too low, must be at least 4"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 32,
+  "ident": null,
+  "salt_size": null,
+  "error": "Could not hash the secret: bcrypt: min_desired_rounds (32) is too large, cannot be more than 31",
+  "cause": "bcrypt: min_desired_rounds (32) is too large, cannot be more than 31"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": "5",
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$05$abcdefghijklmnopqrstuuHIrMEWpUCQe2YqFR3sXwQ75u4od..9q"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 0,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$12$abcdefghijklmnopqrstuunYdhHrPrQsWwVD7FJZar2U048CuDd2m"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuyvPXIbu7xe6/CED2DzX8z6Si09MlzlW"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuDhj72xNvpEHJy4rZUEaaQVoOayTCyMy"
+ },
+ {
+  "password": "",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuubyCG3zY1GIXMyxfivm.ClDiInHzxjiq"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "2b",
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuyvPXIbu7xe6/CED2DzX8z6Si09MlzlW"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "2b",
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuDhj72xNvpEHJy4rZUEaaQVoOayTCyMy"
+ },
+ {
+  "password": "",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "2b",
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuubyCG3zY1GIXMyxfivm.ClDiInHzxjiq"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "2a",
+  "salt_size": null,
+  "hash": "$2a$04$abcdefghijklmnopqrstuuyvPXIbu7xe6/CED2DzX8z6Si09MlzlW"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "2a",
+  "salt_size": null,
+  "hash": "$2a$04$abcdefghijklmnopqrstuuDhj72xNvpEHJy4rZUEaaQVoOayTCyMy"
+ },
+ {
+  "password": "",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "2a",
+  "salt_size": null,
+  "hash": "$2a$04$abcdefghijklmnopqrstuubyCG3zY1GIXMyxfivm.ClDiInHzxjiq"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "2y",
+  "salt_size": null,
+  "hash": "$2y$04$abcdefghijklmnopqrstuuyvPXIbu7xe6/CED2DzX8z6Si09MlzlW"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "2y",
+  "salt_size": null,
+  "hash": "$2y$04$abcdefghijklmnopqrstuuDhj72xNvpEHJy4rZUEaaQVoOayTCyMy"
+ },
+ {
+  "password": "",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "2y",
+  "salt_size": null,
+  "hash": "$2y$04$abcdefghijklmnopqrstuubyCG3zY1GIXMyxfivm.ClDiInHzxjiq"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "2",
+  "salt_size": null,
+  "hash": "$2$04$abcdefghijklmnopqrstuuow0Hojwm/Kj2YLbT8FWYVxz2Lh32ITG"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "2",
+  "salt_size": null,
+  "hash": "$2$04$abcdefghijklmnopqrstuubzadhGtS2zEF.gu0yd0opP6cVzb.e0i"
+ },
+ {
+  "password": "",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "2",
+  "salt_size": null,
+  "hash": "$2$04$abcdefghijklmnopqrstuubyCG3zY1GIXMyxfivm.ClDiInHzxjiq"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "2x",
+  "salt_size": null,
+  "error": "Could not hash the secret: invalid ident: '2x'",
+  "cause": "invalid ident: '2x'"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "2x",
+  "salt_size": null,
+  "error": "Could not hash the secret: invalid ident: '2x'",
+  "cause": "invalid ident: '2x'"
+ },
+ {
+  "password": "",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "2x",
+  "salt_size": null,
+  "error": "Could not hash the secret: invalid ident: '2x'",
+  "cause": "invalid ident: '2x'"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "zz",
+  "salt_size": null,
+  "error": "Could not hash the secret: invalid ident: 'zz'",
+  "cause": "invalid ident: 'zz'"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "zz",
+  "salt_size": null,
+  "error": "Could not hash the secret: invalid ident: 'zz'",
+  "cause": "invalid ident: 'zz'"
+ },
+ {
+  "password": "",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "zz",
+  "salt_size": null,
+  "error": "Could not hash the secret: invalid ident: 'zz'",
+  "cause": "invalid ident: 'zz'"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "",
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuyvPXIbu7xe6/CED2DzX8z6Si09MlzlW"
+ },
+ {
+  "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "",
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuDhj72xNvpEHJy4rZUEaaQVoOayTCyMy"
+ },
+ {
+  "password": "",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": "",
+  "salt_size": null,
+  "hash": "$2b$04$abcdefghijklmnopqrstuubyCG3zY1GIXMyxfivm.ClDiInHzxjiq"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": 22,
+  "hash": "$2b$04$abcdefghijklmnopqrstuuyvPXIbu7xe6/CED2DzX8z6Si09MlzlW"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": 10,
+  "error": "Could not hash the secret: bcrypt: salt_size (10) must be exactly 22",
+  "cause": "bcrypt: salt_size (10) must be exactly 22"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 4,
+  "ident": null,
+  "salt_size": 30,
+  "error": "Could not hash the secret: bcrypt: salt_size (30) must be exactly 22",
+  "cause": "bcrypt: salt_size (30) must be exactly 22"
+ },
+ {
+  "password": "pw",
+  "salt": "abcdefghijklmnopqrstuv",
+  "rounds": 12,
+  "ident": null,
+  "salt_size": null,
+  "hash": "$2b$12$abcdefghijklmnopqrstuunYdhHrPrQsWwVD7FJZar2U048CuDd2m"
+ }
+]

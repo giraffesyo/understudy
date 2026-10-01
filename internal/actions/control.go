@@ -115,7 +115,7 @@ func runDebug(_ context.Context, actx *Context, args map[string]any, _ string) *
 					// A value that cannot be stored (a method): the
 					// rendering error, caused by the value's type.
 					res.ErrorChain.Inner = "Error while resolving `var` expression: " + se.Rendering()
-					res.ErrorChain.Root = &agentproto.ErrorChain{Inner: se.Error(), InnerValue: se.Repr}
+					res.ErrorChain.Root = &agentproto.ErrorChain{Inner: se.Error(), InnerValue: se.Value}
 				}
 				if p, has := actx.ArgPos["var"]; has {
 					res.ErrorChain.InnerFile, res.ErrorChain.InnerLine, res.ErrorChain.InnerCol = p.File, p.Line, p.Col

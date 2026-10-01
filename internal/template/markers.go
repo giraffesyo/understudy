@@ -49,10 +49,13 @@ func (e *Engine) EvalExpressionReplacing(src string, vars VarGetter, pos Positio
 	if HasCycle(v) {
 		return nil, nil, &RecursionError{In: "expression"}
 	}
-	if err := checkStorable(v, true, pos); err != nil {
+	v, err = ec.storable(ec.finalize(dropNestedOmit(v)))
+	if err != nil {
+		if se, ok := AsStorageError(err); ok {
+			se.Expr = true
+		}
 		return nil, nil, err
 	}
-	v = ec.finalize(dropNestedOmit(v))
 	return replaceMarkers(v, pos, &markers), markers, nil
 }
 

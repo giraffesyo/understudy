@@ -223,6 +223,7 @@ func NewRunner(inv *inventory.Inventory, cb Callback, opts Options) *Runner {
 	r.installLookups()
 	r.Engine.Deprecation = r.deprecation
 	r.Engine.Verbose = r.displayVerbose
+	r.Engine.Warning = r.templateWarning
 	return r
 }
 
@@ -3072,7 +3073,7 @@ func loopFailure(err error) *agentproto.Result {
 				}
 				res.ErrorChain = &agentproto.ErrorChain{Outer: se.Rendering(),
 					OuterFile: pos.File, OuterLine: pos.Line, OuterCol: pos.Col,
-					Inner: se.Error(), InnerValue: se.Repr}
+					Inner: se.Error(), InnerValue: se.Value}
 				return res
 			}
 			res.ErrorChain = &agentproto.ErrorChain{Inner: cause,
@@ -3135,13 +3136,13 @@ func (e *conditionalError) chain(outer string) *agentproto.ErrorChain {
 		cause, _ := template.Cause(ie.Err)
 		ec.Inner = fmt.Sprintf("%s '%s' expression failed: Error while evaluating conditional.", article, e.keyword)
 		ec.Root = &agentproto.ErrorChain{Inner: cause, InnerFile: ie.Pos.File, InnerLine: ie.Pos.Line, InnerCol: ie.Pos.Col}
-	} else if head, detail, ok := template.SplitCause(e.err); ok {
+	} else if head, detail, value, ok := template.SplitCause(e.err); ok {
 		article := "A"
 		if e.keyword == "until" {
 			article = "An"
 		}
 		ec.Inner = fmt.Sprintf("%s '%s' expression failed: %s", article, e.keyword, head)
-		ec.Root = &agentproto.ErrorChain{Inner: detail}
+		ec.Root = &agentproto.ErrorChain{Inner: detail, InnerValue: value}
 	}
 	return ec
 }
