@@ -92,7 +92,7 @@ func hasCycle(v any, active map[cycleID]bool) bool {
 }
 
 // serializingFilters walk the whole of their input.
-var serializingFilters = []string{"string", "to_json", "to_nice_json", "to_yaml", "to_nice_yaml"}
+var serializingFilters = []string{"string", "to_json", "to_nice_json", "to_yaml", "to_nice_yaml", "flatten", "hash", "checksum"}
 
 // guardRecursion makes the serializing filters fail on a recursive value
 // as ansible-core's do, rather than walk it forever.

@@ -564,7 +564,15 @@ func compareOp(a, b any, op string) (int, error) {
 	}
 	if la, ok := a.([]any); ok {
 		if lb, ok := b.([]any); ok {
+			if ia, ok := containerOf(a); ok {
+				if ib, _ := containerOf(b); ia == ib {
+					return 0, nil // the same list
+				}
+			}
 			for i := 0; i < len(la) && i < len(lb); i++ {
+				if equal(la[i], lb[i]) {
+					continue // Python skips items equal by identity or ==
+				}
 				c, err := compareOp(la[i], lb[i], op)
 				if err != nil || c != 0 {
 					return c, err
@@ -591,6 +599,13 @@ func equal(a, b any) bool {
 	}
 	if a == nil || b == nil {
 		return a == nil && b == nil
+	}
+	// The same container is equal to itself (Python compares items by
+	// identity first, so a recursive list equals itself).
+	if ia, ok := containerOf(a); ok {
+		if ib, ok := containerOf(b); ok && ia == ib {
+			return true
+		}
 	}
 	if isNumber(a) {
 		if !isNumber(b) {

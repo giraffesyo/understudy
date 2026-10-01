@@ -114,7 +114,11 @@ func registerAnsibleFilters(e *Engine) {
 			}
 			c, err := compare(a, b)
 			if err != nil {
-				sortErr = err
+				if sortErr == nil {
+					// Items of a variable's list are its lazy and tagged values.
+					v := ec.fromVar(-1) && !byAttr
+					sortErr = fmt.Errorf("'<' not supported between instances of '%s' and '%s'", pyClassName(a, v), pyClassName(b, v))
+				}
 				return false
 			}
 			if reverse {
