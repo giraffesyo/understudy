@@ -113,7 +113,8 @@ func truthy(v any) bool {
 }
 
 // loadYAMLGroup is the yaml plugin's _parse_group; it returns the group
-// name.
+// name as add_group made it (TRANSFORM_INVALID_GROUP_CHARS), or the name
+// it skipped.
 func loadYAMLGroup(inv *Inventory, name string, body any, node *yaml.Node, file string) (string, error) {
 	m, isMap := asMapping(body)
 	if !isMap && body != nil {
@@ -122,7 +123,7 @@ func loadYAMLGroup(inv *Inventory, name string, body any, node *yaml.Node, file 
 	}
 	group := inv.ensureGroup(name)
 	if body == nil {
-		return name, nil
+		return group.Name, nil
 	}
 	sections := map[string]any{}
 	for _, section := range []string{"vars", "children", "hosts"} {
@@ -220,7 +221,7 @@ func loadYAMLGroup(inv *Inventory, name string, body any, node *yaml.Node, file 
 			inv.warning(fmt.Sprintf(`Skipping unexpected key (%s) in group (%s), only "vars", "children" and "hosts" are valid`, key, name))
 		}
 	}
-	return name, nil
+	return group.Name, nil
 }
 
 // absPath is the path ansible-core names an inventory file by in load

@@ -1,0 +1,3 @@
+-i
+@INV@/support/invalid_groups.sh
+@INV@/playbook.yml

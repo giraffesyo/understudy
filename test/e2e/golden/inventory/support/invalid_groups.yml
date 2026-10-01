@@ -1,0 +1,15 @@
+all:
+  children:
+    web-servers:
+      hosts:
+        h1:
+          ansible_connection: local
+      vars:
+        x: 1
+    parent.group:
+      children:
+        web-servers:
+        db-x:
+          hosts:
+            h2:
+              ansible_connection: local

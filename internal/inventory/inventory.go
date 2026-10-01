@@ -128,14 +128,16 @@ func (inv *Inventory) warning(msg string) {
 // invalidGroupChars is ansible-core's C.INVALID_VARIABLE_NAMES.
 var invalidGroupChars = regexp.MustCompile(`^[\d\W]|[^\w]`)
 
+// ensureGroup is InventoryData.add_group: a new group's name goes
+// through to_safe_group_name under TRANSFORM_INVALID_GROUP_CHARS (kept
+// with a warning by default, replaced with one or silently, or kept).
 func (inv *Inventory) ensureGroup(name string) *Group {
 	if g, ok := inv.Groups[name]; ok {
 		return g
 	}
-	// to_safe_group_name with TRANSFORM_INVALID_GROUP_CHARS at its
-	// default ("never"): the name is kept, with a warning.
-	if invalidGroupChars.MatchString(name) {
-		inv.warning("Invalid characters were found in group names but not replaced, use -vvvv to see details")
+	name = inv.groupNameFor(name, false)
+	if g, ok := inv.Groups[name]; ok {
+		return g
 	}
 	return inv.newGroup(name)
 }

@@ -593,6 +593,7 @@ func loadInventory(p *parsedArgs, playbookDir string) (*inventory.Inventory, err
 		UnparsedIsFailed:    cfg.InventoryUnparsedIsFailed,
 		AnyUnparsedIsFailed: cfg.InventoryAnyUnparsedIsFailed,
 		ExtraVarsErr:        p.extraVarsErr,
+		TransformGroupChars: cfg.TransformInvalidGroupChars,
 		Warn:                warnOnce,
 		Verbose: func(level int, msg string) {
 			if p.verbosity >= level {
