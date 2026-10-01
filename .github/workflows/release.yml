@@ -1,6 +1,7 @@
 name: Release
 
-# The one release path. On every push to main, release-please opens (or
+# The one release path. On every push to canary (the default and release
+# branch), release-please opens (or
 # updates) a release PR from the Conventional Commits since the last
 # release: CHANGELOG.md plus the version in .release-please-manifest.json.
 # Merging that PR makes release-please tag vX.Y.Z and create the GitHub
@@ -14,7 +15,7 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    branches: [canary]
   workflow_dispatch:
     inputs:
       tag:
@@ -49,13 +50,13 @@ jobs:
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           # A PR opened with the default GITHUB_TOKEN does not trigger CI, so
-          # with required status checks on main the release PR could not be
+          # with required status checks on canary the release PR could not be
           # merged. RELEASE_PLEASE_TOKEN (a fine-grained PAT or GitHub App
           # token: contents, pull requests and issues read/write on this
           # repo) makes CI run on it; without it the GITHUB_TOKEN is used.
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
-          # The repository's default branch is canary; releases cut from main.
-          target-branch: main
+          # Releases are cut from canary, the repository's default branch.
+          target-branch: canary
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 

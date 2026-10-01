@@ -857,7 +857,7 @@ darwin on amd64 and arm64.
 
 Releases are cut by [release-please](https://github.com/googleapis/release-please)
 from the [Conventional Commits](CONTRIBUTING.md#commit-messages-conventional-commits)
-on `main`; nobody pushes tags by hand. On each push to `main` the release
+on `canary`; nobody pushes tags by hand. On each push to `canary` the release
 workflow (`.github/workflows/release.yml`) opens or updates a release PR
 that bumps the version in `.release-please-manifest.json` and adds the
 release's section to `CHANGELOG.md`. Merging that PR tags `vX.Y.Z` and
