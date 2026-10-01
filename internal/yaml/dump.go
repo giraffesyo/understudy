@@ -184,7 +184,21 @@ func (r *representer) represent(v any) (*rnode, error) {
 		if r.opts.SortKeys {
 			sort.Strings(keys)
 		}
-		return r.mapping(id, track, keys, t.Get)
+		n, err := r.mapping(id, track, keys, t.Get)
+		if err != nil {
+			return nil, err
+		}
+		// A key that is not a string is represented as itself.
+		for i, k := range keys {
+			if typed, ok := t.TypedKey(k); ok {
+				kn, err := r.represent(typed)
+				if err != nil {
+					return nil, err
+				}
+				n.items[2*i] = kn
+			}
+		}
+		return n, nil
 	case OrderedMap:
 		keys := make([]string, len(t))
 		vals := make(map[string]any, len(t))

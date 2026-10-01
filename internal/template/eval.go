@@ -236,6 +236,11 @@ func (ec *EvalCtx) getItem(x, idx any, off int) (any, error) {
 	case Mapping:
 		s, ok := asString(idx)
 		if !ok {
+			// A key that is not a string (rekey_on_member's).
+			if k, typed := typedKeyText(t, idx); typed {
+				v, _ := t.GetItem(k)
+				return ec.access(v), nil
+			}
 			return nil, ec.errf(off, "dict indices must be strings, got %s", typeName(idx))
 		}
 		if v, found := t.GetItem(s); found {
@@ -624,7 +629,8 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 	// (to_json all of them, dict2items the values); those it passes on
 	// stay deprecated.
 	ec.filterReads(t.name, in, args, kwargs)
-	saved, savedKw := ec.filterVars, ec.callKwargs
+	saved, savedKw, savedIn := ec.filterVars, ec.callKwargs, ec.filterIn
+	ec.filterIn = t.x
 	ec.callKwargs = make([]string, len(t.kwargs))
 	for i, k := range t.kwargs {
 		ec.callKwargs[i] = k.name
@@ -635,7 +641,7 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 		ec.filterVars[i+1] = ec.isVarRef(a)
 	}
 	out, err := fn(ec, in, args, kwargs)
-	ec.filterVars, ec.callKwargs = saved, savedKw
+	ec.filterVars, ec.callKwargs, ec.filterIn = saved, savedKw, savedIn
 	if err != nil {
 		if _, ok := err.(*TemplateError); ok {
 			return nil, err
@@ -670,7 +676,7 @@ func (ec *EvalCtx) pluginError(kind, name string, err error) error {
 		for _, p := range oe.pre {
 			h = strings.TrimRight(h, ". ") + ": " + p
 		}
-		te.pluginHead, te.pluginDetail, te.pluginValue = h, oe.msg, oe.value
+		te.pluginHead, te.pluginDetail, te.pluginValue, te.pluginAt = h, oe.msg, oe.value, oe.at
 	}
 	return te
 }

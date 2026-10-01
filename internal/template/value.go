@@ -142,7 +142,7 @@ func toStrIn(v any, active map[cycleID]bool) string {
 				b.WriteString(", ")
 			}
 			mv, _ := t.GetItem(k)
-			b.WriteString(pyReprIn(k, active))
+			b.WriteString(pyReprIn(mapKey(t, k), active))
 			b.WriteString(": ")
 			b.WriteString(pyReprIn(mv, active))
 		}
@@ -756,7 +756,8 @@ func contains(needle, haystack any) (bool, error) {
 	case Mapping:
 		s, ok := asString(needle)
 		if !ok {
-			return false, nil
+			_, typed := typedKeyText(h, needle)
+			return typed, nil
 		}
 		_, found := h.GetItem(s)
 		return found, nil
@@ -814,7 +815,7 @@ func iterate(v any) ([]any, error) {
 		keys := t.Keys()
 		out := make([]any, len(keys))
 		for i, k := range keys {
-			out[i] = k
+			out[i] = mapKey(t, k)
 		}
 		return out, nil
 	case *rangeValue:
@@ -875,4 +876,45 @@ func NativeTypeName(v any) string {
 		return "str"
 	}
 	return pyTypeName(Undeprecate(v))
+}
+
+// mapKey is the key a mapping holds under k: one that is not a string
+// (an int rekey_on_member keyed by), else k.
+func mapKey(m any, k string) any {
+	if om, ok := Undeprecate(m).(*yaml.OMap); ok {
+		if t, ok := om.TypedKey(k); ok {
+			return t
+		}
+	}
+	return k
+}
+
+// keyText is the text a mapping holds a key that is not a string under,
+// as results show it (JSON's for a bool).
+func keyText(k any) string {
+	switch t := Undeprecate(k).(type) {
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
+	case float64:
+		return pyFloatStr(t)
+	}
+	return toStr(k)
+}
+
+// typedKeyText is the text m holds the key k (not a string) under, when
+// m has it.
+func typedKeyText(m any, k any) (string, bool) {
+	om, ok := Undeprecate(m).(*yaml.OMap)
+	if !ok {
+		return "", false
+	}
+	text := keyText(k)
+	t, ok := om.TypedKey(text)
+	if !ok || !equal(t, k) {
+		return "", false
+	}
+	return text, true
 }

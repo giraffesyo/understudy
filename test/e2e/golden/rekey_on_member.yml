@@ -1,0 +1,62 @@
+---
+# rekey_on_member keys by the member's value, whatever its type (int and
+# bool keys stay themselves through keys(), indexing, dict2items, repr,
+# YAML and set_fact; results show them as text); a value a plugin's error
+# is about is shown where it was written (an item, a variable passing it
+# along).
+- hosts: localhost
+  gather_facts: false
+  ignore_errors: true
+  vars:
+    items:
+      - {id: 1, name: a}
+      - {id: 2, name: b}
+    fitems:
+      - {id: 1.5, name: a}
+      - {id: true, name: b}
+    nitems:
+      - {id: null, name: a}
+    litems:
+      - {id: [1], name: a}
+    missing:
+      - {name: a}
+    dmissing:
+      x: {name: a}
+    vaulted: |
+          $ANSIBLE_VAULT;1.1;AES256
+          30663739636638383166316166393235616236626339326437386164316161383237346565646537
+          3136353762326334303364323461623261323135613932380a636534633735373834363033633536
+          32396465376636616335386431666262333164343037306138343664313465636565303632336333
+          3332643935383239370a386332613366623736646139336238623166393862616539353034626466
+          3736
+    vlist: ["{{ vaulted }}"]
+    vref: "{{ vaulted }}"
+  tasks:
+    - debug: msg="{{ items | rekey_on_member('id') }}"
+    - debug: var="items | rekey_on_member('id')"
+    - debug: msg="{{ (items | rekey_on_member('id')).keys() | list }}"
+    - debug: msg="{{ (items | rekey_on_member('id')).items() | list }}"
+    - debug: msg="{{ (items | rekey_on_member('id'))[1] }}"
+    - debug: msg="{{ 1 in (items | rekey_on_member('id')) }}"
+    - debug: msg="{{ items | rekey_on_member('id') | list }}"
+    - debug: msg="{{ items | rekey_on_member('id') | to_json }}"
+    - debug: msg="{{ items | rekey_on_member('id') | to_nice_yaml }}"
+    - debug: msg="{{ items | rekey_on_member('id') | dict2items }}"
+    - debug: msg="{{ fitems | rekey_on_member('id') }}"
+    - debug: msg="{{ fitems | rekey_on_member('id') | string }}"
+    - debug: msg="{{ nitems | rekey_on_member('id') }}"
+    - debug: msg="{{ litems | rekey_on_member('id') }}"
+    - debug: msg="{{ [{'id': [1]}] | rekey_on_member('id') }}"
+    - debug: msg="{{ missing | rekey_on_member('id') }}"
+    - debug: msg="{{ dmissing | rekey_on_member('id') }}"
+    - debug: msg="{{ [{'name': 'a'}] | rekey_on_member('id') }}"
+    - debug: msg="{{ items | rekey_on_member('id') | string }}"
+    - set_fact:
+        rk: "{{ items | rekey_on_member('id') }}"
+    - debug: var=rk
+    - debug: msg="{{ rk[1] }}"
+    - debug: msg="{{ items | rekey_on_member('id') | length }}"
+    - debug: msg="{{ (items | rekey_on_member('id')) | combine({'x':1}) }}"
+    - debug: msg="{{ vaulted | unvault('wrong') }}"
+    - debug: msg="{{ vlist[0] | unvault('wrong') }}"
+    - debug: msg="{{ vref | unvault('wrong') }}"

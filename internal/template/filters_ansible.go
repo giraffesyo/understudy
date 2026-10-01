@@ -241,7 +241,7 @@ func registerAnsibleFilters(e *Engine) {
 		out := make([]any, 0, len(m))
 		for _, k := range keys {
 			item := yaml.NewOMap()
-			item.Set(toStr(keyName), k)
+			item.Set(toStr(keyName), mapKey(in, k))
 			item.Set(toStr(valName), m[k])
 			out = append(out, item)
 		}

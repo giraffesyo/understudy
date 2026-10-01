@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/vault"
@@ -257,18 +258,23 @@ func registerExtraFilters(e *Engine) {
 			return nil, fmt.Errorf("duplicates parameter to rekey_on_member has unknown value %s", pyRepr(dup))
 		}
 		var items []any
+		var itemKeys []string // each item's key or index in the input
 		v := Undeprecate(in)
 		if keys, m, ok := orderedMap(v); ok {
 			for _, k := range keys {
 				items = append(items, m[k])
 			}
+			itemKeys = keys
 		} else if l, ok := v.([]any); ok {
 			items = l
+			for i := range l {
+				itemKeys = append(itemKeys, strconv.Itoa(i))
+			}
 		} else {
 			return nil, errors.New("Type is not a valid list, set, or dict")
 		}
 		out := yaml.NewOMap()
-		for _, item := range items {
+		for i, item := range items {
 			_, m, ok := orderedMap(item)
 			if !ok {
 				return nil, errors.New("List item is not a valid dict")
@@ -276,19 +282,37 @@ func registerExtraFilters(e *Engine) {
 			ks, isStr := asString(Undeprecate(key))
 			elem, found := m[ks]
 			if !isStr || !found {
-				return nil, &objError{msg: fmt.Sprintf("Key %s was not found.", pyRepr(key)), value: pyRepr(item)}
+				return nil, &objError{msg: fmt.Sprintf("Key %s was not found.", pyRepr(key)), value: pyRepr(item),
+					at: ec.inputItemOrigin(itemKeys[i])}
 			}
-			// Keys are strings here: another key is its str().
-			k, ok := asString(Undeprecate(elem))
-			if !ok {
-				k = toStr(elem)
+			// The member's value is the key, whatever its type (the
+			// map holds one that is not a string under its text).
+			k, isText := asString(Undeprecate(elem))
+			switch t := Undeprecate(elem).(type) {
+			case []any, map[string]any, Mapping:
+				name := pyClassName(t, ec.fromVar(-1))
+				full := name
+				if strings.HasPrefix(name, "_AnsibleLazy") {
+					full = "ansible._internal._templating._lazy_containers." + name
+				}
+				return nil, fmt.Errorf("cannot use %s as a dict key (unhashable type: %s)", pyStrRepr(full), pyStrRepr(name))
+			case nil:
+				// Variable storage keeps a None key as its str().
+				k, isText = "None", true
+			}
+			if !isText {
+				k = keyText(elem)
 			}
 			if prev, ok := out.GetItem(k); ok && truthy(prev) {
 				if ds == "error" {
 					return nil, fmt.Errorf("Key %s is not unique, cannot convert to dict.", pyRepr(elem))
 				}
 			}
-			out.Set(k, item)
+			if isText {
+				out.Set(k, item)
+			} else {
+				out.SetTyped(k, Undeprecate(elem), item)
+			}
 		}
 		return out, nil
 	}
@@ -399,7 +423,7 @@ func registerExtraFilters(e *Engine) {
 		plain, err := vault.Decrypt(data, secret)
 		if err != nil {
 			return nil, &objError{pre: []string{"Unable to decrypt."}, msg: "Decryption failed (no vault secrets were found that could decrypt).",
-				value: pyShorten(data, 120)}
+				value: pyShorten(data, 120), at: ec.inputOrigin()}
 		}
 		return pyDecodeUTF8Replace(plain), nil
 	}
