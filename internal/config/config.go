@@ -44,6 +44,7 @@ type Config struct {
 	BecomeUser   string
 	PollInterval int
 	ModuleName   string
+	Verbosity    int // verbosity / ANSIBLE_VERBOSITY: where -v counts from
 
 	// Warnings are the configuration's own warnings (a world writable
 	// working directory's ansible.cfg, ignored).
@@ -269,6 +270,7 @@ func applyINI(cfg *Config, f *iniFile) {
 	str("defaults", "transport", func(v string) { cfg.Transport = v })
 	str("defaults", "module_name", func(v string) { cfg.ModuleName = v })
 	integer("defaults", "poll_interval", func(n int) { cfg.PollInterval = n })
+	integer("defaults", "verbosity", func(n int) { cfg.Verbosity = n })
 	str("privilege_escalation", "become_method", func(v string) { cfg.BecomeMethod = v })
 	str("privilege_escalation", "become_user", func(v string) { cfg.BecomeUser = v })
 	boolean("inventory", "inventory_unparsed_warning", &cfg.InventoryUnparsedWarning)
@@ -328,6 +330,11 @@ func applyEnvOverrides(cfg *Config) {
 	} {
 		if v := os.Getenv(env); v != "" {
 			*dst = v
+		}
+	}
+	if v := os.Getenv("ANSIBLE_VERBOSITY"); v != "" {
+		if n, ok := pyDecimalInt(v); ok {
+			cfg.Verbosity = n
 		}
 	}
 	if v := os.Getenv("ANSIBLE_POLL_INTERVAL"); v != "" {
