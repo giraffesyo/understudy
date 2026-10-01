@@ -552,8 +552,9 @@ than silently diverging. Known boundaries:
     found unambiguously (a stripped or non-CPython build) only the
     `major.minor` version is shown.
   - `setup`'s `ansible_python` facts describe the interpreter running
-    the module, named by its `sys.executable`; the type is always
-    `cpython` (a PyPy target would say `PyPy`).
+    the module, named by its `sys.executable`, its type
+    (`sys.implementation.name`: `cpython`, or `pypy`) read from its
+    `--version`.
   - Name lookup failures (`uri`, `get_url`, `mysql_*`) read as Python's
     `socket.gaierror`, worded by the target's C library (glibc, musl on
     Alpine, macOS). The lookup itself is Go's resolver, which applies a
