@@ -1,0 +1,36 @@
+---
+# An undefined value a variable's own template uses (a scalar's, an item
+# of a container's) fails the argument that reads it as ansible-core
+# raises it: where that template is, under the argument's error.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    d: {a: "{{ nope }}", b: 1}
+    l: ["{{ nope }}", 2]
+    s: "{{ nope }}"
+    nested: {x: {y: "{{ nope }}"}}
+  tasks:
+    - debug:
+        msg: "{{ s }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ d.a }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ l }}"
+      ignore_errors: true
+    - debug:
+        msg: "x {{ d }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ nested }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ d | to_json }}"
+      ignore_errors: true
+    - set_fact:
+        z: "{{ d }}"
+      ignore_errors: true
+    - debug:
+        msg: "{{ [s] }}"
+      ignore_errors: true

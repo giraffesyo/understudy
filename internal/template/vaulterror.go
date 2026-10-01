@@ -25,6 +25,20 @@ func AsVaultError(err error) (*VaultError, bool) {
 	return ve, ok
 }
 
+// UndefinedElsewhere reports an undefined value used by a template other
+// than the one at pos (a variable's own template, an item of a
+// variable's container): ansible-core raises it where that template is.
+func UndefinedElsewhere(err error, pos Position) (Position, bool) {
+	var ue *UndefinedError
+	if !errors.As(err, &ue) || ue.Pos.File == "" || ue.Pos.Line == 0 || ue.Pos.WholeFile {
+		return Position{}, false
+	}
+	if ue.Pos.File == pos.File && ue.Pos.Line == pos.Line && ue.Pos.Col == pos.Col {
+		return Position{}, false
+	}
+	return Position{File: ue.Pos.File, Line: ue.Pos.Line, Col: ue.Pos.Col}, true
+}
+
 // RenderingCause is a template error ansible-core shows as the rendering
 // error caused by another event (a value variable storage does not
 // support, an undecryptable variable): that event's message, its origin

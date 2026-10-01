@@ -109,6 +109,11 @@ func argTemplateError(task *playbook.Task, key string, pos template.Position, er
 		// cause keeps the file's origin.
 		chain.Inner = fmt.Sprintf("Error while resolving value for '%s'.", key)
 		chain.Root = &agentproto.ErrorChain{Inner: cause, InnerFile: file, InnerLine: line, InnerCol: col, InnerPathOnly: line == 0}
+	} else if at, ok := template.UndefinedElsewhere(err, pos); ok {
+		// An undefined value a variable's own template used: raised
+		// where that template is.
+		chain.Inner = fmt.Sprintf("Error while resolving value for '%s'.", key)
+		chain.Root = &agentproto.ErrorChain{Inner: cause, InnerFile: at.File, InnerLine: at.Line, InnerCol: at.Col}
 	} else if msg, at, value, ok := template.RenderingCause(err); ok {
 		// A value variable storage does not support (a timedelta, a
 		// method), shown apart as its own value, or one that cannot be
