@@ -560,10 +560,23 @@ than silently diverging. Known boundaries:
   payloads, `Using module file`, the variable manager's repeated ``Read
   `vars_file` `` lines, and SSH connection tracing (understudy's agent
   protocol runs no per-command `ssh`).
-- **Documented divergences**: regular expressions use
-  Go's RE2 (lookaround and backreferences in *patterns* are rejected with a
-  clear error rather than mis-matched),
-  iterated with Python's `re.sub`/`findall` match rules; a task that hits
+- **Regular expressions**: every pattern a playbook gives (the regex
+  filters and tests, `lineinfile`, `replace`, `blockinfile`, `find`,
+  `wait_for`, the `varnames` and `ini` lookups, `include_vars`, `~` host
+  patterns, inventory ignore patterns) runs on a port of CPython 3.14's
+  `re` (`internal/modules/pyre`, standard library only, so the agent
+  carries it too): its syntax (lookaround, backreferences, named groups,
+  conditionals, atomic groups and possessive quantifiers, inline and
+  scoped flags, `VERBOSE`), its Unicode classes and case folding, its
+  match iteration, replacement templates and `re.error` messages, checked
+  against vectors CPython generates. Shell patterns (`fileglob`, `find`,
+  `unarchive`, host patterns, `setup`'s `filter`) translate as
+  `fnmatch.translate` does. Not modeled: `\N{...}` knows the Latin,
+  Greek, punctuation, symbol, CJK and Hangul names but not all of
+  Unicode's; bytes patterns (`wait_for`'s `search_regex`, inventory
+  ignore patterns) run as `re.ASCII` str patterns over the bytes, which
+  accepts the `\u`/`\U`/`\N` escapes a bytes pattern rejects.
+- **Documented divergences**: a task that hits
   its `timeout` has the processes its module started killed — each command
   a module runs leads its own process group, so its background jobs and
   pipeline stages go with it, on the control node and (the agent being

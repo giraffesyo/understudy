@@ -3,10 +3,11 @@ package inventory
 import (
 	"errors"
 	"fmt"
-	"path"
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 // Match resolves a host pattern against the inventory. Terms are separated
@@ -98,17 +99,18 @@ func (inv *Inventory) matchTerm(term string) ([]string, error) {
 	if _, ok := inv.Hosts[term]; ok {
 		return []string{term}, nil
 	}
+	// _match_list: ~ starts a regular expression, anything else is an
+	// fnmatch pattern; names match from their start.
+	src := pyre.FnmatchTranslate(term)
 	if strings.HasPrefix(term, "~") {
-		return nil, fmt.Errorf("regex host patterns (~) are not supported yet")
+		src = term[1:]
 	}
-	isGlob := strings.ContainsAny(term, ".?*[")
-	match := func(name string) bool {
-		if name == term {
-			return true
-		}
-		ok, _ := path.Match(term, name)
-		return ok
+	re, err := pyre.Compile(src, 0)
+	if err != nil {
+		return nil, fmt.Errorf("Invalid host list pattern: %s", term)
 	}
+	isGlob := strings.HasPrefix(term, "~") || strings.ContainsAny(term, ".?*[")
+	match := func(name string) bool { return re.Match(name, 0, -1) != nil }
 	var out []string
 	matchedGroup := false
 	for _, gName := range inv.groupNamesInOrder() {

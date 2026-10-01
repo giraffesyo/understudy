@@ -204,7 +204,7 @@ func (inv *Inventory) addDynamicGroupNamed(name string) (*Group, error) {
 // groupNameFor is to_safe_group_name under TRANSFORM_INVALID_GROUP_CHARS
 // (silent: no warning).
 func (inv *Inventory) groupNameFor(name string, silent bool) string {
-	if !invalidGroupChars.MatchString(name) {
+	if invalidGroupChars.Search(name, 0, -1) == nil {
 		return name
 	}
 	switch inv.TransformGroupChars {
@@ -212,7 +212,7 @@ func (inv *Inventory) groupNameFor(name string, silent bool) string {
 		if inv.TransformGroupChars == "always" && !silent {
 			inv.warning("Invalid characters were found in group names and automatically replaced, use -vvvv to see details")
 		}
-		return invalidGroupChars.ReplaceAllString(name, "_")
+		return replaceInvalidGroupChars(name)
 	case "ignore":
 	default:
 		if !silent {

@@ -21,7 +21,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -30,6 +29,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
 	"github.com/giraffesyo/understudy/internal/modules/fsutil"
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 func init() {
@@ -179,7 +179,8 @@ func getURLModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 			}
 			checksum = found
 		}
-		checksum = strings.ToLower(regexp.MustCompile(`\W+`).ReplaceAllString(checksum, ""))
+		stripped, _ := nonWordRun.ReplaceAllString(checksum, "")
+		checksum = strings.ToLower(stripped)
 		if !isHexString(checksum) {
 			return failR("The checksum format is invalid")
 		}
@@ -365,8 +366,9 @@ func filenameFromDisposition(h string) string {
 }
 
 var (
-	bsdDigestLine = regexp.MustCompile(`^(\w+) ?\((?P<path>.+)\) ?= (?P<digest>[\w.]+)$`)
-	gnuDigestLine = regexp.MustCompile(`^(?P<digest>[\w.]+)\s+(\*|\./|\.)?(?P<path>.+)$`)
+	bsdDigestLine = pyre.MustCompile(`^(\w+) ?\((?P<path>.+)\) ?= (?P<digest>[\w.]+)$`, 0)
+	gnuDigestLine = pyre.MustCompile(`^(?P<digest>[\w.]+)\s+(\*|\./|\.)?(?P<path>.+)$`, 0)
+	nonWordRun    = pyre.MustCompile(`\W+`, 0)
 )
 
 // parseDigestLines is parse_digest_lines(): (digest, path) pairs.
@@ -376,10 +378,10 @@ func parseDigestLines(filename string, lines []string) [][2]string {
 		return append(out, [2]string{lines[0], filename})
 	}
 	for _, line := range lines {
-		if m := bsdDigestLine.FindStringSubmatch(line); m != nil {
-			out = append(out, [2]string{m[3], m[2]})
-		} else if m := gnuDigestLine.FindStringSubmatch(line); m != nil {
-			out = append(out, [2]string{m[1], strings.TrimLeft(m[3], "./")})
+		if m := bsdDigestLine.Match(line, 0, -1); m != nil {
+			out = append(out, [2]string{line[m[6]:m[7]], line[m[4]:m[5]]})
+		} else if m := gnuDigestLine.Match(line, 0, -1); m != nil {
+			out = append(out, [2]string{line[m[2]:m[3]], strings.TrimLeft(line[m[6]:m[7]], "./")})
 		}
 	}
 	return out

@@ -738,13 +738,12 @@ func lookupVarnames(_ *Runner, ec *template.EvalCtx, terms []any, _ map[string]a
 	sort.Strings(names)
 	var out []any
 	for _, pat := range termStrings(terms) {
-		re, err := regexp.Compile(pat)
+		re, err := template.PyRegexCompile(pat)
 		if err != nil {
-			return nil, fmt.Errorf("Unable to use %q as a search parameter: %v", pat, err)
+			return nil, fmt.Errorf("Unable to use \"%s\" as a search parameter: %v", pat, err)
 		}
 		for _, n := range names {
-			// Python re.search semantics.
-			if re.MatchString(n) {
+			if re.Search(n, 0, -1) != nil {
 				out = append(out, n)
 			}
 		}
@@ -777,7 +776,7 @@ func lookupIni(r *Runner, ec *template.EvalCtx, terms []any, kw map[string]any) 
 			sec = values[""]
 		}
 		if truthyArg(opts["re"]) {
-			re, err := regexp.Compile(key)
+			re, err := template.PyRegexCompile(key)
 			if err != nil {
 				return nil, err
 			}
@@ -787,7 +786,7 @@ func lookupIni(r *Runner, ec *template.EvalCtx, terms []any, kw map[string]any) 
 			}
 			sort.Strings(keys)
 			for _, k := range keys {
-				if re.MatchString(k) {
+				if re.Match(k, 0, -1) != nil { // re.match
 					out = append(out, sec[k])
 				}
 			}

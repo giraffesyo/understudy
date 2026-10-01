@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 	"github.com/giraffesyo/understudy/internal/omap"
 	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -167,15 +168,16 @@ func unfrackPath(p string) string {
 	return p
 }
 
-func ignoredRegexp(o Options) *regexp.Regexp {
+func ignoredRegexp(o Options) *pyre.Pattern {
+	// IGNORED: one bytes pattern, searched in each entry's name.
 	parts := []string{`^\.`, `^host_vars$`, `^group_vars$`, `^vars_plugins$`}
 	parts = append(parts, o.IgnorePatterns...)
 	for _, ext := range o.IgnoreExts {
-		parts = append(parts, regexp.QuoteMeta(ext)+`$`)
+		parts = append(parts, pyre.Escape(ext)+`$`)
 	}
-	re, err := regexp.Compile(strings.Join(parts, "|"))
+	re, err := pyre.CompileBytes([]byte(strings.Join(parts, "|")), 0)
 	if err != nil {
-		return regexp.MustCompile(`^\.|^host_vars$|^group_vars$|^vars_plugins$`)
+		return pyre.MustCompile(`^\.|^host_vars$|^group_vars$|^vars_plugins$`, 0)
 	}
 	return re
 }
@@ -183,7 +185,7 @@ func ignoredRegexp(o Options) *regexp.Regexp {
 type loader struct {
 	inv     *Inventory
 	o       Options
-	ignored *regexp.Regexp
+	ignored *pyre.Pattern
 	// processed are the sources parsed so far (InventoryData's
 	// processed_sources).
 	processed []string
@@ -208,7 +210,7 @@ func (l *loader) parseSource(src string) (bool, error) {
 		sort.Strings(names)
 		parsed := false
 		for _, name := range names {
-			if l.ignored.MatchString(name) {
+			if l.ignored.Search(pyre.Latin1([]byte(name)), 0, -1) != nil {
 				continue
 			}
 			ok, err := l.parseSource(filepath.Join(src, name))

@@ -6,8 +6,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-
-	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 // registerAnsibleTests installs match/search/version and the task-result
@@ -15,9 +13,9 @@ import (
 func registerAnsibleTests(e *Engine) {
 	t := e.Tests
 
-	t["match"] = regexTest(true)
-	t["search"] = regexTest(false)
-	t["regex"] = regexTest(false)
+	t["match"] = regexTest("match")
+	t["search"] = regexTest("search")
+	t["regex"] = regexTest("")
 
 	// version_compare(value, version, operator='eq', strict=None,
 	// version_type=None)
@@ -201,31 +199,44 @@ func registerAnsibleTests(e *Engine) {
 	}
 }
 
-func regexTest(anchored bool) TestFunc {
+// regexTest is ansible's regex(value, pattern=”, ignorecase=False,
+// multiline=False, match_type) test: re.compile(pattern, flags) and its
+// search, match or fullmatch (match_type is regex's own argument).
+func regexTest(matchType string) TestFunc {
 	return func(ec *EvalCtx, in any, args []any) (bool, error) {
-		s, ok := asString(in)
-		if !ok {
-			return false, fmt.Errorf("regex tests require a string, got %s", typeName(in))
+		arg := func(i int, name string) (any, bool) {
+			return filterArg(args, i, ec.testKwargs, name)
 		}
-		pattern := ""
-		if len(args) > 0 {
-			pattern, _ = asString(args[0])
-		} else if p, ok := ec.testKwargs["pattern"]; ok {
-			pattern, _ = asString(p)
+		mt := matchType
+		if mt == "" {
+			mt = "search"
+			if v, ok := arg(3, "match_type"); ok {
+				mt, _ = asString(Undeprecate(v))
+				switch mt {
+				case "search", "match", "fullmatch":
+				default:
+					return false, errors.New("Invalid match_type specified. Expected one of: search, match, fullmatch.")
+				}
+			}
 		}
-		ignorecase := len(args) > 1 && truthy(args[1])
-		if msg := pyre.SyntaxError(pattern); msg != "" {
-			return false, errors.New(msg) // re.error
+		s := regexSubject(in)
+		var pattern any = ""
+		if v, ok := arg(0, "pattern"); ok {
+			pattern = v
 		}
-		if anchored {
-			// Python re.match anchors at the start only.
-			pattern = `\A(?:` + pattern + `)`
-		}
-		re, err := pyRegexCompile(pattern, ignorecase, false)
+		ic, _ := arg(1, "ignorecase")
+		ml, _ := arg(2, "multiline")
+		re, err := pyRegexCompile(pattern, truthy(ic), truthy(ml))
 		if err != nil {
 			return false, err
 		}
-		return re.MatchString(s), nil
+		switch mt {
+		case "match":
+			return re.Match(s, 0, -1) != nil, nil
+		case "fullmatch":
+			return re.FullMatch(s, 0, -1) != nil, nil
+		}
+		return re.Search(s, 0, -1) != nil, nil
 	}
 }
 

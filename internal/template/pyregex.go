@@ -3,178 +3,158 @@ package template
 import (
 	"errors"
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
-// Python regex compatibility layer. Go's regexp is RE2; Python's re is not.
-// Translatable constructs are translated; untranslatable ones (lookaround,
-// backreferences in patterns) are rejected loudly — failing clearly beats
-// silently matching differently.
+// The regex filters and tests run Python's re (the pyre port): its syntax
+// (lookaround, backreferences, named groups, conditionals, possessive
+// quantifiers, atomic groups), its matching, its replacement templates
+// and its re.error messages.
 
-// pyRegexCompile compiles a Python-syntax pattern, rejecting
-// RE2-unsupported constructs with actionable errors.
-func pyRegexCompile(pattern string, ignorecase, multiline bool) (*regexp.Regexp, error) {
-	if msg := pyre.SyntaxError(pattern); msg != "" {
-		return nil, errors.New(msg) // re.error
+// pyRegexCompile is re.compile(pattern, flags) with the filters' ignorecase
+// and multiline switches; a pattern that is not a str fails as re.compile
+// does.
+func pyRegexCompile(pattern any, ignorecase, multiline bool) (*pyre.Pattern, error) {
+	p, ok := asString(Undeprecate(pattern))
+	if !ok {
+		return nil, &pyTypeError{"first argument must be string or compiled pattern"}
 	}
-	if err := checkUnsupported(pattern); err != nil {
-		return nil, err
-	}
-	flags := ""
+	var flags pyre.Flag
 	if ignorecase {
-		flags += "i"
+		flags |= pyre.IGNORECASE
 	}
 	if multiline {
-		flags += "m"
+		flags |= pyre.MULTILINE
 	}
-	if flags != "" {
-		pattern = "(?" + flags + ")" + pattern
-	}
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil, fmt.Errorf("invalid regular expression %q: %v", pattern, err)
-	}
-	return re, nil
+	return pyre.Compile(p, flags)
 }
 
-func checkUnsupported(pattern string) error {
-	// Scan outside character classes for (?= (?! (?<= (?<! and \1..\9 and (?P=name).
-	inClass := false
-	for i := 0; i < len(pattern); i++ {
-		c := pattern[i]
-		switch {
-		case c == '\\' && i+1 < len(pattern):
-			next := pattern[i+1]
-			if next >= '1' && next <= '9' && !inClass {
-				return fmt.Errorf("pattern uses backreference \\%c, which is not supported by this regex engine", next)
-			}
-			i++ // skip escaped char
-		case c == '[' && !inClass:
-			inClass = true
-		case c == ']' && inClass:
-			inClass = false
-		case c == '(' && !inClass && i+2 < len(pattern) && pattern[i+1] == '?':
-			rest := pattern[i+2:]
-			switch {
-			case strings.HasPrefix(rest, "="), strings.HasPrefix(rest, "!"):
-				return fmt.Errorf("pattern uses lookahead ('(?=' or '(?!'), which is not supported by this regex engine")
-			case strings.HasPrefix(rest, "<=") || strings.HasPrefix(rest, "<!"):
-				return fmt.Errorf("pattern uses lookbehind, which is not supported by this regex engine")
-			case strings.HasPrefix(rest, "P="):
-				return fmt.Errorf("pattern uses a named backreference '(?P=...)', which is not supported by this regex engine")
-			}
-		}
+// regexSubject is to_text(value, nonstring='simplerepr'): a str as it is,
+// anything else as its str().
+func regexSubject(in any) string {
+	if s, ok := asString(in); ok {
+		return s
 	}
-	return nil
+	return toStr(in)
 }
 
 // registerRegexFilters installs regex_replace/search/findall/escape.
 func registerRegexFilters(e *Engine) {
 	f := e.Filters
 
+	// regex_replace(value='', pattern='', replacement='', ignorecase=False,
+	// multiline=False, count=0, mandatory_count=0): re.subn.
 	f["regex_replace"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, ok := asString(in)
-		if !ok {
-			s = toStr(in)
-		}
-		// regex_replace(value='', pattern='', replacement='', ...).
-		pattern := ""
-		if len(args) > 0 {
-			pattern, _ = asString(args[0])
-		} else if p, ok := kwargs["pattern"]; ok {
-			pattern, _ = asString(p)
+		s := regexSubject(in)
+		var pattern any = ""
+		if v, ok := filterArg(args, 0, kwargs, "pattern"); ok {
+			pattern = v
 		}
 		repl := ""
-		if len(args) > 1 {
-			repl, _ = asString(args[1])
+		if v, ok := filterArg(args, 1, kwargs, "replacement"); ok {
+			r, isStr := asString(Undeprecate(v))
+			if !isStr {
+				return nil, &pyTypeError{fmt.Sprintf("expected str instance, %s found", pyClassName(v, false))}
+			}
+			repl = r
 		}
-		re, err := pyRegexCompile(pattern, truthy(kwargs["ignorecase"]), truthy(kwargs["multiline"]))
+		ic, _ := filterArg(args, 2, kwargs, "ignorecase")
+		ml, _ := filterArg(args, 3, kwargs, "multiline")
+		re, err := pyRegexCompile(pattern, truthy(ic), truthy(ml))
 		if err != nil {
 			return nil, err
 		}
-		count := -1
-		if c, ok := kwargs["count"]; ok {
-			if n, isInt := asInt(c); isInt && n > 0 {
-				count = int(n)
+		count := int64(0)
+		if c, ok := filterArg(args, 4, kwargs, "count"); ok {
+			n, isInt := asInt(Undeprecate(c))
+			if !isInt {
+				return nil, &pyTypeError{fmt.Sprintf("'%s' object cannot be interpreted as an integer", pyClassName(c, false))}
+			}
+			count = n
+		}
+		var out string
+		var subs int
+		if count < 0 {
+			// re.subn with a negative count replaces nothing (the
+			// template is still parsed).
+			if _, _, err := re.Sub(repl, "", 1); err != nil {
+				return nil, err
+			}
+			out = s
+		} else if out, subs, err = re.Sub(repl, s, int(count)); err != nil {
+			return nil, err
+		}
+		if mc, ok := filterArg(args, 5, kwargs, "mandatory_count"); ok && truthy(mc) {
+			n, _ := asInt(Undeprecate(mc))
+			if n != int64(subs) {
+				return nil, fmt.Errorf("'%s' should match %d times, but matches %d times in '%s'", re.Pattern(), n, count, s)
 			}
 		}
-		// re.subn parses the replacement template before matching.
-		parts, err := pyre.ParseTemplate(re, repl)
-		if err != nil {
-			return nil, err
-		}
-		var b strings.Builder
-		last := 0
-		for _, m := range pyre.FindAllSubmatchIndex(re, s, count) {
-			b.WriteString(s[last:m[0]])
-			b.WriteString(pyre.ExpandTemplate(parts, s, m))
-			last = m[1]
-		}
-		b.WriteString(s[last:])
-		return b.String(), nil
+		return out, nil
 	}
 
+	// regex_search(value, regex, *args, **kwargs): re.search, the whole
+	// match or the groups named by \g<name> and \N arguments.
 	f["regex_search"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, ok := asString(in)
-		if !ok {
-			s = toStr(in)
-		}
+		s := regexSubject(in)
 		if len(args) < 1 {
 			return nil, fmt.Errorf("regex_search requires a pattern")
 		}
-		pattern, _ := asString(args[0])
 		// The group arguments are read first: \g<name> or \N.
-		type groupRef struct {
-			name string
-			num  int
-		}
-		var groups []groupRef
+		var groups []any
 		for _, g := range args[1:] {
-			gs, isStr := asString(g)
+			gs, isStr := asString(Undeprecate(g))
 			if !isStr {
 				return nil, fmt.Errorf("'%s' object has no attribute 'startswith'", pyClassName(g, false))
 			}
 			switch {
 			case strings.HasPrefix(gs, `\g`):
-				m := regexp.MustCompile(`^\\g<(\S+)>`).FindStringSubmatch(gs)
+				m := groupNameArg.Match(gs, 0, -1)
 				if m == nil {
 					return nil, fmt.Errorf("'NoneType' object has no attribute 'group'")
 				}
-				groups = append(groups, groupRef{name: m[1], num: -1})
+				groups = append(groups, gs[m[2]:m[3]])
 			case strings.HasPrefix(gs, `\`):
-				m := regexp.MustCompile(`^\\(\d+)`).FindStringSubmatch(gs)
+				m := groupNumArg.Match(gs, 0, -1)
 				if m == nil {
 					return nil, fmt.Errorf("'NoneType' object has no attribute 'group'")
 				}
-				n, _ := strconv.Atoi(m[1])
-				groups = append(groups, groupRef{num: n})
+				n, err := pyIntLiteral(gs[m[2]:m[3]])
+				if err != nil {
+					return nil, err
+				}
+				groups = append(groups, n)
 			default:
 				return nil, fmt.Errorf("Unknown argument")
 			}
 		}
-		re, err := pyRegexCompile(pattern, truthy(kwargs["ignorecase"]), truthy(kwargs["multiline"]))
+		re, err := pyRegexCompile(args[0], truthy(kwargs["ignorecase"]), truthy(kwargs["multiline"]))
 		if err != nil {
 			return nil, err
 		}
-		m := re.FindStringSubmatchIndex(s)
+		m := re.Search(s, 0, -1)
 		if m == nil {
-			return nil, nil // Ansible returns None on no match
+			return nil, nil // None on no match
 		}
 		if len(groups) == 0 {
 			return s[m[0]:m[1]], nil
 		}
 		out := make([]any, 0, len(groups))
 		for _, g := range groups {
-			idx := g.num
-			if g.num < 0 {
-				idx = re.SubexpIndex(g.name)
+			idx := -1
+			switch t := g.(type) {
+			case string:
+				idx = re.SubexpIndex(t)
+			case int64:
+				if t >= 0 && t <= int64(re.Groups()) {
+					idx = int(t)
+				}
 			}
-			if idx < 0 || 2*idx+1 >= len(m) {
-				return nil, fmt.Errorf("no such group")
+			if idx < 0 {
+				return nil, errors.New("no such group") // IndexError
 			}
 			if m[2*idx] < 0 {
 				out = append(out, nil)
@@ -185,60 +165,47 @@ func registerRegexFilters(e *Engine) {
 		return out, nil
 	}
 
+	// regex_findall(value, regex, multiline=False, ignorecase=False):
+	// re.findall.
 	f["regex_findall"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, ok := asString(in)
+		s := regexSubject(in)
+		pattern, ok := filterArg(args, 0, kwargs, "regex")
 		if !ok {
-			s = toStr(in)
-		}
-		if len(args) < 1 {
 			return nil, fmt.Errorf("regex_findall requires a pattern")
 		}
-		pattern, _ := asString(args[0])
-		re, err := pyRegexCompile(pattern, truthy(kwargs["ignorecase"]), truthy(kwargs["multiline"]))
+		ml, _ := filterArg(args, 1, kwargs, "multiline")
+		ic, _ := filterArg(args, 2, kwargs, "ignorecase")
+		re, err := pyRegexCompile(pattern, truthy(ic), truthy(ml))
 		if err != nil {
 			return nil, err
 		}
 		out := []any{}
-		for _, idx := range pyre.FindAllSubmatchIndex(re, s, -1) {
-			m := make([]string, len(idx)/2)
-			for i := range m {
-				if idx[2*i] >= 0 {
-					m[i] = s[idx[2*i]:idx[2*i+1]]
-				}
-			}
-			switch {
-			case len(m) == 1:
-				out = append(out, m[0])
-			case len(m) == 2:
-				// One capture group: Python findall returns just the group.
-				out = append(out, m[1])
-			default:
-				groups := make([]any, len(m)-1)
-				for i, g := range m[1:] {
+		for _, item := range re.FindAll(s) {
+			if t, isTuple := item.([]string); isTuple {
+				groups := make([]any, len(t))
+				for i, g := range t {
 					groups[i] = g
 				}
-				out = append(out, groups)
+				item = groups
 			}
+			out = append(out, item)
 		}
 		return out, nil
 	}
 
 	f["regex_escape"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, ok := asString(in)
-		if !ok {
-			s = toStr(in)
-		}
+		s := regexSubject(in)
 		reType := "python"
-		if len(args) > 0 {
-			reType = toStr(args[0])
-		} else if t, ok := kwargs["re_type"]; ok {
-			reType = toStr(t)
+		if v, ok := filterArg(args, 0, kwargs, "re_type"); ok {
+			reType = toStr(v)
 		}
 		switch reType {
 		case "python":
-			return pyReEscape(s), nil
+			return pyre.Escape(s), nil
 		case "posix_basic":
-			return regexp.MustCompile(`([].[^$*\\])`).ReplaceAllString(s, `\$1`), nil
+			// re.sub(r'([].[^$*\\])', r'\\\1', string)
+			out, err := posixBasicSpecial.ReplaceAllString(s, `\\\1`)
+			return out, err
 		case "posix_extended":
 			return nil, fmt.Errorf("Regex type (%s) not yet implemented", reType)
 		}
@@ -246,21 +213,41 @@ func registerRegexFilters(e *Engine) {
 	}
 }
 
-// pyReEscape is Python's re.escape: each regex-special character (and
-// whitespace, '#', '&', '~', '-') backslash-escaped.
-func pyReEscape(s string) string {
-	var b strings.Builder
+var (
+	groupNameArg      = pyre.MustCompile(`\\g<(\S+)>`, 0)
+	groupNumArg       = pyre.MustCompile(`\\(\d+)`, 0)
+	posixBasicSpecial = pyre.MustCompile(`([].[^$*\\])`, 0)
+)
+
+// pyIntLiteral is int(s) of a decimal digit string (\d matches every
+// Unicode decimal digit, which int() reads too).
+func pyIntLiteral(s string) (int64, error) {
+	var n int64
 	for _, r := range s {
-		if strings.ContainsRune("()[]{}?*+-|^$\\.&~# \t\n\r\v\f", r) {
-			b.WriteByte('\\')
+		d := unicodeDecimal(r)
+		if d < 0 {
+			return 0, fmt.Errorf("invalid literal for int() with base 10: %s", pyStrRepr(s))
 		}
-		b.WriteRune(r)
+		n = n*10 + int64(d)
 	}
-	return b.String()
+	return n, nil
 }
 
-// PyRegexCompile is pyRegexCompile for other packages (include_vars'
-// files_matching / ignore_files patterns).
-func PyRegexCompile(pattern string) (*regexp.Regexp, error) {
-	return pyRegexCompile(pattern, false, false)
+// PyRegexCompile is re.compile(pattern) for other packages (include_vars'
+// files_matching / ignore_files patterns, the varnames lookup).
+func PyRegexCompile(pattern string) (*pyre.Pattern, error) {
+	return pyre.Compile(pattern, 0)
+}
+
+// unicodeDecimal is a decimal digit's value (unicodedata.decimal), or -1:
+// Unicode's decimal digits come in runs of ten, zero first.
+func unicodeDecimal(r rune) int {
+	if !unicode.Is(unicode.Nd, r) {
+		return -1
+	}
+	start := r
+	for start > 0 && unicode.Is(unicode.Nd, start-1) {
+		start--
+	}
+	return int(r-start) % 10
 }
