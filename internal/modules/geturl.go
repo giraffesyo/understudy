@@ -468,6 +468,8 @@ func (r *getURLRun) urlGet(rawURL, dest string, lastMod time.Time, force bool, m
 			}
 			return "", nil, r.fail(msg, map[string]any{"elapsed": r.elapsed()})
 		}
+	} else if d := r.env.moduleTmpdir(); d != "" {
+		tmpDest = d
 	} else {
 		if r.tmpdir == "" {
 			_, dir, err := transferDir(r.env, "~/.ansible/tmp")

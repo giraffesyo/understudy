@@ -279,7 +279,7 @@ func uriModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 
 	if r != nil && hasDest {
 		if statusOK && status != 304 {
-			if fail := uriWriteFile(dest, content, resp); fail != nil {
+			if fail := uriWriteFile(env, dest, content, resp); fail != nil {
 				return fail
 			}
 			fa := loadFileAttrs(p, dest, false)
@@ -465,7 +465,7 @@ func sortedMapKeys(m map[string]any) []string {
 
 // uriWriteFile is the module's write_file: the content lands in a temp
 // file first and replaces dest only when its checksum differs.
-func uriWriteFile(dest string, content []byte, resp map[string]any) *agentproto.Result {
+func uriWriteFile(env *RunEnv, dest string, content []byte, resp map[string]any) *agentproto.Result {
 	fail := func(msg string) *agentproto.Result {
 		if m, _ := resp["msg"].(string); m != "" {
 			msg += " " + m
@@ -475,7 +475,7 @@ func uriWriteFile(dest string, content []byte, resp map[string]any) *agentproto.
 		res.Msg = msg
 		return res
 	}
-	tmp, err := os.CreateTemp("", "tmp")
+	tmp, err := env.tempFileIn()
 	if err != nil {
 		return fail("Failed to create temporary content file: " + pyOSErrorStr(err))
 	}

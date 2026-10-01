@@ -67,6 +67,13 @@ type RunEnv struct {
 	// StageDir is where an unprivileged become user's transferred files
 	// are reported (see transferDir).
 	StageDir string
+	// ModuleRemoteTmp is remote_tmp when the module got no tmpdir of its
+	// own (an unprivileged become user): see moduleTmpdir.
+	ModuleRemoteTmp string
+
+	modTmp      string
+	modTmpMade  bool
+	modWarnings []string
 
 	// Ctx is the run's context (nil = never cancelled): a task that
 	// timed out cancels it, and the processes the module started
@@ -187,8 +194,10 @@ func RunContext(ctx context.Context, req *agentproto.TaskRequest, payload io.Rea
 		LoginUID:          req.LoginUID,
 		LoginGID:          req.LoginGID,
 		StageDir:          req.StageDir,
+		ModuleRemoteTmp:   req.ModuleRemoteTmp,
 		Ctx:               ctx,
 	}
+	env.moduleSetCwd()
 	_, copyAction := req.Args[copyActionKey]
 	args := req.Args
 	var aliasWarnings []string
@@ -203,6 +212,7 @@ func RunContext(ctx context.Context, req *agentproto.TaskRequest, payload io.Rea
 	if res == nil {
 		res = agentproto.Fail("module %s returned no result", req.Module)
 	}
+	env.moduleCleanup(res)
 	if len(aliasWarnings) > 0 {
 		warnings := make([]any, 0, len(aliasWarnings))
 		for _, w := range aliasWarnings {

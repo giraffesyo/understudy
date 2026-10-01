@@ -58,7 +58,16 @@ type TaskRequest struct {
 	// in when an unprivileged become user runs the module (made by the
 	// login user in a system temp dir), "" otherwise.
 	StageDir string `json:"stage_dir,omitempty"`
+	// ModuleRemoteTmp is remote_tmp when the module gets no temporary
+	// directory from the action (an unprivileged become user): the module
+	// makes its own there on first use, as AnsibleModule.tmpdir does.
+	ModuleRemoteTmp string `json:"module_remote_tmp,omitempty"`
 }
+
+// StagedPayload is the name the login user stages an unprivileged become
+// user's transferred file under in StageDir, before the module names it
+// as the action would.
+const StagedPayload = ".understudy-payload"
 
 // Result is the outcome of one module invocation. Its shape mirrors
 // Ansible's task result: well-known fields are typed, module-specific keys

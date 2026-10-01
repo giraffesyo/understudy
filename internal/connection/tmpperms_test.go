@@ -71,7 +71,7 @@ func TestFixupPermsChain(t *testing.T) {
 	paths := []string{"/var/tmp/ansible-tmp-1/", "/var/tmp/ansible-tmp-1/AnsiballZ_command.py"}
 
 	// Nothing works: the error carries the last command's exact stderr.
-	err := fixupPerms(ctx, stubConn{NewLocal(), fixupStubs(t)}, "", paths, spec(ShellOptions{RemoteUser: "deploy"}))
+	err := fixupPerms(ctx, stubConn{NewLocal(), fixupStubs(t)}, "", nil, paths, spec(ShellOptions{RemoteUser: "deploy"}))
 	want := "Failed to set permissions on the temporary files Ansible needs to create when becoming an unprivileged user " +
 		"(rc: 1, err: chmod: invalid mode: 'A+user:app:rx:allow'\nTry 'chmod --help' for more information.\n}). " +
 		"For information on working around this, see " + privilegeLink + "#risks-of-becoming-an-unprivileged-user"
@@ -81,13 +81,13 @@ func TestFixupPermsChain(t *testing.T) {
 
 	// ACLs, then chown, are enough.
 	for _, ok := range []string{"setfacl", "chown"} {
-		if err := fixupPerms(ctx, stubConn{NewLocal(), fixupStubs(t, ok)}, "", paths, spec(ShellOptions{RemoteUser: "deploy"})); err != nil {
+		if err := fixupPerms(ctx, stubConn{NewLocal(), fixupStubs(t, ok)}, "", nil, paths, spec(ShellOptions{RemoteUser: "deploy"})); err != nil {
 			t.Errorf("%s: %v", ok, err)
 		}
 	}
 
 	// A privileged remote user whose chown failed is an error.
-	err = fixupPerms(ctx, stubConn{NewLocal(), fixupStubs(t)}, "", paths, spec(ShellOptions{RemoteUser: "root"}))
+	err = fixupPerms(ctx, stubConn{NewLocal(), fixupStubs(t)}, "", nil, paths, spec(ShellOptions{RemoteUser: "root"}))
 	if err == nil || !strings.HasPrefix(err.Error(), "Failed to change ownership of the temporary files") {
 		t.Errorf("admin: %v", err)
 	}
@@ -96,12 +96,12 @@ func TestFixupPermsChain(t *testing.T) {
 	// its warning.
 	var warned []string
 	sh := ShellOptions{RemoteUser: "deploy", CommonRemoteGroup: "nogroup", Warn: func(m string) { warned = append(warned, m) }}
-	err = fixupPerms(ctx, stubConn{NewLocal(), fixupStubs(t)}, "", paths, spec(sh))
+	err = fixupPerms(ctx, stubConn{NewLocal(), fixupStubs(t)}, "", nil, paths, spec(sh))
 	if err == nil || !strings.Contains(err.Error(), "err: chgrp: invalid group: 'nogroup'\n})") {
 		t.Errorf("common group: %v", err)
 	}
 	sh.WorldReadableTemp = true
-	if err := fixupPerms(ctx, stubConn{NewLocal(), fixupStubs(t, "chmod a+rx")}, "", paths, spec(sh)); err != nil {
+	if err := fixupPerms(ctx, stubConn{NewLocal(), fixupStubs(t, "chmod a+rx")}, "", nil, paths, spec(sh)); err != nil {
 		t.Errorf("world-readable: %v", err)
 	}
 	if len(warned) != 1 || !strings.HasPrefix(warned[0], "Using world-readable permissions") {
@@ -109,7 +109,7 @@ func TestFixupPermsChain(t *testing.T) {
 	}
 
 	// The prep command runs first; its failure stops the chain.
-	err = fixupPerms(ctx, stubConn{NewLocal(), fixupStubs(t, "setfacl")}, "exit 3", paths, spec(ShellOptions{}))
+	err = fixupPerms(ctx, stubConn{NewLocal(), fixupStubs(t, "setfacl")}, "exit 3", nil, paths, spec(ShellOptions{}))
 	if err == nil || !strings.Contains(err.Error(), "rc: 3") {
 		t.Errorf("prep: %v", err)
 	}

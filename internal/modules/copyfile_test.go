@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/giraffesyo/understudy/internal/agentproto"
 )
 
 func TestPySplitExt(t *testing.T) {
@@ -50,6 +52,22 @@ func TestStagePayloadLoginHome(t *testing.T) {
 	defer os.RemoveAll(dir)
 	if filepath.Dir(dir) != filepath.Join(home, ".ansible", "tmp") || report != filepath.Join(dir, ".source") {
 		t.Errorf("staged in %q (reported %q), want under %s/.ansible/tmp", dir, report, home)
+	}
+}
+
+// A file the login user staged where the module may write (a common
+// group's rwx) is used in place, named as the action names it.
+func TestStagePayloadStagedByLogin(t *testing.T) {
+	stage := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stage, agentproto.StagedPayload), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir, report, src, err := stagePayload(&RunEnv{StageDir: stage}, []byte("x"), ".txt", "~/.ansible/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(stage, ".source.txt"); dir != "" || report != want || src != want {
+		t.Errorf("staged (%q, %q, %q), want the file renamed to %s", dir, report, src, want)
 	}
 }
 
