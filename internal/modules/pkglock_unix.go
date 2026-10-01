@@ -10,7 +10,7 @@ import (
 // lockPackageManager takes an exclusive host-wide lock around package
 // manager runs; it degrades to no locking if the lock file is unusable.
 func lockPackageManager() func() {
-	f, err := os.OpenFile(os.TempDir()+"/understudy-pkg.lock", os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(pkgLockPath(), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return func() {}
 	}

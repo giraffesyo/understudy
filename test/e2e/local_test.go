@@ -1025,6 +1025,45 @@ func TestParallelBlockOptIn(t *testing.T) {
 	}
 }
 
+// TestParallelBlockPackageManagers: package managers that commands in a
+// parallel block run by name (directly, through a shell, or from a
+// script they run) take the package lock, so they never overlap.
+func TestParallelBlockPackageManagers(t *testing.T) {
+	dir := t.TempDir()
+	fake := "#!/bin/sh\nif ! mkdir " + dir + "/busy 2>/dev/null; then echo overlap >> " + dir + "/overlap; fi\n" +
+		"sleep 1\nrmdir " + dir + "/busy\necho \"$0 $*\" >> " + dir + "/ran\n"
+	for _, n := range []string{"apt-get", "dnf"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte(fake), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := filepath.Join(dir, "install.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ndnf install -y thing\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	code, out, _ := run(t, `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - vars: {understudy_parallel: true}
+      block:
+        - command: apt-get update
+        - shell: apt-get install -y a && echo done
+        - command: `+script+`
+`, executor.Options{})
+	if code != 0 {
+		t.Fatalf("exit=%d\n%s", code, out)
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "overlap")); err == nil {
+		t.Errorf("package managers overlapped: %s", data)
+	}
+	ran, _ := os.ReadFile(filepath.Join(dir, "ran"))
+	if n := strings.Count(string(ran), "\n"); n != 3 {
+		t.Errorf("ran %d package manager commands:\n%s", n, ran)
+	}
+}
+
 // TestTimedOutCommandIsKilled: a task that times out is abandoned, and
 // the processes its in-process module started (the command's whole
 // process group) are killed with it rather than left running (so their

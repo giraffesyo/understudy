@@ -192,10 +192,14 @@ runs its direct tasks at the same time (a nested block is one unit and runs
 in order). Execution continues once all of them finish. Use it only for
 independent work, because siblings keep running when one fails; the block's
 `rescue`/`always` still see the failure afterwards.
-Package tasks understudy runs are serialized host-wide (dnf and apt only
-lock the final transaction, not their download cache), but a shell script
-that calls `dnf`/`apt` itself is not covered: don't run two such things in
-the same parallel block.
+Package managers never run at the same time on a host (dnf and apt only
+lock the final transaction, not their download cache): package tasks take
+a host-wide lock, and so does a package manager (`apt`, `apt-get`, `dnf`,
+`yum`, `rpm`, `apk`, ...) that a `command`, `shell` or `script` in a
+parallel block runs by name, scripts it calls included: the command's
+`PATH` leads with a directory of shims that take the lock and run the
+real program. One run by its full path (`/usr/bin/dnf`), or through
+`sudo` (whose `secure_path` drops the shims), is not covered.
 
 ```yaml
 - name: build and install independently

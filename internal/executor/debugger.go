@@ -85,8 +85,8 @@ type debugSession struct {
 	// updated is task_vars as update_task templated the task with
 	// (nil: not updated): a redo runs the task as loaded, with them.
 	updated map[string]any
-	lastcmd  string
-	out      io.Writer
+	lastcmd string
+	out     io.Writer
 }
 
 func (r *Runner) debugIn() *bufio.Reader {

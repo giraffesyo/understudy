@@ -2273,6 +2273,7 @@ func (r *Runner) actionContext(ctx context.Context, host string, task *playbook.
 		Diff:          r.effectiveDiff(play, task),
 		Background:    task.Async > 0,
 		AsyncTimeout:  task.Async,
+		InParallel:    r.inParallel(task),
 		BaseDir:       r.Opts.BaseDir,
 		SrcDir:        task.SrcDir,
 		TaskDir:       taskDir(task),
@@ -3717,6 +3718,18 @@ func (r *Runner) parallelBlock(task *playbook.Task) (playbook.BlockRef, int, boo
 		}
 	}
 	return playbook.BlockRef{}, 0, false
+}
+
+// inParallel reports whether task runs inside a running parallel block.
+func (r *Runner) inParallel(task *playbook.Task) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ref := range task.Blocks {
+		if ref.Parallel && r.parallelActive[ref.ID] {
+			return true
+		}
+	}
+	return false
 }
 
 func hasBlockRef(t *playbook.Task, id, level int) bool {

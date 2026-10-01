@@ -62,6 +62,9 @@ type TaskRequest struct {
 	// directory from the action (an unprivileged become user): the module
 	// makes its own there on first use, as AnsibleModule.tmpdir does.
 	ModuleRemoteTmp string `json:"module_remote_tmp,omitempty"`
+	// PkgShim: package managers the module's commands run take the
+	// host-wide package lock (a command in a parallel block).
+	PkgShim bool `json:"pkg_shim,omitempty"`
 }
 
 // StagedPayload is the name the login user stages an unprivileged become

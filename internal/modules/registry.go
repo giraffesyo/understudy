@@ -70,7 +70,11 @@ type RunEnv struct {
 	// ModuleRemoteTmp is remote_tmp when the module got no tmpdir of its
 	// own (an unprivileged become user): see moduleTmpdir.
 	ModuleRemoteTmp string
+	// PkgShim: the package managers the module's commands run take the
+	// package lock (a task in a parallel block).
+	PkgShim bool
 
+	shimDir     string
 	modTmp      string
 	modTmpMade  bool
 	modWarnings []string
@@ -198,6 +202,7 @@ func RunContext(ctx context.Context, req *agentproto.TaskRequest, payload io.Rea
 		LoginGID:          req.LoginGID,
 		StageDir:          req.StageDir,
 		ModuleRemoteTmp:   req.ModuleRemoteTmp,
+		PkgShim:           req.PkgShim,
 		Ctx:               ctx,
 	}
 	env.moduleSetCwd()
@@ -216,6 +221,9 @@ func RunContext(ctx context.Context, req *agentproto.TaskRequest, payload io.Rea
 		res = agentproto.Fail("module %s returned no result", req.Module)
 	}
 	env.moduleCleanup(res)
+	if env.shimDir != "" {
+		os.RemoveAll(env.shimDir)
+	}
 	if len(aliasWarnings) > 0 {
 		warnings := make([]any, 0, len(aliasWarnings))
 		for _, w := range aliasWarnings {
