@@ -16,6 +16,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
 	"github.com/giraffesyo/understudy/internal/modules/fsutil"
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 func init() {
@@ -126,64 +127,16 @@ var findSpec = args.Spec{
 	"limit":              {Type: "int"},
 }
 
-// pyFnmatch translates a shell pattern the way fnmatch.translate does.
-func pyFnmatch(pat string) *regexp.Regexp {
-	var b strings.Builder
-	b.WriteString(`(?s)\A(?:`)
-	for i := 0; i < len(pat); i++ {
-		c := pat[i]
-		switch c {
-		case '*':
-			b.WriteString(".*")
-		case '?':
-			b.WriteString(".")
-		case '[':
-			j := i + 1
-			if j < len(pat) && pat[j] == '!' {
-				j++
-			}
-			if j < len(pat) && pat[j] == ']' {
-				j++
-			}
-			for j < len(pat) && pat[j] != ']' {
-				j++
-			}
-			if j >= len(pat) {
-				b.WriteString(`\[`)
-				continue
-			}
-			stuff := pat[i+1 : j]
-			i = j
-			if strings.HasPrefix(stuff, "!") {
-				stuff = "^" + stuff[1:]
-			} else if strings.HasPrefix(stuff, "^") {
-				stuff = `\` + stuff
-			}
-			stuff = strings.ReplaceAll(stuff, `\`, `\\`)
-			stuff = strings.ReplaceAll(stuff, `\\^`, `\^`)
-			b.WriteString("[" + stuff + "]")
-		default:
-			b.WriteString(regexp.QuoteMeta(string(c)))
-		}
-	}
-	b.WriteString(`)\z`)
-	re, err := regexp.Compile(b.String())
-	if err != nil {
-		return regexp.MustCompile(`\A` + regexp.QuoteMeta(pat) + `\z`)
-	}
-	return re
-}
-
 // findFilter is pfilter: the name matches a pattern and no exclude.
 type findFilter struct {
-	patterns, excludes []*regexp.Regexp
+	patterns, excludes []*pyre.Pattern
 }
 
 func (f *findFilter) match(name string) bool {
 	for _, p := range f.patterns {
-		if p.MatchString(name) {
+		if p.Match(name, 0, -1) != nil {
 			for _, e := range f.excludes {
-				if e.MatchString(name) {
+				if e.Match(name, 0, -1) != nil {
 					return false
 				}
 			}
@@ -209,22 +162,19 @@ func findModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		mode = s
 	}
 	useRegex := p.Bool("use_regex")
-	compile := func(list []any) ([]*regexp.Regexp, *agentproto.Result) {
-		var out []*regexp.Regexp
+	// re.compile(p) and .match, or fnmatch.fnmatch.
+	compile := func(list []any) ([]*pyre.Pattern, *agentproto.Result) {
+		var out []*pyre.Pattern
 		for _, v := range list {
 			s := fmt.Sprint(v)
-			if useRegex {
-				if msg := pyRegexSyntaxError(s); msg != "" {
-					return nil, &agentproto.Result{Failed: true, Msg: "Task failed: Module failed: " + msg}
-				}
-				re, err := compilePyPattern(`\A(?:` + s + `)`)
-				if err != nil {
-					return nil, agentproto.Fail("%v", err)
-				}
-				out = append(out, re)
-			} else {
-				out = append(out, pyFnmatch(s))
+			if !useRegex {
+				s = pyre.FnmatchTranslate(s)
 			}
+			re, fail := pyCompile(s)
+			if fail != nil {
+				return nil, fail
+			}
+			out = append(out, re)
 		}
 		return out, nil
 	}
@@ -274,14 +224,11 @@ func findModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 			return agentproto.Fail("limit cannot be %d (use None for unlimited)", limit)
 		}
 	}
-	var contains *regexp.Regexp
+	var contains *pyre.Pattern
 	if p.Has("contains") {
-		pat := p.Str("contains")
-		if msg := pyRegexSyntaxError(pat); msg != "" {
-			return &agentproto.Result{Failed: true, Msg: "Task failed: Module failed: " + msg}
-		}
-		if contains, err = compilePyPattern(pat); err != nil {
-			return agentproto.Fail("%v", err)
+		var fail *agentproto.Result
+		if contains, fail = pyCompile(p.Str("contains")); fail != nil {
+			return fail
 		}
 	}
 
@@ -343,10 +290,10 @@ func findModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 			return false
 		}
 		if p.Bool("read_whole_file") {
-			return contains.MatchString(strings.Join(lines, ""))
+			return contains.Search(strings.Join(lines, ""), 0, -1) != nil
 		}
 		for _, l := range lines {
-			if m := contains.FindStringIndex(l); m != nil && m[0] == 0 {
+			if contains.Match(l, 0, -1) != nil {
 				return true
 			}
 		}

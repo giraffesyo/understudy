@@ -1,0 +1,29 @@
+# fileglob (lookup, with_fileglob and filter) lists a directory in the
+# order the file system does (os.scandir's), skips hidden names and
+# directories, matches as fnmatch does, and warns for a directory it
+# cannot find.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    g: "{{ workdir }}/g"
+  tasks:
+    - file: path="{{ g }}/sub" state=directory
+    - copy: dest="{{ g }}/{{ item }}" content=x
+      loop: [zeta.txt, alpha.txt, Mid.txt, beta.conf, .hidden.txt, "b[1].txt", sub/one.txt, sub/two.txt]
+    - debug: msg="{{ q('fileglob', g + '/*.txt') | map('basename') | list }}"
+    - debug: msg="{{ q('fileglob', g + '/*.txt', g + '/*.conf') | map('basename') | list }}"
+    - debug: msg="{{ q('fileglob', g + '/[a-m]*') | map('basename') | list }}"
+    - debug: msg="{{ q('fileglob', g + '/[!a-m]*') | map('basename') | list }}"
+    - debug: msg="{{ q('fileglob', g + '/*/*.txt') | map('basename') | list }}"
+    - debug: msg="{{ q('fileglob', g + '/b[[]1].txt') | map('basename') | list }}"
+    - debug: msg="{{ q('fileglob', g + '/.*') | map('basename') | list }}"
+    - debug: msg="{{ q('fileglob', g + '/nope/*.txt') }}"
+    - debug: msg="{{ (g + '/*') | fileglob | map('basename') | list }}"
+    - debug: msg="{{ item | basename }}"
+      with_fileglob: ["{{ g }}/*"]
+    - find:
+        paths: "{{ g }}"
+        patterns: "*.t?t,[ab]*"
+      register: found
+    - debug: msg="{{ found.files | map(attribute='path') | map('basename') | list }}"
+    - file: path="{{ g }}" state=absent

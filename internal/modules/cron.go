@@ -10,6 +10,7 @@ import (
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 func init() {
@@ -220,13 +221,13 @@ func (c *crontab) updateJob(name string, job *string) {
 	c.lines = out
 }
 
-func (c *crontab) envRe(name string) (*regexp.Regexp, *agentproto.Result) {
+func (c *crontab) envRe(name string) (*pyre.Pattern, *agentproto.Result) {
 	return pyCompile("^" + name + "=")
 }
 
-func (c *crontab) findEnv(re *regexp.Regexp) int {
+func (c *crontab) findEnv(re *pyre.Pattern) int {
 	for i, l := range c.lines {
-		if re.MatchString(l) {
+		if re.Match(l, 0, -1) != nil {
 			return i
 		}
 	}
@@ -234,10 +235,10 @@ func (c *crontab) findEnv(re *regexp.Regexp) int {
 }
 
 // updateEnv replaces (decl != nil) or removes every declaration of re.
-func (c *crontab) updateEnv(re *regexp.Regexp, decl *string) {
+func (c *crontab) updateEnv(re *pyre.Pattern, decl *string) {
 	var out []string
 	for _, l := range c.lines {
-		if re.MatchString(l) {
+		if re.Match(l, 0, -1) != nil {
 			if decl != nil {
 				out = append(out, *decl)
 			}

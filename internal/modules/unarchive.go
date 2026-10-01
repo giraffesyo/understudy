@@ -19,6 +19,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
 	"github.com/giraffesyo/understudy/internal/modules/fsutil"
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 // This file ports ansible.builtin.unarchive (the module half). The
@@ -511,7 +512,7 @@ func (t *tarHandler) filesInArchive() ([]string, error) {
 		name = strings.TrimPrefix(name, "/")
 		excluded := false
 		for _, e := range t.excl {
-			if pyFnmatch(e).MatchString(name) {
+			if pyre.Fnmatch(name, e) {
 				excluded = true
 				break
 			}
@@ -753,7 +754,7 @@ func (z *zipHandler) readZip() error {
 		member := f.Name
 		if len(z.includes) > 0 {
 			for _, inc := range z.includes {
-				if pyFnmatch(inc).MatchString(member) {
+				if pyre.Fnmatch(member, inc) {
 					z.files = append(z.files, member)
 				}
 			}
@@ -761,7 +762,7 @@ func (z *zipHandler) readZip() error {
 		}
 		excluded := false
 		for _, e := range z.excludes {
-			if pyFnmatch(e).MatchString(member) {
+			if pyre.Fnmatch(member, e) {
 				excluded = true
 				break
 			}

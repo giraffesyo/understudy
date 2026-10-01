@@ -251,7 +251,7 @@ func TestSerializationFilters(t *testing.T) {
 		{"'hello' | b64encode", "aGVsbG8="},
 		{"'aGVsbG8=' | b64decode", "hello"},
 		{"'abc' | hash('sha256')", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
-		{"'x' | quote", "'x'"},
+		{"'x' | quote", "x"}, {"'a b' | quote", "'a b'"}, {"'' | quote", "''"}, {"none | quote", "''"},
 		{"\"it's\" | quote", `'it'"'"'s'`},
 	}
 	for _, c := range cases {
@@ -348,15 +348,36 @@ func TestRegexFilters(t *testing.T) {
 	for _, c := range cases {
 		expectEq(t, evalExpr(t, c.expr, nil), c.want, c.expr)
 	}
-	// RE2-unsupported constructs fail loudly.
+	// Python's re: lookaround, backreferences, conditionals, possessive
+	// quantifiers, and re.error's messages.
+	more := []struct {
+		expr string
+		want any
+	}{
+		{`'price: 100 USD' | regex_search('\\d+(?= USD)')`, "100"},
+		{`'abab' | regex_replace('(ab)\\1', 'x')`, "x"},
+		{`'<a><b>' | regex_findall('(?<=<)\\w(?=>)')`, []any{"a", "b"}},
+		{`'aa' | regex_search('(?P<c>a)(?P=c)')`, "aa"},
+		{`'(x)' | regex_replace('^(\\()?x(?(1)\\))$', 'y')`, "y"},
+		{`'aaa' | regex_replace('a++a', 'z')`, "aaa"},
+		{`'abc' is match('b')`, false},
+		{`'abc' is search('b')`, true},
+		{`'abc' is regex('abc', match_type='fullmatch')`, true},
+		{`'ABC' is match('abc', ignorecase=true)`, true},
+		{`'a\nb' is search('^b', multiline=true)`, true},
+	}
+	for _, c := range more {
+		expectEq(t, evalExpr(t, c.expr, nil), c.want, c.expr)
+	}
 	e := New()
-	for _, expr := range []string{
-		`'x' | regex_search('(?=lookahead)')`,
-		`'x' | regex_replace('(a)\\1', 'b')`,
+	for expr, want := range map[string]string{
+		`'x' | regex_search('(?<=a+)b')`:  "look-behind requires fixed-width pattern",
+		`'x' | regex_replace('(', 'b')`:   "missing ), unterminated subpattern at position 0",
+		`'x' | regex_replace('x', '\\2')`: "invalid group reference 2 at position 1",
 	} {
 		_, err := e.EvalExpression(expr, nil, testPos)
-		if err == nil || !strings.Contains(err.Error(), "not supported") {
-			t.Errorf("%s: expected loud rejection, got %v", expr, err)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: got %v, want %q", expr, err, want)
 		}
 	}
 }

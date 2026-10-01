@@ -91,10 +91,22 @@ func pyClassName(v any, fromVar bool) string {
 	case Markup:
 		return "Markup"
 	case pyDatetime:
-		if t.tagged || fromVar {
+		if t.Tagged || fromVar {
 			return "_AnsibleTaggedDateTime"
 		}
 		return "datetime.datetime"
+	case pyDate:
+		if t.Tagged || fromVar {
+			return "_AnsibleTaggedDate"
+		}
+		return "datetime.date"
+	case pyTime:
+		if fromVar {
+			return "_AnsibleTaggedTime"
+		}
+		return "datetime.time"
+	case *pyTZ:
+		return "datetime.timezone"
 	case pyTimedelta:
 		return "datetime.timedelta"
 	}
@@ -350,4 +362,32 @@ func pyShorten(s string, width int) string {
 		line = line[:len(line)-1]
 	}
 	return strings.TrimLeft(placeholder, " ")
+}
+
+// operandError is a binary operator's TypeError naming its operands'
+// classes, which depend on whether each was read from a variable (a
+// tagged or lazy value): the format has a %s for each.
+type operandError struct {
+	format string
+	a, b   any
+}
+
+func newOperandError(format string, a, b any) *operandError {
+	return &operandError{format: format, a: a, b: b}
+}
+
+func (e *operandError) Error() string { return e.text(false, false) }
+
+func (e *operandError) text(aVar, bVar bool) string {
+	return fmt.Sprintf(e.format, pyClassName(e.a, aVar), pyClassName(e.b, bVar))
+}
+
+// operandText is err's message, with an operand error's classes named
+// for operands read from variables (aVar, bVar).
+func operandText(err error, aVar, bVar bool) string {
+	var oe *operandError
+	if errors.As(err, &oe) {
+		return oe.text(aVar, bVar)
+	}
+	return err.Error()
 }

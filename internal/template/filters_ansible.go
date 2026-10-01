@@ -838,12 +838,16 @@ func registerAnsibleFilters(e *Engine) {
 		return percentFormat(in, s, args)
 	}
 
+	// quote(a): shlex.quote(to_text(a)), None as ''.
 	f["quote"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
 		if !ok {
 			s = toStr(in)
+			if Undeprecate(in) == nil {
+				s = ""
+			}
 		}
-		return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'", nil
+		return shlexQuote(s), nil
 	}
 
 	f["indent"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
@@ -1056,7 +1060,7 @@ func seqReduce(op string) FilterFunc {
 	return func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		items, err := iterate(in)
 		if err != nil {
-			return nil, err
+			return nil, errNotIterable(in, ec.fromVar(-1))
 		}
 		if len(items) == 0 {
 			return Undefined{Name: "aggregated item", Err: &UndefinedError{Hint: "No aggregated item, sequence was empty."}}, nil
@@ -1640,8 +1644,8 @@ func yamlDumpValue(v any) any {
 			m.Set(k, val)
 		}
 		return m
-	case pyDatetime:
-		return yaml.Timestamp(t.isoformat(" "))
+	case pyTime, *pyTZ, pyTimedelta:
+		return yamlUnrepresentable{pyRepr(t)}
 	case *rangeValue:
 		repr := fmt.Sprintf("range(%d, %d)", t.start, t.stop)
 		if t.step != 1 {
@@ -1762,6 +1766,10 @@ func (e *pyJSONEncoder) write(v any, depth int) {
 	case *rangeValue:
 		e.write(t.materialize(), depth)
 	case pyDatetime:
+		b.WriteString(pyJSONQuote(t.Isoformat("T"), e.ensureASCII))
+	case pyDate:
+		b.WriteString(pyJSONQuote(t.Isoformat(), e.ensureASCII))
+	case pyTime:
 		b.WriteString(pyJSONQuote(t.Isoformat(), e.ensureASCII))
 	case []any:
 		if len(t) == 0 {
@@ -1926,4 +1934,24 @@ func kwargsInOrder(names []string) []kwarg {
 		out[i] = kwarg{name: n}
 	}
 	return out
+}
+
+// shlexQuote is Python's shlex.quote: a string of only safe characters
+// (ASCII \w and @%+=:,./-) as it is, else single-quoted.
+func shlexQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	safe := true
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("_@%+=:,./-", c) >= 0) {
+			safe = false
+			break
+		}
+	}
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }

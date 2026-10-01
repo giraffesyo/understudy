@@ -3,12 +3,12 @@ package modules
 import (
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
 	"github.com/giraffesyo/understudy/internal/modules/fsutil"
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 func init() {
@@ -100,7 +100,7 @@ func blockinfileModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		eof := "EOF"
 		insertAfter = &eof
 	}
-	var insertRe *regexp.Regexp
+	var insertRe *pyre.Pattern
 	insertPattern := ""
 	hasPattern := false
 	if insertAfter != nil && *insertAfter != "EOF" {
@@ -142,12 +142,12 @@ func blockinfileModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		n0 = -1
 		switch {
 		case insertRe != nil:
-			if pyPatternMultiline(insertPattern) {
+			if insertRe.Flags()&pyre.MULTILINE != 0 {
 				text := ""
 				if original != nil {
 					text = *original
 				}
-				if m := insertRe.FindStringIndex(text); m != nil {
+				if m := insertRe.Search(text, 0, -1); m != nil {
 					if insertAfter != nil {
 						n0 = strings.Count(text[:m[1]], "\n")
 					} else if insertBefore != nil {
@@ -271,14 +271,4 @@ func splitLinesKeepNL(s string) []string {
 		out = append(out, s[start:])
 	}
 	return out
-}
-
-// pyPatternMultiline reports whether a pattern turns on re.MULTILINE with
-// a leading inline flag group.
-func pyPatternMultiline(p string) bool {
-	if !strings.HasPrefix(p, "(?") {
-		return false
-	}
-	end := strings.IndexAny(p[2:], ":)")
-	return end >= 0 && strings.ContainsRune(p[2:2+end], 'm')
 }

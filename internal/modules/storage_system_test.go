@@ -5,9 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 // Expectations come from running the Python modules' helpers
@@ -112,9 +113,9 @@ func TestModprobePersistence(t *testing.T) {
 	os.WriteFile(filepath.Join(modulesLoadLocation, "x.conf"), []byte("dummy # comment\nother\n"), 0o644)
 	os.WriteFile(filepath.Join(parametersFilesLocation, "x.conf"), []byte("options dummy numdummies=2\n"), 0o644)
 	m := &modprobe{name: "dummy", params: "numdummies=2"}
-	m.reModule = regexp.MustCompile(`^ *dummy *(?:[#;].*)?\n?\z`)
-	m.reParams = regexp.MustCompile(`^options dummy \w+=\S+ *(?:[#;].*)?\n?\z`)
-	m.reParamVal = regexp.MustCompile(`^options dummy (\w+=\S+) *(?:[#;].*)?\n?\z`)
+	m.reModule = pyre.MustCompile(`^ *dummy *(?:[#;].*)?\n?\Z`, 0)
+	m.reParams = pyre.MustCompile(`^options dummy \w+=\S+ *(?:[#;].*)?\n?\Z`, 0)
+	m.reParamVal = pyre.MustCompile(`^options dummy (\w+=\S+) *(?:[#;].*)?\n?\Z`, 0)
 	if !m.loadedPersistently() || !m.paramsIsSet() {
 		t.Fatal("persistent state not detected")
 	}

@@ -149,7 +149,7 @@ func registerFilters(e *Engine) {
 	lengthFilter := func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		n, err := length(in)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("object of type '%s' has no len()", pyClassName(in, ec.fromVar(-1)))
 		}
 		return int64(n), nil
 	}
@@ -593,6 +593,12 @@ func pyTypeName(v any) string {
 		return "Markup"
 	case pyDatetime:
 		return "datetime"
+	case pyDate:
+		return "date"
+	case pyTime:
+		return "time"
+	case *pyTZ:
+		return "timezone"
 	case pyTimedelta:
 		return "timedelta"
 	case []any:

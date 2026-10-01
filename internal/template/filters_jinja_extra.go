@@ -37,10 +37,8 @@ func registerJinjaExtraFilters(e *Engine) {
 	f["attr"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		nameV, _ := filterArg(args, 0, kwargs, "name")
 		name := toStr(nameV)
-		if o, ok := Undeprecate(in).(pyObject); ok {
-			if v, ok := o.PyAttr(name); ok {
-				return v, nil
-			}
+		if v, ok := pyAttrOf(Undeprecate(in), name); ok {
+			return v, nil
 		}
 		if m, ok := lookupMethod(Undeprecate(in), name); ok {
 			return &methodValue{call: m, name: name, recv: Undeprecate(in), fromVar: ec.fromVar(-1)}, nil

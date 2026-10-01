@@ -6,12 +6,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/actions"
 	"github.com/giraffesyo/understudy/internal/agentproto"
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -31,7 +31,7 @@ type includeVarsRun struct {
 	actx        *actions.Context
 	included    []any
 	showContent bool
-	matcher     *regexp.Regexp
+	matcher     *pyre.Pattern
 	ignore      []string
 	extensions  []string
 	ignoreExt   bool
@@ -224,7 +224,7 @@ func (iv *includeVarsRun) ignored(name string) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("Invalid regular expression: %s", template.PyRepr(pat))
 		}
-		if re.MatchString(name) {
+		if re.Search(name, 0, -1) != nil {
 			return true, nil
 		}
 	}
@@ -281,7 +281,7 @@ func (iv *includeVarsRun) loadDir(root string, names []string) (bool, string, ma
 			continue
 		}
 		path := pyJoin(root, name)
-		if iv.matcher != nil && !iv.matcher.MatchString(name) {
+		if iv.matcher != nil && iv.matcher.Search(name, 0, -1) == nil {
 			continue
 		}
 		if _, err := os.Stat(path); err != nil {

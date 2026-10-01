@@ -87,13 +87,21 @@ func (ec *EvalCtx) storableIn(v any, active map[cycleID]bool) (any, bool, error)
 		return string(t), true, nil
 	case pyDatetime:
 		// Stored, it carries tags.
-		if !t.tagged {
-			t.tagged = true
+		if !t.Tagged {
+			t.Tagged = true
+			return t, true, nil
+		}
+		return v, false, nil
+	case pyDate:
+		if !t.Tagged {
+			t.Tagged = true
 			return t, true, nil
 		}
 		return v, false, nil
 	case pyTimedelta:
 		return nil, false, &StorageError{Type: "timedelta", Value: toStr(t), Pos: ec.pos}
+	case *pyTZ:
+		return nil, false, &StorageError{Type: "timezone", Value: toStr(t), Pos: ec.pos}
 	case *methodValue:
 		typ, r := t.pyTypeRepr()
 		return nil, false, &StorageError{Type: typ, Value: r, Pos: ec.pos}

@@ -20,6 +20,9 @@
       - {id: [1], name: a}
     missing:
       - {name: a}
+    ditems:
+      - {id: 2024-01-02, name: a}
+      - {id: 2024-01-02 03:04:05, name: b}
     dmissing:
       x: {name: a}
     vaulted: |
@@ -45,6 +48,8 @@
     - debug: msg="{{ fitems | rekey_on_member('id') }}"
     - debug: msg="{{ fitems | rekey_on_member('id') | string }}"
     - debug: msg="{{ nitems | rekey_on_member('id') }}"
+    - debug: msg="{{ ditems | rekey_on_member('id') }}"
+    - debug: msg="{{ ditems | rekey_on_member('id') | string }}"
     - debug: msg="{{ litems | rekey_on_member('id') }}"
     - debug: msg="{{ [{'id':[1]}] | rekey_on_member('id') }}"
     - debug: msg="{{ missing | rekey_on_member('id') }}"
