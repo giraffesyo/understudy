@@ -3,12 +3,12 @@ package modules
 import (
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
 	"github.com/giraffesyo/understudy/internal/modules/fsutil"
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 func init() {
@@ -145,12 +145,6 @@ func readLines(path string) ([]string, error) {
 	return lines, nil
 }
 
-// pySearch is re.search on a line that still carries its "\n": Python's
-// "$" also matches before a final newline, so the newline is dropped.
-func pySearch(re *regexp.Regexp, line string) []int {
-	return re.FindStringSubmatchIndex(strings.TrimSuffix(line, "\n"))
-}
-
 func (l *lineinfileRun) fileAttrs() fileAttrs {
 	return loadFileAttrs(l.p, l.path, false)
 }
@@ -184,7 +178,7 @@ func (l *lineinfileRun) present(insertAfter, insertBefore *string) *agentproto.R
 		diff["before"] = strings.Join(lines, "")
 	}
 
-	var reM, reIns *regexp.Regexp
+	var reM, reIns *pyre.Pattern
 	var fail *agentproto.Result
 	if l.regexp != nil {
 		if reM, fail = pyCompile(*l.regexp); fail != nil {
@@ -404,7 +398,7 @@ func (l *lineinfileRun) absent() *agentproto.Result {
 	if env.DiffMode {
 		diff["before"] = strings.Join(lines, "")
 	}
-	var re *regexp.Regexp
+	var re *pyre.Pattern
 	if l.regexp != nil {
 		var fail *agentproto.Result
 		if re, fail = pyCompile(*l.regexp); fail != nil {
@@ -451,26 +445,6 @@ func (l *lineinfileRun) absent() *agentproto.Result {
 		msg = fmt.Sprintf("%d line(s) removed", found)
 	}
 	return l.finish(changed, msg, backupDest, diff, &found)
-}
-
-// compilePyPattern rejects RE2-unsupported Python regex constructs with a
-// clear error instead of silently mis-matching.
-func compilePyPattern(pattern string) (*regexp.Regexp, error) {
-	for _, bad := range []struct{ needle, what string }{
-		{"(?=", "lookahead"}, {"(?!", "lookahead"},
-		{"(?<=", "lookbehind"}, {"(?<!", "lookbehind"},
-	} {
-		if strings.Contains(pattern, bad.needle) {
-			return nil, regexpUnsupportedError(bad.what)
-		}
-	}
-	return regexp.Compile(pattern)
-}
-
-type regexpUnsupportedError string
-
-func (e regexpUnsupportedError) Error() string {
-	return "pattern uses " + string(e) + ", which is not supported by this regex engine"
 }
 
 func splitFileLines(data []byte) []string {

@@ -1,0 +1,122 @@
+# Python re semantics in the regex filters and tests and in lineinfile,
+# replace, blockinfile, find and wait_for: lookaround, backreferences,
+# named groups, conditionals, possessive quantifiers, Unicode classes and
+# case folding, replacement templates, and re.error messages.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    text: "price: 100 USD, 250 EUR; café naïve ÉCOLE\nline two\n"
+    work: "{{ workdir }}/rx"
+  tasks:
+    - debug:
+        msg:
+          - "{{ text | regex_search('\\d+(?= EUR)') }}"
+          - "{{ text | regex_findall('(?<=: )\\d+') }}"
+          - "{{ text | regex_findall('(\\d+) (\\w+)') }}"
+          - "{{ text | regex_replace('(?P<n>\\d+) (?P<c>[A-Z]+)', '\\g<c>\\g<n>') }}"
+          - "{{ 'abab' | regex_replace('(ab)\\1', 'X') }}"
+          - "{{ text | regex_findall('\\w+é\\b') }}"
+          - "{{ text | regex_findall('(?i)école') }}"
+          - "{{ text | regex_search('^line', multiline=true) }}"
+          - "{{ text | regex_search('(?P<a>\\d+) (?P<b>\\w+)', '\\g<b>', '\\1') }}"
+          - "{{ 'aaa' | regex_replace('a*', '-') }}"
+          - "{{ 'xyz' | regex_replace('', '.') }}"
+          - "{{ 'a.b*c' | regex_escape }}"
+          - "{{ 'a.b*c[d]' | regex_escape('posix_basic') }}"
+          - "{{ 'foo' is match('f(?=o)') }}"
+          - "{{ 'foo' is search('(?<!x)oo$') }}"
+          - "{{ 'foo' is regex('fo', match_type='fullmatch') }}"
+          - "{{ '(a)' | regex_replace('^(\\()?a(?(1)\\))$', 'ok') }}"
+          - "{{ 'aaa' | regex_replace('a', 'b', count=2) }}"
+          - "{{ 'aaa' | regex_findall('a{,2}') }}"
+          - "{{ 'Straße' | regex_search('(?i)STRASSE') }}"
+          - "{{ 'ſ' | regex_search('(?i)s') }}"
+          - "{{ '٣٤' | regex_search('\\d+') }}"
+          - "{{ 'a\nb\n' | regex_findall('$', multiline=true) | length }}"
+          - "{{ 'x' | regex_replace('(?x) x  # comment', 'y') }}"
+          - "{{ 'AbC' | regex_replace('(?i:b)c', '_') }}"
+          - "{{ 'abc' | regex_replace('(b)', '[\\1\\n\\t]') }}"
+    - debug: msg="{{ 'x' | regex_search('(?<=a+)b') }}"
+      ignore_errors: true
+    - debug: msg="{{ 'x' | regex_replace('(', 'y') }}"
+      ignore_errors: true
+    - debug: msg="{{ 'x' | regex_replace('x', '\\2') }}"
+      ignore_errors: true
+    - debug: msg="{{ 'x' | regex_replace('(?P<a>x)', '\\g<b>') }}"
+      ignore_errors: true
+    - debug: msg="{{ 'x' | regex_search('a{2,1}') }}"
+      ignore_errors: true
+    - debug: msg="{{ 'x' is match('[z-a]') }}"
+      ignore_errors: true
+    - debug: msg="{{ 'x' | regex_replace('(?i)a(?m)b', 'y') }}"
+      ignore_errors: true
+    - debug: msg="{{ 'aaa' | regex_replace('a', 'b', mandatory_count=2) }}"
+      ignore_errors: true
+    - file: path="{{ work }}" state=directory
+    - copy:
+        dest: "{{ work }}/f.conf"
+        content: "# config\nport = 80\nhost = old.example.com\nname=café\n"
+    - lineinfile:
+        path: "{{ work }}/f.conf"
+        regexp: '^(?P<k>port)\s*=\s*(?!8080)\d+$'
+        line: '\g<k> = 8080'
+        backrefs: true
+    - lineinfile:
+        path: "{{ work }}/f.conf"
+        regexp: '(?<=host = )old'
+        line: 'host = new.example.com'
+    - lineinfile:
+        path: "{{ work }}/f.conf"
+        insertafter: '^name=caf\w$'
+        line: 'after_name = 1'
+    - replace:
+        path: "{{ work }}/f.conf"
+        regexp: '(\w+) = (\d+)'
+        replace: '\2 = \1'
+    - replace:
+        path: "{{ work }}/f.conf"
+        regexp: '(?<=\.)example(?=\.)'
+        replace: 'test'
+        after: 'port'
+    - blockinfile:
+        path: "{{ work }}/f.conf"
+        block: "managed: yes"
+        insertbefore: '(?m)^name='
+    - find:
+        paths: "{{ work }}"
+        patterns: '^f\.(?!txt)\w+$'
+        use_regex: true
+        contains: '(?<=after_)name'
+      register: found
+    - debug: msg="{{ found.files | map(attribute='path') | map('basename') | list }}"
+    - find:
+        paths: "{{ work }}"
+        patterns: '*.co?f'
+        contains: 'caf\w'
+      register: found2
+    - debug: msg="{{ found2.matched }}"
+    - wait_for:
+        path: "{{ work }}/f.conf"
+        search_regex: '(?P<val>\d+) = port'
+        timeout: 2
+      register: wf
+    - debug: var=wf.match_groupdict
+    - slurp: src="{{ work }}/f.conf"
+      register: final
+    - debug: msg="{{ final.content | b64decode }}"
+    - lineinfile:
+        path: "{{ work }}/f.conf"
+        regexp: '('
+        line: x
+      ignore_errors: true
+    - replace:
+        path: "{{ work }}/f.conf"
+        regexp: 'x'
+        replace: '\g<nope>'
+      ignore_errors: true
+    - replace:
+        path: "{{ work }}/f.conf"
+        regexp: 'x'
+        replace: '\9'
+      ignore_errors: true
+    - file: path="{{ work }}" state=absent

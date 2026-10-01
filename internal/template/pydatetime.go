@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
 // Python's datetime.datetime and datetime.timedelta, as the to_datetime
@@ -21,21 +23,14 @@ type pyObject interface {
 	PyAttr(name string) (any, bool)
 }
 
-// pyTZ is a datetime.timezone: a fixed UTC offset.
-type pyTZ struct {
-	offset time.Duration
-	name   string // the %Z name it was parsed with, if any
-}
-
-// pyDatetime is a datetime.datetime: its wall clock (in UTC) and, when
-// aware, its timezone.
-type pyDatetime struct {
-	t  time.Time
-	tz *pyTZ
-	// tagged: a value variable storage holds (ansible-core's
-	// _AnsibleTaggedDateTime), not one an expression just made.
-	tagged bool
-}
+// The datetime values themselves are the yaml package's (YAML
+// timestamps and TOML dates construct them too).
+type (
+	pyTZ       = yaml.TZ
+	pyDatetime = yaml.Datetime
+	pyDate     = yaml.Date
+	pyTime     = yaml.Time
+)
 
 // pyTimedelta is a datetime.timedelta in microseconds.
 type pyTimedelta struct{ us int64 }
@@ -110,81 +105,12 @@ func (d pyTimedelta) PyAttr(name string) (any, bool) {
 	return nil, false
 }
 
-// tzSuffix is a UTC offset as str() and isoformat() show it: +HH:MM,
-// with seconds and microseconds when present.
-func tzSuffix(off time.Duration) string {
-	sign := "+"
-	if off < 0 {
-		sign, off = "-", -off
-	}
-	h, m := int64(off/time.Hour), int64(off/time.Minute)%60
-	s, us := int64(off/time.Second)%60, int64(off/time.Microsecond)%1000000
-	out := fmt.Sprintf("%s%02d:%02d", sign, h, m)
-	if s != 0 || us != 0 {
-		out += fmt.Sprintf(":%02d", s)
-		if us != 0 {
-			out += fmt.Sprintf(".%06d", us)
-		}
-	}
-	return out
-}
+func datetimeRepr(d pyDatetime) string { return d.Repr() }
 
-func (d pyDatetime) isoformat(sep string) string {
-	t := d.t
-	s := fmt.Sprintf("%04d-%02d-%02d%s%02d:%02d:%02d", t.Year(), int(t.Month()), t.Day(), sep, t.Hour(), t.Minute(), t.Second())
-	if us := t.Nanosecond() / 1000; us != 0 {
-		s += fmt.Sprintf(".%06d", us)
-	}
-	if d.tz != nil {
-		s += tzSuffix(d.tz.offset)
-	}
-	return s
-}
+func tzRepr(tz *pyTZ) string { return tz.Repr() }
 
-// Isoformat is datetime.isoformat(), which ansible-core's JSON encoders
-// emit for a datetime.
-func (d pyDatetime) Isoformat() string { return d.isoformat("T") }
-
-func (d pyDatetime) String() string { return d.isoformat(" ") }
-
-func (d pyDatetime) PyRepr() string {
-	t := d.t
-	args := []string{strconv.Itoa(t.Year()), strconv.Itoa(int(t.Month())), strconv.Itoa(t.Day()),
-		strconv.Itoa(t.Hour()), strconv.Itoa(t.Minute())}
-	us := t.Nanosecond() / 1000
-	if t.Second() != 0 || us != 0 {
-		args = append(args, strconv.Itoa(t.Second()))
-	}
-	if us != 0 {
-		args = append(args, strconv.Itoa(us))
-	}
-	if d.tz != nil {
-		args = append(args, "tzinfo="+d.tz.repr())
-	}
-	return "datetime.datetime(" + strings.Join(args, ", ") + ")"
-}
-
-func (tz *pyTZ) repr() string {
-	if tz.offset == 0 && tz.name == "" {
-		return "datetime.timezone.utc"
-	}
-	td := pyTimedelta{int64(tz.offset / time.Microsecond)}.PyRepr()
-	if tz.name != "" {
-		return "datetime.timezone(" + td + ", " + pyStrRepr(tz.name) + ")"
-	}
-	return "datetime.timezone(" + td + ")"
-}
-
-// instant is the datetime as a point in time (aware), or its wall clock.
-func (d pyDatetime) instant() time.Time {
-	if d.tz == nil {
-		return d.t
-	}
-	return d.t.Add(-d.tz.offset)
-}
-
-func (d pyDatetime) PyAttr(name string) (any, bool) {
-	t := d.t
+func datetimeAttr(d pyDatetime, name string) (any, bool) {
+	t := d.T
 	switch name {
 	case "year":
 		return int64(t.Year()), true
@@ -201,9 +127,12 @@ func (d pyDatetime) PyAttr(name string) (any, bool) {
 	case "microsecond":
 		return int64(t.Nanosecond() / 1000), true
 	case "tzinfo":
-		if d.tz == nil {
+		if d.TZ == nil {
 			return nil, true
 		}
+		return d.TZ, true
+	case "fold":
+		return int64(0), true
 	}
 	method := func(f func(args []any, kwargs map[string]any) (any, error)) (any, bool) {
 		return boundMethod(func(ec *EvalCtx, args []any, kwargs map[string]any) (any, error) {
@@ -221,17 +150,17 @@ func (d pyDatetime) PyAttr(name string) (any, bool) {
 				return nil, fmt.Errorf("strftime() argument 1 must be str, not %s", pyClassName(args[0], false))
 			}
 			var tz *time.Location
-			if d.tz != nil {
-				name := d.tz.name
+			if d.TZ != nil {
+				name := d.TZ.Name
 				if name == "" {
 					name = "UTC"
-					if d.tz.offset != 0 {
-						name += tzSuffix(d.tz.offset)
+					if d.TZ.Offset != 0 {
+						name += yaml.TZSuffix(d.TZ.Offset)
 					}
 				}
-				tz = time.FixedZone(name, int(d.tz.offset/time.Second))
+				tz = time.FixedZone(name, int(d.TZ.Offset/time.Second))
 			}
-			return strftimeTime(f, d.t, tz, d.tz == nil), nil
+			return strftimeTime(f, d.T, tz, d.TZ == nil), nil
 		})
 	case "isoformat":
 		return method(func(args []any, kwargs map[string]any) (any, error) {
@@ -243,7 +172,7 @@ func (d pyDatetime) PyAttr(name string) (any, bool) {
 				}
 				sep = s
 			}
-			return d.isoformat(sep), nil
+			return d.Isoformat(sep), nil
 		})
 	case "timestamp":
 		return method(func(args []any, kwargs map[string]any) (any, error) {
@@ -251,10 +180,10 @@ func (d pyDatetime) PyAttr(name string) (any, bool) {
 				return nil, err
 			}
 			var at time.Time
-			if d.tz != nil {
-				at = d.instant()
+			if d.TZ != nil {
+				at = d.Instant()
 			} else {
-				t := d.t
+				t := d.T
 				at = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.Local)
 			}
 			return float64(at.Unix()) + float64(at.Nanosecond()/1000)/1e6, nil
@@ -271,7 +200,7 @@ func (d pyDatetime) PyAttr(name string) (any, bool) {
 			return wd, nil
 		})
 	}
-	return nil, false
+	return datetimeMoreAttr(d, name)
 }
 
 func noArgs(name string, args []any, kwargs map[string]any) error {
@@ -283,17 +212,20 @@ func noArgs(name string, args []any, kwargs map[string]any) error {
 
 var errDateOverflow = errors.New("date value out of range")
 
-func (d pyDatetime) add(us int64) (pyDatetime, error) {
-	t := d.t.Add(time.Duration(us) * time.Microsecond)
+func datetimeAdd(d pyDatetime, us int64) (pyDatetime, error) {
+	t := d.T.Add(time.Duration(us) * time.Microsecond)
 	if t.Year() < 1 || t.Year() > 9999 {
 		return pyDatetime{}, errDateOverflow
 	}
-	return pyDatetime{t: t, tz: d.tz, tagged: d.tagged}, nil
+	return pyDatetime{T: t, TZ: d.TZ, Tagged: d.Tagged}, nil
 }
 
 // pyObjArith is a - b, a + b and the like for datetimes and timedeltas
 // (handled reports whether either operand is one).
 func pyObjArith(op tokKind, a, b any) (out any, handled bool, err error) {
+	if r, ok, err := dateArith(op, a, b); ok {
+		return r, true, err
+	}
 	da, aDT := a.(pyDatetime)
 	db, bDT := b.(pyDatetime)
 	ta, aTD := a.(pyTimedelta)
@@ -303,18 +235,18 @@ func pyObjArith(op tokKind, a, b any) (out any, handled bool, err error) {
 	}
 	switch {
 	case op == tokSub && aDT && bDT:
-		if (da.tz == nil) != (db.tz == nil) {
+		if (da.TZ == nil) != (db.TZ == nil) {
 			return nil, true, errors.New("can't subtract offset-naive and offset-aware datetimes")
 		}
-		return pyTimedelta{int64(da.instant().Sub(db.instant()) / time.Microsecond)}, true, nil
+		return pyTimedelta{int64(da.Instant().Sub(db.Instant()) / time.Microsecond)}, true, nil
 	case op == tokSub && aDT && bTD:
-		r, err := da.add(-tb.us)
+		r, err := datetimeAdd(da, -tb.us)
 		return r, true, err
 	case op == tokAdd && aDT && bTD:
-		r, err := da.add(tb.us)
+		r, err := datetimeAdd(da, tb.us)
 		return r, true, err
 	case op == tokAdd && aTD && bDT:
-		r, err := db.add(ta.us)
+		r, err := datetimeAdd(db, ta.us)
 		return r, true, err
 	case op == tokAdd && aTD && bTD:
 		return pyTimedelta{ta.us + tb.us}, true, nil
@@ -339,22 +271,25 @@ func pyObjArith(op tokKind, a, b any) (out any, handled bool, err error) {
 		}
 		return floorDiv(ta.us, tb.us), true, nil
 	}
-	return nil, true, fmt.Errorf("unsupported operand type(s) for %s: '%s' and '%s'", opName(op), pyClassName(a, false), pyClassName(b, false))
+	return nil, true, newOperandError("unsupported operand type(s) for "+opName(op)+": '%s' and '%s'", a, b)
 }
 
 // pyObjCompare orders datetimes and timedeltas (handled reports whether
 // either operand is one).
 func pyObjCompare(a, b any, op string) (c int, handled bool, err error) {
+	if c, ok, err := dateCompare(a, b); ok {
+		return c, true, err
+	}
 	switch x := a.(type) {
 	case pyDatetime:
 		y, ok := b.(pyDatetime)
 		if !ok {
 			return 0, false, nil
 		}
-		if (x.tz == nil) != (y.tz == nil) {
+		if (x.TZ == nil) != (y.TZ == nil) {
 			return 0, true, errors.New("can't compare offset-naive and offset-aware datetimes")
 		}
-		return x.instant().Compare(y.instant()), true, nil
+		return x.Instant().Compare(y.Instant()), true, nil
 	case pyTimedelta:
 		y, ok := b.(pyTimedelta)
 		if !ok {
@@ -373,16 +308,19 @@ func pyObjCompare(a, b any, op string) (c int, handled bool, err error) {
 
 // pyObjEqual is a == b for datetimes and timedeltas.
 func pyObjEqual(a, b any) (eq, handled bool) {
+	if eq, ok := dateEqual(a, b); ok {
+		return eq, true
+	}
 	switch x := a.(type) {
 	case pyDatetime:
 		y, ok := b.(pyDatetime)
 		if !ok {
 			return false, true
 		}
-		if (x.tz == nil) != (y.tz == nil) {
+		if (x.TZ == nil) != (y.TZ == nil) {
 			return false, true
 		}
-		return x.instant().Equal(y.instant()), true
+		return x.Instant().Equal(y.Instant()), true
 	case pyTimedelta:
 		y, ok := b.(pyTimedelta)
 		return ok && x.us == y.us, true
@@ -512,11 +450,11 @@ func strptime(data, format string) (pyDatetime, error) {
 			if z[0] == '-' {
 				off = -off
 			}
-			tz = &pyTZ{offset: off}
+			tz = &pyTZ{Offset: off}
 		}
 		if tz != nil {
 			if name, ok := found["Z"]; ok {
-				tz.name = name
+				tz.Name = name
 			}
 		}
 	}
@@ -555,7 +493,7 @@ func strptime(data, format string) (pyDatetime, error) {
 	if second > 59 {
 		return pyDatetime{}, fmt.Errorf("second must be in 0..59, not %d", second)
 	}
-	return pyDatetime{t: time.Date(year, time.Month(month), day, hour, minute, second, fraction*1000, time.UTC), tz: tz}, nil
+	return pyDatetime{T: time.Date(year, time.Month(month), day, hour, minute, second, fraction*1000, time.UTC), TZ: tz}, nil
 }
 
 func isLeap(y int) bool { return y%4 == 0 && (y%100 != 0 || y%400 == 0) }
@@ -772,6 +710,30 @@ func strftimeTime(format string, t time.Time, loc *time.Location, naive bool) st
 			fmt.Fprintf(&b, "%02d/%02d/%02d", int(t.Month()), t.Day(), t.Year()%100)
 		case 's':
 			b.WriteString(strconv.FormatInt(t.Unix(), 10))
+		case 'U', 'W':
+			// Week of the year, from the first Sunday (U) or Monday (W).
+			wd := int(t.Weekday())
+			if c == 'W' {
+				wd = (wd + 6) % 7
+			}
+			fmt.Fprintf(&b, "%02d", (t.YearDay()+6-wd)/7)
+		case 'V':
+			_, w := t.ISOWeek()
+			fmt.Fprintf(&b, "%02d", w)
+		case 'G':
+			y, _ := t.ISOWeek()
+			fmt.Fprintf(&b, "%d", y)
+		case 'g':
+			y, _ := t.ISOWeek()
+			fmt.Fprintf(&b, "%02d", y%100)
+		case 'c':
+			b.WriteString(strftimeTime("%a %b %e %H:%M:%S %Y", t, loc, naive))
+		case 'x':
+			b.WriteString(strftimeTime("%m/%d/%y", t, loc, naive))
+		case 'X':
+			b.WriteString(strftimeTime("%H:%M:%S", t, loc, naive))
+		case 'r':
+			b.WriteString(strftimeTime("%I:%M:%S %p", t, loc, naive))
 		case 'n':
 			b.WriteByte('\n')
 		case 't':

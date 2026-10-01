@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func mustUnmarshal(t *testing.T, src string) any {
@@ -52,7 +53,7 @@ func TestScalarResolution11(t *testing.T) {
 		{"0", int64(0)}, {"42", int64(42)}, {"-17", int64(-17)}, {"+8", int64(8)},
 		{"1_000", int64(1000)},
 		{"0644", int64(420)},  // legacy octal
-		{"0o755", int64(493)}, // 1.2-style octal (our extension)
+		{"0o755", "0o755"},    // 1.2-style octal: a string to PyYAML
 		{"0x1F", int64(31)},   // hex
 		{"0b1010", int64(10)}, // binary
 		{"9999999999999999999999", testBigInt("9999999999999999999999")}, // Python ints have no size limit
@@ -62,10 +63,15 @@ func TestScalarResolution11(t *testing.T) {
 		{"1e5", "1e5"},     // PyYAML quirk: exponent requires a sign
 		{"1.5e3", "1.5e3"}, // same
 		{".inf", math.Inf(1)}, {"-.inf", math.Inf(-1)},
-		// Timestamps stay strings (documented divergence).
-		{"2024-01-15", "2024-01-15"},
-		// Sexagesimals stay strings (documented divergence).
-		{"1:30", "1:30"},
+		// Timestamps: datetime.date and datetime.datetime.
+		{"2024-01-15", Date{T: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)}},
+		{"2024-1-5 1:02:03", Datetime{T: time.Date(2024, 1, 5, 1, 2, 3, 0, time.UTC)}},
+		{"2001-12-14t21:59:43.10-05:00", Datetime{T: time.Date(2001, 12, 14, 21, 59, 43, 100000000, time.UTC), TZ: &TZ{Offset: -5 * time.Hour}}},
+		{"2001-12-14 21:59:43.1234567 Z", Datetime{T: time.Date(2001, 12, 14, 21, 59, 43, 123456000, time.UTC), TZ: UTC}},
+		{"2024-1-15", "2024-1-15"}, // a date needs two-digit months and days
+		// Sexagesimals: base 60 ints and floats.
+		{"1:30", int64(90)}, {"-1:20:30", int64(-4830)}, {"1:20.5", 80.5},
+		{"1:60", "1:60"}, {"1_0:2_0", "1_0:2_0"},
 		// Version-number strings.
 		{"1.2.3", "1.2.3"},
 		// Plain strings.

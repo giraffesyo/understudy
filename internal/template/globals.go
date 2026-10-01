@@ -185,5 +185,5 @@ func globalNow(ec *EvalCtx, args []any, kwargs map[string]any) (any, error) {
 		}
 		return strftimeTime(s, wall, nil, true), nil
 	}
-	return pyDatetime{t: wall}, nil
+	return pyDatetime{T: wall}, nil
 }

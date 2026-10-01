@@ -16,8 +16,8 @@ import (
 // plugin loads files with): the same acceptance, the same values, and
 // TOMLDecodeError's messages and positions. Tables decode to ordered
 // mappings (Python dicts keep insertion order), arrays to []any, integers
-// to int64 (*big.Int beyond it), and dates and times to the strings
-// ansible-core shows them as (their isoformat()).
+// to int64 (*big.Int beyond it), and dates and times to datetime values
+// (yaml.Date, yaml.Datetime, yaml.Time).
 
 // tomlError is tomllib's TOMLDecodeError; cause is the message of the
 // ValueError it was raised from, if any.
@@ -830,42 +830,42 @@ func tomlMicros(s string) int {
 	return n
 }
 
-// tomlTime is a local time's isoformat().
-func tomlTime(h, m, sec, frac string) string {
-	out := h + ":" + m + ":" + sec
-	if us := tomlMicros(frac); us != 0 {
-		out += fmt.Sprintf(".%06d", us)
-	}
-	return out
+// tomlTime is a local time: a naive datetime.time.
+func tomlTime(h, m, sec, frac string) yaml.Time {
+	atoi := func(x string) int { n, _ := strconv.Atoi(x); return n }
+	t, _ := yaml.NewTime(atoi(h), atoi(m), atoi(sec), tomlMicros(frac), nil)
+	return t
 }
 
-// tomlDateTime is match_to_datetime's value as its isoformat(), or for
-// a date that does not exist the ValueError datetime raises.
-func tomlDateTime(g []string) (string, string) {
-	year, _ := strconv.Atoi(g[1])
-	month, _ := strconv.Atoi(g[2])
-	day, _ := strconv.Atoi(g[3])
-	if year < 1 {
-		return "", fmt.Sprintf("year must be in 1..9999, not %d", year)
-	}
-	if last := time.Date(year, time.Month(month)+1, 0, 0, 0, 0, 0, time.UTC).Day(); day > last {
-		return "", fmt.Sprintf("day %d must be in range 1..%d for month %d in year %d", day, last, month, year)
-	}
-	date := g[1] + "-" + g[2] + "-" + g[3]
+// tomlDateTime is match_to_datetime's value (a datetime.date, or a
+// datetime, aware with an offset), or for a date that does not exist the
+// ValueError datetime raises.
+func tomlDateTime(g []string) (any, string) {
+	atoi := func(x string) int { n, _ := strconv.Atoi(x); return n }
+	year, month, day := atoi(g[1]), atoi(g[2]), atoi(g[3])
 	if g[4] == "\x00" {
-		return date, ""
+		d, err := yaml.NewDate(year, month, day)
+		if err != nil {
+			return nil, err.Error()
+		}
+		return d, ""
 	}
-	out := date + "T" + tomlTime(g[4], g[5], g[6], g[7])
+	var tz *yaml.TZ
 	switch {
 	case g[9] != "\x00":
-		out += g[9] + g[10] + ":" + g[11]
-		if g[10] == "00" && g[11] == "00" && g[9] == "-" {
-			out = out[:len(out)-6] + "+00:00"
+		off := time.Duration(atoi(g[10]))*time.Hour + time.Duration(atoi(g[11]))*time.Minute
+		if g[9] == "-" {
+			off = -off
 		}
+		tz = &yaml.TZ{Offset: off}
 	case g[8] != "\x00":
-		out += "+00:00"
+		tz = yaml.UTC
 	}
-	return out, ""
+	dt, err := yaml.NewDatetime(year, month, day, atoi(g[4]), atoi(g[5]), atoi(g[6]), tomlMicros(g[7]), tz)
+	if err != nil {
+		return nil, err.Error()
+	}
+	return dt, ""
 }
 
 // pyRuneRepr is repr() of a one-character str.

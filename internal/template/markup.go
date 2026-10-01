@@ -146,8 +146,11 @@ func jsonSerializable(v any, fromVar bool) error {
 		return nil
 	}
 	name := pyTypeName(v)
-	if _, ok := v.(pyDatetime); ok && fromVar {
-		name = "_AnsibleTaggedDateTime" // a variable's datetime carries tags
+	switch v.(type) {
+	case pyDatetime, pyDate, pyTime:
+		if fromVar {
+			name = pyClassName(v, true) // a variable's datetime carries tags
+		}
 	}
 	return &pyTypeError{"Object of type " + name + " is not JSON serializable"}
 }

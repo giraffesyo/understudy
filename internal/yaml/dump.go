@@ -152,8 +152,10 @@ func (r *representer) represent(v any) (*rnode, error) {
 		return r.scalar(tagStr, string(t)), nil
 	case VaultedString:
 		return &rnode{kind: rScalar, tag: "!vault", value: t.Ciphertext, style: '|'}, nil
-	case Timestamp:
-		return r.scalar(tagTime, string(t)), nil
+	case Datetime:
+		return r.scalar(tagTime, t.Isoformat(" ")), nil
+	case Date:
+		return r.scalar(tagTime, t.Isoformat()), nil
 	case []any:
 		n := &rnode{kind: rSequence, tag: tagSeq}
 		if track {

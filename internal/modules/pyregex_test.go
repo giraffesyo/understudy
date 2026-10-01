@@ -1,8 +1,9 @@
 package modules
 
 import (
-	"regexp"
 	"testing"
+
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 // Expected messages are CPython 3.14's re.error texts.
@@ -32,16 +33,23 @@ func TestPyRegexSyntaxError(t *testing.T) {
 		`x{a}`:           "",
 		`(?P<n>a)(?P=n)`: "",
 		`^\s*#`:          "",
+		`(?<=a)b(?!c)`:   "",
+		`(?<=a+)b`:       "look-behind requires fixed-width pattern",
 	}
 	for pat, want := range cases {
-		if got := pyRegexSyntaxError(pat); got != want {
-			t.Errorf("pyRegexSyntaxError(%q) = %q, want %q", pat, got, want)
+		got := ""
+		if _, fail := pyCompile(pat); fail != nil {
+			got = fail.Msg
+			want = "Task failed: Module failed: " + want
+		}
+		if got != want && !(got == "" && want == "Task failed: Module failed: ") {
+			t.Errorf("pyCompile(%q) = %q, want %q", pat, got, want)
 		}
 	}
 }
 
 func TestParsePyTemplate(t *testing.T) {
-	re := regexp.MustCompile(`(?P<n>a)`)
+	re := pyre.MustCompile(`(?P<n>a)`, 0)
 	cases := map[string]string{
 		`\9`:     "invalid group reference 9 at position 1",
 		`x\12`:   "invalid group reference 12 at position 2",
@@ -54,9 +62,9 @@ func TestParsePyTemplate(t *testing.T) {
 		`\g<>`:   "missing group name at position 3",
 	}
 	for repl, want := range cases {
-		_, err := parsePyTemplate(re, repl)
+		_, err := pyre.ParseTemplate(re, repl)
 		if err == nil || err.Error() != want {
-			t.Errorf("parsePyTemplate(%q) = %v, want %q", repl, err, want)
+			t.Errorf("ParseTemplate(%q) = %v, want %q", repl, err, want)
 		}
 	}
 	out, _, err := pySubn(re, `[\1|\g<n>|\g<0>]\n\-`, "xax")

@@ -1,0 +1,703 @@
+{
+ "names": [
+  "",
+  "a",
+  "b",
+  "abc",
+  "a.txt",
+  "x.txt",
+  "txt",
+  "aXbYc",
+  "acb",
+  "abbc",
+  "]",
+  "-",
+  "!",
+  "^",
+  "[",
+  "\\",
+  "&",
+  "~",
+  "|",
+  "x",
+  "foo.bar",
+  "fooxbar",
+  "f(o)o+",
+  "a|b",
+  "$x^",
+  "web01",
+  "web1",
+  "db-1",
+  "ünïXcødé",
+  "a*",
+  "a/b/c",
+  "a/bc",
+  ".hidden",
+  "visible",
+  "xy",
+  "x\ny",
+  "\n",
+  "%",
+  "/",
+  "0",
+  ".",
+  "y",
+  "a\nb"
+ ],
+ "cases": [
+  {
+   "pattern": "",
+   "translate": "(?s:)\\z",
+   "matches": [
+    ""
+   ]
+  },
+  {
+   "pattern": "*",
+   "translate": "(?s:.*)\\z",
+   "matches": [
+    "",
+    "a",
+    "b",
+    "abc",
+    "a.txt",
+    "x.txt",
+    "txt",
+    "aXbYc",
+    "acb",
+    "abbc",
+    "]",
+    "-",
+    "!",
+    "^",
+    "[",
+    "\\",
+    "&",
+    "~",
+    "|",
+    "x",
+    "foo.bar",
+    "fooxbar",
+    "f(o)o+",
+    "a|b",
+    "$x^",
+    "web01",
+    "web1",
+    "db-1",
+    "ünïXcødé",
+    "a*",
+    "a/b/c",
+    "a/bc",
+    ".hidden",
+    "visible",
+    "xy",
+    "x\ny",
+    "\n",
+    "%",
+    "/",
+    "0",
+    ".",
+    "y",
+    "a\nb"
+   ]
+  },
+  {
+   "pattern": "**",
+   "translate": "(?s:.*)\\z",
+   "matches": [
+    "",
+    "a",
+    "b",
+    "abc",
+    "a.txt",
+    "x.txt",
+    "txt",
+    "aXbYc",
+    "acb",
+    "abbc",
+    "]",
+    "-",
+    "!",
+    "^",
+    "[",
+    "\\",
+    "&",
+    "~",
+    "|",
+    "x",
+    "foo.bar",
+    "fooxbar",
+    "f(o)o+",
+    "a|b",
+    "$x^",
+    "web01",
+    "web1",
+    "db-1",
+    "ünïXcødé",
+    "a*",
+    "a/b/c",
+    "a/bc",
+    ".hidden",
+    "visible",
+    "xy",
+    "x\ny",
+    "\n",
+    "%",
+    "/",
+    "0",
+    ".",
+    "y",
+    "a\nb"
+   ]
+  },
+  {
+   "pattern": "?",
+   "translate": "(?s:.)\\z",
+   "matches": [
+    "a",
+    "b",
+    "]",
+    "-",
+    "!",
+    "^",
+    "[",
+    "\\",
+    "&",
+    "~",
+    "|",
+    "x",
+    "\n",
+    "%",
+    "/",
+    "0",
+    ".",
+    "y"
+   ]
+  },
+  {
+   "pattern": "*.txt",
+   "translate": "(?s:.*\\.txt)\\z",
+   "matches": [
+    "a.txt",
+    "x.txt"
+   ]
+  },
+  {
+   "pattern": "a*b*c",
+   "translate": "(?s:a(?>.*?b).*c)\\z",
+   "matches": [
+    "abc",
+    "aXbYc",
+    "abbc",
+    "a/b/c",
+    "a/bc"
+   ]
+  },
+  {
+   "pattern": "*a*",
+   "translate": "(?s:(?>.*?a).*)\\z",
+   "matches": [
+    "a",
+    "abc",
+    "a.txt",
+    "aXbYc",
+    "acb",
+    "abbc",
+    "foo.bar",
+    "fooxbar",
+    "a|b",
+    "a*",
+    "a/b/c",
+    "a/bc",
+    "a\nb"
+   ]
+  },
+  {
+   "pattern": "a?c",
+   "translate": "(?s:a.c)\\z",
+   "matches": [
+    "abc"
+   ]
+  },
+  {
+   "pattern": "[abc]",
+   "translate": "(?s:[abc])\\z",
+   "matches": [
+    "a",
+    "b"
+   ]
+  },
+  {
+   "pattern": "[!abc]",
+   "translate": "(?s:[^abc])\\z",
+   "matches": [
+    "]",
+    "-",
+    "!",
+    "^",
+    "[",
+    "\\",
+    "&",
+    "~",
+    "|",
+    "x",
+    "\n",
+    "%",
+    "/",
+    "0",
+    ".",
+    "y"
+   ]
+  },
+  {
+   "pattern": "[a-c]x",
+   "translate": "(?s:[a-c]x)\\z",
+   "matches": []
+  },
+  {
+   "pattern": "[!a-c]",
+   "translate": "(?s:[^a-c])\\z",
+   "matches": [
+    "]",
+    "-",
+    "!",
+    "^",
+    "[",
+    "\\",
+    "&",
+    "~",
+    "|",
+    "x",
+    "\n",
+    "%",
+    "/",
+    "0",
+    ".",
+    "y"
+   ]
+  },
+  {
+   "pattern": "[]]",
+   "translate": "(?s:[]])\\z",
+   "matches": [
+    "]"
+   ]
+  },
+  {
+   "pattern": "[!]]",
+   "translate": "(?s:[^]])\\z",
+   "matches": [
+    "a",
+    "b",
+    "-",
+    "!",
+    "^",
+    "[",
+    "\\",
+    "&",
+    "~",
+    "|",
+    "x",
+    "\n",
+    "%",
+    "/",
+    "0",
+    ".",
+    "y"
+   ]
+  },
+  {
+   "pattern": "[]-]",
+   "translate": "(?s:[]\\-])\\z",
+   "matches": [
+    "]",
+    "-"
+   ]
+  },
+  {
+   "pattern": "[a-]",
+   "translate": "(?s:[a\\-])\\z",
+   "matches": [
+    "a",
+    "-"
+   ]
+  },
+  {
+   "pattern": "[-a]",
+   "translate": "(?s:[\\-a])\\z",
+   "matches": [
+    "a",
+    "-"
+   ]
+  },
+  {
+   "pattern": "[!-a]",
+   "translate": "(?s:[^\\-a])\\z",
+   "matches": [
+    "b",
+    "]",
+    "!",
+    "^",
+    "[",
+    "\\",
+    "&",
+    "~",
+    "|",
+    "x",
+    "\n",
+    "%",
+    "/",
+    "0",
+    ".",
+    "y"
+   ]
+  },
+  {
+   "pattern": "[z-a]",
+   "translate": "(?s:(?!))\\z",
+   "matches": []
+  },
+  {
+   "pattern": "[a-c-e]",
+   "translate": "(?s:[a-c\\-e])\\z",
+   "matches": [
+    "a",
+    "b",
+    "-"
+   ]
+  },
+  {
+   "pattern": "[a-a]",
+   "translate": "(?s:[a-a])\\z",
+   "matches": [
+    "a"
+   ]
+  },
+  {
+   "pattern": "[^a]",
+   "translate": "(?s:[\\^a])\\z",
+   "matches": [
+    "a",
+    "^"
+   ]
+  },
+  {
+   "pattern": "[[]",
+   "translate": "(?s:[\\[])\\z",
+   "matches": [
+    "["
+   ]
+  },
+  {
+   "pattern": "[\\]",
+   "translate": "(?s:[\\\\])\\z",
+   "matches": [
+    "\\"
+   ]
+  },
+  {
+   "pattern": "[a\\-z]",
+   "translate": "(?s:[a\\\\-z])\\z",
+   "matches": [
+    "a",
+    "b",
+    "]",
+    "^",
+    "\\",
+    "x",
+    "y"
+   ]
+  },
+  {
+   "pattern": "[&&]",
+   "translate": "(?s:[\\&\\&])\\z",
+   "matches": [
+    "&"
+   ]
+  },
+  {
+   "pattern": "[~~x]",
+   "translate": "(?s:[\\~\\~x])\\z",
+   "matches": [
+    "~",
+    "x"
+   ]
+  },
+  {
+   "pattern": "[||]",
+   "translate": "(?s:[\\|\\|])\\z",
+   "matches": [
+    "|"
+   ]
+  },
+  {
+   "pattern": "[",
+   "translate": "(?s:\\[)\\z",
+   "matches": [
+    "["
+   ]
+  },
+  {
+   "pattern": "[!",
+   "translate": "(?s:\\[!)\\z",
+   "matches": []
+  },
+  {
+   "pattern": "[!]",
+   "translate": "(?s:\\[!\\])\\z",
+   "matches": []
+  },
+  {
+   "pattern": "[]",
+   "translate": "(?s:\\[\\])\\z",
+   "matches": []
+  },
+  {
+   "pattern": "a[",
+   "translate": "(?s:a\\[)\\z",
+   "matches": []
+  },
+  {
+   "pattern": "*[a-z]*",
+   "translate": "(?s:(?>.*?[a-z]).*)\\z",
+   "matches": [
+    "a",
+    "b",
+    "abc",
+    "a.txt",
+    "x.txt",
+    "txt",
+    "aXbYc",
+    "acb",
+    "abbc",
+    "x",
+    "foo.bar",
+    "fooxbar",
+    "f(o)o+",
+    "a|b",
+    "$x^",
+    "web01",
+    "web1",
+    "db-1",
+    "ünïXcødé",
+    "a*",
+    "a/b/c",
+    "a/bc",
+    ".hidden",
+    "visible",
+    "xy",
+    "x\ny",
+    "y",
+    "a\nb"
+   ]
+  },
+  {
+   "pattern": "x*y?z*",
+   "translate": "(?s:x(?>.*?y.z).*)\\z",
+   "matches": []
+  },
+  {
+   "pattern": "foo.bar",
+   "translate": "(?s:foo\\.bar)\\z",
+   "matches": [
+    "foo.bar"
+   ]
+  },
+  {
+   "pattern": "f(o)o+",
+   "translate": "(?s:f\\(o\\)o\\+)\\z",
+   "matches": [
+    "f(o)o+"
+   ]
+  },
+  {
+   "pattern": "a|b",
+   "translate": "(?s:a\\|b)\\z",
+   "matches": [
+    "a|b"
+   ]
+  },
+  {
+   "pattern": "$x^",
+   "translate": "(?s:\\$x\\^)\\z",
+   "matches": [
+    "$x^"
+   ]
+  },
+  {
+   "pattern": "*.{yml,yaml}",
+   "translate": "(?s:.*\\.\\{yml,yaml\\})\\z",
+   "matches": []
+  },
+  {
+   "pattern": "web[0-9][0-9]",
+   "translate": "(?s:web[0-9][0-9])\\z",
+   "matches": [
+    "web01"
+   ]
+  },
+  {
+   "pattern": "db-*",
+   "translate": "(?s:db\\-.*)\\z",
+   "matches": [
+    "db-1"
+   ]
+  },
+  {
+   "pattern": "ünï*cødé",
+   "translate": "(?s:ünï.*cødé)\\z",
+   "matches": [
+    "ünïXcødé"
+   ]
+  },
+  {
+   "pattern": "*\\*",
+   "translate": "(?s:(?>.*?\\\\).*)\\z",
+   "matches": [
+    "\\"
+   ]
+  },
+  {
+   "pattern": "a/b*",
+   "translate": "(?s:a/b.*)\\z",
+   "matches": [
+    "a/b/c",
+    "a/bc"
+   ]
+  },
+  {
+   "pattern": "*/*",
+   "translate": "(?s:(?>.*?/).*)\\z",
+   "matches": [
+    "a/b/c",
+    "a/bc",
+    "/"
+   ]
+  },
+  {
+   "pattern": ".*",
+   "translate": "(?s:\\..*)\\z",
+   "matches": [
+    ".hidden",
+    "."
+   ]
+  },
+  {
+   "pattern": "[.]*",
+   "translate": "(?s:[.].*)\\z",
+   "matches": [
+    ".hidden",
+    "."
+   ]
+  },
+  {
+   "pattern": "[!.]*",
+   "translate": "(?s:[^.].*)\\z",
+   "matches": [
+    "a",
+    "b",
+    "abc",
+    "a.txt",
+    "x.txt",
+    "txt",
+    "aXbYc",
+    "acb",
+    "abbc",
+    "]",
+    "-",
+    "!",
+    "^",
+    "[",
+    "\\",
+    "&",
+    "~",
+    "|",
+    "x",
+    "foo.bar",
+    "fooxbar",
+    "f(o)o+",
+    "a|b",
+    "$x^",
+    "web01",
+    "web1",
+    "db-1",
+    "ünïXcødé",
+    "a*",
+    "a/b/c",
+    "a/bc",
+    "visible",
+    "xy",
+    "x\ny",
+    "\n",
+    "%",
+    "/",
+    "0",
+    "y",
+    "a\nb"
+   ]
+  },
+  {
+   "pattern": "x[b-a]y",
+   "translate": "(?s:x(?!)y)\\z",
+   "matches": []
+  },
+  {
+   "pattern": "[%-0]",
+   "translate": "(?s:[%-0])\\z",
+   "matches": [
+    "-",
+    "&",
+    "%",
+    "/",
+    "0",
+    "."
+   ]
+  },
+  {
+   "pattern": "[--0]",
+   "translate": "(?s:[\\--0])\\z",
+   "matches": [
+    "-",
+    "/",
+    "0",
+    "."
+   ]
+  },
+  {
+   "pattern": "[!--0]",
+   "translate": "(?s:[^\\--0])\\z",
+   "matches": [
+    "a",
+    "b",
+    "]",
+    "!",
+    "^",
+    "[",
+    "\\",
+    "&",
+    "~",
+    "|",
+    "x",
+    "\n",
+    "%",
+    "y"
+   ]
+  },
+  {
+   "pattern": "[a-b-c-d]",
+   "translate": "(?s:[a-b\\-c-d])\\z",
+   "matches": [
+    "a",
+    "b",
+    "-"
+   ]
+  },
+  {
+   "pattern": "[a--b]",
+   "translate": "(?s:[b])\\z",
+   "matches": [
+    "b"
+   ]
+  }
+ ]
+}

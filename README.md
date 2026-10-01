@@ -242,7 +242,8 @@ rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 `reset_connection`, `refresh_inventory`, `noop`).
 
 **Task keywords** — `when`, `loop` / `with_*` (`items`, `nested`, `together`, `subelements`,
-`sequence`, `dict`, `indexed_items`, `flattened`, `lines`, `fileglob`, ...) with
+`sequence`, `dict`, `indexed_items`, `flattened`, `lines`, `fileglob` (in the
+file system's directory order, as `glob.glob` lists), ...) with
 `loop_control` (`loop_var`, `index_var`, `label`, `extended`, `pause`,
 `break_when`), `register`,
 `until`/`retries`/`delay`, `changed_when`, `failed_when`, `ignore_errors` (also
@@ -383,8 +384,8 @@ than silently diverging. Known boundaries:
   their option validation and errors included; a config naming a
   collection's plugin fails to parse as an unknown plugin, and the source
   is skipped as ansible-core skips one it cannot parse. TOML dates and
-  times load as their `isoformat()` strings (as YAML timestamps load as
-  strings). ansible-core orders a group's hosts two or more levels of
+  times load as `datetime` dates, datetimes and times, as `tomllib` builds
+  them. ansible-core orders a group's hosts two or more levels of
   child groups down by Python set iteration (object addresses); understudy
   takes them level by level in the order the groups were added, so such
   hosts can list in another order in `groups`. `constructed`'s
@@ -560,11 +561,23 @@ than silently diverging. Known boundaries:
   payloads, `Using module file`, the variable manager's repeated ``Read
   `vars_file` `` lines, and SSH connection tracing (understudy's agent
   protocol runs no per-command `ssh`).
-- **Documented divergences**: YAML timestamps and sexagesimals resolve as
-  strings; regular expressions use
-  Go's RE2 (lookaround and backreferences in *patterns* are rejected with a
-  clear error rather than mis-matched),
-  iterated with Python's `re.sub`/`findall` match rules; a task that hits
+- **Regular expressions**: every pattern a playbook gives (the regex
+  filters and tests, `lineinfile`, `replace`, `blockinfile`, `find`,
+  `wait_for`, the `varnames` and `ini` lookups, `include_vars`, `~` host
+  patterns, inventory ignore patterns) runs on a port of CPython 3.14's
+  `re` (`internal/modules/pyre`, standard library only, so the agent
+  carries it too): its syntax (lookaround, backreferences, named groups,
+  conditionals, atomic groups and possessive quantifiers, inline and
+  scoped flags, `VERBOSE`), its Unicode classes and case folding, its
+  match iteration, replacement templates and `re.error` messages, checked
+  against vectors CPython generates. Shell patterns (`fileglob`, `find`,
+  `unarchive`, host patterns, `setup`'s `filter`) translate as
+  `fnmatch.translate` does. Not modeled: `\N{...}` knows the Latin,
+  Greek, punctuation, symbol, CJK and Hangul names but not all of
+  Unicode's; bytes patterns (`wait_for`'s `search_regex`, inventory
+  ignore patterns) run as `re.ASCII` str patterns over the bytes, which
+  accepts the `\u`/`\U`/`\N` escapes a bytes pattern rejects.
+- **Documented divergences**: a task that hits
   its `timeout` has the processes its module started killed — each command
   a module runs leads its own process group, so its background jobs and
   pipeline stages go with it, on the control node and (the agent being
@@ -597,18 +610,25 @@ than silently diverging. Known boundaries:
   str's methods (escaping their text arguments), and in a variable's
   value, and becomes a str, with ansible-core's warning, in a template's
   result; `%` and `str.format` format as Python's printf-style and
-  format-spec mini-language do. `to_datetime` returns a datetime
-  (attributes, `strftime`/`isoformat`/`timestamp`/`weekday`, subtraction
-  to a timedelta, comparison; stored as itself, as
-  `_AnsibleTaggedDateTime`, shown as its `isoformat()`), and a timedelta
-  in a template's result fails as unsupported for variable storage.
-  `rekey_on_member` keys by the member's value (an int or bool key stays
-  itself through `keys()`, indexing, `dict2items`, repr, YAML and
-  `set_fact`); a plugin error about a value shows where the value was
-  written, through the variables passing it along. String literals in
-  `{{ }}` keep their backslashes, as ansible-core's `escape_backslashes`
-  has them. Not modeled: `fileglob` lists a directory in its own order,
-  as Python's `os.scandir` does.
+  format-spec mini-language do. `to_datetime` returns a datetime, and
+  YAML timestamps load as dates and datetimes (sexagesimals such as `1:20`
+  as ints and floats) as PyYAML constructs them, an impossible date failing
+  the load with `datetime`'s error (attributes and methods, `strftime`,
+  `isoformat`, `replace`, arithmetic with timedeltas, comparison; stored as
+  themselves, shown as their `isoformat()` in results and module
+  arguments, their `str()` in text, their `repr()` in a rendered list, a
+  timestamp in `to_yaml`; a time or timezone where PyYAML cannot represent
+  it fails), and a timedelta or timezone in a template's result fails as
+  unsupported for variable storage. `rekey_on_member` keys by the
+  member's value (an int or bool key stays itself through `keys()`,
+  indexing, `dict2items`, repr, YAML and `set_fact`); a plugin error
+  about a value shows where the value was written, through the variables
+  passing it along. String literals in `{{ }}` keep their backslashes, as
+  ansible-core's `escape_backslashes` has them. Not modeled: an item of a
+  list literal read from a variable is named by its plain class
+  (`datetime.date`) where ansible-core names the tagged one
+  (`_AnsibleTaggedDate`) in a `sort` error; a date or datetime as a dict
+  key is keyed by its `isoformat()`.
 - **Lazy containers**: a variable's list or dict templates its items
   when the variable is read, but an item that fails (an undefined value,
   a filter's or Jinja's error) is kept as ansible-core's marker, raising

@@ -15,6 +15,7 @@ import (
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
+	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
 
 // The setup module reimplements ansible-core's fact collectors (Linux
@@ -467,96 +468,16 @@ func factFilterMatch(key string, filter []string) bool {
 		return true
 	}
 	for _, f := range filter {
-		if f == "" || fnmatch(f, key) {
+		if f == "" || pyre.Fnmatch(key, f) {
 			return true
 		}
 		if !strings.HasPrefix(f, "ansible_") && !strings.HasPrefix(f, "facter") {
-			if fnmatch("ansible_"+f, key) {
+			if pyre.Fnmatch(key, "ansible_"+f) {
 				return true
 			}
 		}
 	}
 	return false
-}
-
-// fnmatch implements Python's fnmatch.fnmatch on POSIX (case-sensitive,
-// '*' crosses '/').
-func fnmatch(pattern, name string) bool {
-	return fnmatchAt(pattern, name)
-}
-
-func fnmatchAt(p, s string) bool {
-	for len(p) > 0 {
-		switch p[0] {
-		case '*':
-			for len(p) > 0 && p[0] == '*' {
-				p = p[1:]
-			}
-			if p == "" {
-				return true
-			}
-			for i := 0; i <= len(s); i++ {
-				if fnmatchAt(p, s[i:]) {
-					return true
-				}
-			}
-			return false
-		case '?':
-			if s == "" {
-				return false
-			}
-			p, s = p[1:], s[1:]
-		case '[':
-			end := strings.IndexByte(p[1:], ']')
-			if len(p) > 1 && (p[1] == '!' || p[1] == ']') {
-				if e2 := strings.IndexByte(p[2:], ']'); e2 >= 0 {
-					end = e2 + 1
-				} else {
-					end = -1
-				}
-			}
-			if end < 0 {
-				// Unclosed bracket matches a literal '['.
-				if s == "" || s[0] != '[' {
-					return false
-				}
-				p, s = p[1:], s[1:]
-				continue
-			}
-			class := p[1 : end+1]
-			if s == "" {
-				return false
-			}
-			neg := false
-			if strings.HasPrefix(class, "!") {
-				neg, class = true, class[1:]
-			}
-			c := s[0]
-			matched := false
-			for i := 0; i < len(class); i++ {
-				if i+2 < len(class) && class[i+1] == '-' {
-					if class[i] <= c && c <= class[i+2] {
-						matched = true
-					}
-					i += 2
-					continue
-				}
-				if class[i] == c {
-					matched = true
-				}
-			}
-			if matched == neg {
-				return false
-			}
-			p, s = p[end+2:], s[1:]
-		default:
-			if s == "" || p[0] != s[0] {
-				return false
-			}
-			p, s = p[1:], s[1:]
-		}
-	}
-	return s == ""
 }
 
 // selectCollectors implements collector.get_collector_names plus

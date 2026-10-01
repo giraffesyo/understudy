@@ -6,7 +6,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -287,13 +286,10 @@ func pyBool(b bool) string {
 	return "False"
 }
 
-// safeGroupChars is C.INVALID_VARIABLE_NAMES.
-var safeGroupChars = regexp.MustCompile(`^[\d\W]|[^\w]`)
-
 // safeGroupName is constructed's to_safe_group_name(force=True,
 // silent=True).
 func safeGroupName(name string) string {
-	return safeGroupChars.ReplaceAllString(name, "_")
+	return replaceInvalidGroupChars(name)
 }
 
 // groupAncestry returns a host's groups with their ancestors (Host.groups
