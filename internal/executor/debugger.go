@@ -24,7 +24,8 @@ import (
 // end of input), u/update_task, h/help. Expressions are evaluated with the
 // Jinja expression engine against task, task_vars, host, result and
 // play_context; task.args[...] / task_vars[...] assignments and del are
-// supported for fixing a task before redo.
+// supported for fixing a task before redo (task_vars ones through
+// update_task, as in ansible-core).
 
 type debugAction int
 
@@ -75,13 +76,17 @@ func envBool(name string, def bool) bool {
 type debugSession struct {
 	r        *Runner
 	task     *playbook.Task // a per-host copy; args edits apply to redo
+	orig     *playbook.Task // the task as loaded (task._ds)
 	host     string
 	vctx     *vars.Context
 	res      *agentproto.Result
 	play     *playbook.Play
-	override map[string]any // task_vars assignments, applied on redo
-	lastcmd  string
-	out      io.Writer
+	override map[string]any // task_vars assignments
+	// updated is task_vars as update_task templated the task with
+	// (nil: not updated): a redo runs the task as loaded, with them.
+	updated map[string]any
+	lastcmd string
+	out     io.Writer
 }
 
 func (r *Runner) debugIn() *bufio.Reader {
@@ -153,7 +158,26 @@ func (s *debugSession) onecmd(line string) (debugAction, bool) {
 	case "r", "redo":
 		return debugRedo, true
 	case "u", "update_task":
-		return 0, false // redo re-templates the task from task_vars anyway
+		// The task is loaded again (task.args edits are lost) and
+		// templated with task_vars, assignments included; a redo runs
+		// it so. task_vars assignments take effect only through it.
+		copied := *s.orig
+		copied.Args = make(map[string]any, len(s.orig.Args))
+		vctx := s.vctx.WithOverlay(maps.Clone(s.override))
+		for k, v := range s.orig.Args {
+			if tv, err := vctx.TemplateValue(v); err == nil {
+				v = tv
+			}
+			copied.Args[k] = v
+		}
+		if copied.FreeForm != "" {
+			if tv, err := vctx.TemplateString(copied.FreeForm); err == nil {
+				copied.FreeForm = template.PyStr(tv)
+			}
+		}
+		*s.task = copied
+		s.updated = maps.Clone(s.override)
+		return 0, false
 	case "h", "help":
 		s.help(arg)
 		return 0, false

@@ -137,13 +137,13 @@ func mkCommand(shell bool) ModuleFunc {
 				res.Extra = map[string]any{"cmd": strings.Join(quoted, " ")}
 				return res
 			}
-			cmd = env.Command(path, argv[1:]...)
+			cmd = env.Command(env.shimmedPath(argv[0], path), argv[1:]...)
 		}
 		if chdir != "" {
 			cmd.Dir = chdir
 		}
-		if len(env.Env) > 0 {
-			cmd.Env = env.Environ()
+		if len(env.Env) > 0 || env.PkgShim {
+			cmd.Env = env.withPkgShims(env.Environ())
 		}
 		if hasStdin {
 			if nl, err := argBool(args, "stdin_add_newline", true); err == nil && nl && !strings.HasSuffix(stdinStr, "\n") {

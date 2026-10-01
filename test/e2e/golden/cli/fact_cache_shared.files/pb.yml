@@ -1,0 +1,19 @@
+# A cache ansible-playbook wrote: hosts' facts read back (tags and all),
+# constructed's groups and variables from them, smart gathering for the
+# host with none, and the file updated in place.
+- hosts: all
+  gather_subset: ['!all', '!min']
+  tasks:
+    - debug: var=group_names
+    - debug: var=from_cache
+    - debug: var=from_extra
+    - debug: var=ansible_facts
+    - debug: var=ports
+    - debug: msg="{{ ansible_facts.built }} {{ ansible_facts.built.year }} {{ ansible_facts.built | type_debug }} {{ ansible_facts.day.isoformat() }}"
+    - debug: msg=broken
+      when: role
+      ignore_errors: true
+    - set_fact:
+        extra: [1, 2]
+        cacheable: true
+    - debug: msg="{{ lookup('file', 'cache/s1_' ~ inventory_hostname) }}"

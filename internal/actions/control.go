@@ -161,6 +161,7 @@ func runSetFact(_ context.Context, actx *Context, args map[string]any, _ string)
 		return agentproto.Fail("set_fact requires at least one key=value pair")
 	}
 	facts := make(map[string]any, len(args))
+	var names []string
 	for _, k := range slices.Sorted(maps.Keys(args)) { // set in the order the arguments were finalized
 		v := args[k]
 		if k == "cacheable" {
@@ -168,8 +169,32 @@ func runSetFact(_ context.Context, actx *Context, args map[string]any, _ string)
 		}
 		actx.SetFact(k, v)
 		facts[k] = jsonSafe(v)
+		names = append(names, k)
 	}
-	return &agentproto.Result{AnsibleFacts: facts}
+	res := &agentproto.Result{AnsibleFacts: facts}
+	if cacheable(args["cacheable"]) && len(names) > 0 && actx.CacheFacts != nil {
+		actx.CacheFacts(names, args)
+		res.FactsCacheable = true
+	}
+	return res
+}
+
+// cacheable is set_fact's boolean(cacheable).
+func cacheable(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		switch strings.ToLower(strings.TrimSpace(t)) {
+		case "y", "yes", "on", "1", "true", "t", "1.0":
+			return true
+		}
+	case int64:
+		return t == 1
+	case float64:
+		return t == 1
+	}
+	return false
 }
 
 func runFail(_ context.Context, _ *Context, args map[string]any, _ string) *agentproto.Result {

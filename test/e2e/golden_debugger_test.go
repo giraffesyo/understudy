@@ -24,14 +24,17 @@ func TestGoldenDebugger(t *testing.T) {
 	if py, err := exec.LookPath("python3"); err == nil {
 		env = append(env, "ANSIBLE_PYTHON_INTERPRETER="+py)
 	}
-	// Redo after editing task_vars/task.args is left out: ansible-core
-	// 2.21 ignores those edits on redo (and update_task crashes), where
-	// understudy applies them (see TestDebuggerRedoAfterFixes).
+	// A redo runs task.args edits; task_vars edits take effect through
+	// update_task, which loads the task again (losing task.args edits).
 	scripts := map[string]string{
-		"inspect_continue":  "p result.host\np result.task\np result._result\np task_vars['word']\np task\n\np task.name\nhelp\nhelp p\nhelp nope\nnosuchname\nc\nc\nc\n",
-		"redo_then_quit":    "r\nq\n",
-		"redo_continue":     "r\nc\nc\nc\n",
-		"continue_then_eof": "c\n",
+		"edit_vars_redo":     "task_vars['word'] = 'good'\nr\nq\n",
+		"edit_args_redo":     "task.args['_raw_params'] = 'true'\nr\nc\nc\nc\n",
+		"update_task_redo":   "task_vars['word'] = 'good'\nu\np task.args\nr\nc\nc\nc\n",
+		"update_drops_edits": "task.args['_raw_params'] = 'true'\nu\nr\nq\n",
+		"inspect_continue":   "p result.host\np result.task\np result._result\np task_vars['word']\np task\n\np task.name\nhelp\nhelp p\nhelp nope\nnosuchname\nc\nc\nc\n",
+		"redo_then_quit":     "r\nq\n",
+		"redo_continue":      "r\nc\nc\nc\n",
+		"continue_then_eof":  "c\n",
 	}
 	for name, script := range scripts {
 		t.Run(name, func(t *testing.T) {

@@ -1,0 +1,23 @@
+- name: no gather_facts, no gathering
+  hosts: all
+  tasks:
+    - debug: var=ansible_facts
+- name: gather_facts true gathers
+  hosts: all
+  gather_facts: true
+  gather_subset: ['!all', '!min']
+  tasks:
+    - debug: var=ansible_facts
+- name: gather_facts task marks facts gathered
+  hosts: h1
+  gather_facts: false
+  tasks:
+    - meta: clear_facts
+    - gather_facts:
+        gather_subset: ['!all', '!min']
+      register: g
+    - debug: var=g
+    - debug: var=ansible_facts._ansible_facts_gathered
+    - setup:
+        gather_subset: ['!all', '!min']
+    - debug: var=ansible_facts._ansible_facts_gathered

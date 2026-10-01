@@ -23,6 +23,10 @@ type ManagerOptions struct {
 	HostKeyChecking bool
 	Timeout         time.Duration
 	RemoteTmp       string
+	// Pipelining is the configured pipelining: the agent is then not
+	// cached in remote_tmp, which pipelined modules make only when they
+	// need it.
+	Pipelining bool
 	// Shell is the configured shell plugin options for become users'
 	// temporary files (RemoteUser, RemoteTmp and Warn are filled per task).
 	Shell         ShellOptions
@@ -111,7 +115,11 @@ func (m *Manager) AgentWith(ctx context.Context, host string, kw Keywords) (*Age
 	}
 	hc := m.hostConn(kw.cacheKey(host))
 	hc.agentOnce.Do(func() {
-		path, login, err := Bootstrap(ctx, conn, m.Opts.RemoteTmp)
+		cacheIn := m.Opts.RemoteTmp
+		if m.Opts.Pipelining {
+			cacheIn = ""
+		}
+		path, login, err := Bootstrap(ctx, conn, cacheIn)
 		if err != nil {
 			hc.agentErr = fmt.Errorf("agent bootstrap on %s: %w", host, err)
 			return

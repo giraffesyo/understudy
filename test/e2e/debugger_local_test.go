@@ -52,7 +52,7 @@ const debuggerPlay = `
 // Beyond ansible-core 2.21 (whose update_task crashes and whose redo
 // ignores task_vars edits), task_vars and task.args edits apply on redo.
 func TestDebuggerRedoAfterFixes(t *testing.T) {
-	code, out, stats := runDebugger(t, debuggerPlay, "task_vars['word'] = 'good'\nr\n")
+	code, out, stats := runDebugger(t, debuggerPlay, "task_vars['word'] = 'good'\nu\nr\n")
 	if code != 0 || !strings.Contains(out, `"msg": "done"`) || stats["localhost"].Failed != 0 {
 		t.Fatalf("task_vars redo: code %d, stats %+v\n%s", code, stats["localhost"], out)
 	}

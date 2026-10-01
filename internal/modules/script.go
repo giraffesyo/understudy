@@ -65,8 +65,8 @@ func scriptModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	if chdir, ok := argString(rawArgs, "chdir"); ok && chdir != "" {
 		cmd.Dir = chdir
 	}
-	if len(env.Env) > 0 {
-		cmd.Env = env.Environ()
+	if len(env.Env) > 0 || env.PkgShim {
+		cmd.Env = env.withPkgShims(env.Environ())
 	}
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout

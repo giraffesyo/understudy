@@ -134,6 +134,7 @@ func (r *Runner) runMeta(ctx context.Context, play *playbook.Play, task *playboo
 		r.mu.Unlock()
 	case "clear_facts":
 		for _, h := range active {
+			r.facts.Delete(h)
 			r.Store.ClearFacts(h)
 		}
 	}

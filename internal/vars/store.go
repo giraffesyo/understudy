@@ -55,6 +55,33 @@ type Store struct {
 	// VaultDecrypt decrypts a !vault-tagged value at use time. Nil means no
 	// vault password is configured; encountering an encrypted value errors.
 	VaultDecrypt func(yaml.VaultedString) (string, error)
+
+	// FactLoader, when set, installs a host's cached facts (SetFacts) the
+	// first time its variables are read, as get_vars reads the fact
+	// cache.
+	FactLoader  func(host string)
+	factsMu     sync.Mutex
+	factsLoaded map[string]bool
+}
+
+// EnsureFacts installs host's cached facts now, if they are not yet.
+func (s *Store) EnsureFacts(host string) { s.loadFacts(host) }
+
+// loadFacts runs FactLoader for host once.
+func (s *Store) loadFacts(host string) {
+	if s.FactLoader == nil || host == "" {
+		return
+	}
+	s.factsMu.Lock()
+	defer s.factsMu.Unlock()
+	if s.factsLoaded[host] {
+		return
+	}
+	if s.factsLoaded == nil {
+		s.factsLoaded = map[string]bool{}
+	}
+	s.factsLoaded[host] = true
+	s.FactLoader(host)
 }
 
 func NewStore(engine *template.Engine) *Store {
@@ -301,6 +328,7 @@ func (s *Store) flattenOrigins(host string, roleDefaults, roleVars []map[string]
 
 // flattenLayers is flattenOrigins without the layers skip names.
 func (s *Store) flattenLayers(host string, roleDefaults, roleVars []map[string]any, skip map[Layer]bool) (map[string]any, map[string]valueOrigin) {
+	s.loadFacts(host)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := map[string]any{}
@@ -537,6 +565,7 @@ func (s *Store) NewHostVarsContext(host string, pos template.Position) *Context 
 // the magic names a host carries, which the caller places) its facts,
 // include_vars, set_fact and registered values, and the extra vars.
 func (s *Store) HostLayerOrder(host string) (inventory, rest []string) {
+	s.loadFacts(host)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	inventory = append(inventory, s.order[LHostVars][host]...)
@@ -550,6 +579,7 @@ func (s *Store) HostLayerOrder(host string) (inventory, rest []string) {
 // LayerOrder is the variable names of layers, in order, for a host: each
 // layer's global names, then the host's, in the order they were set.
 func (s *Store) LayerOrder(host string, layers ...Layer) []string {
+	s.loadFacts(host)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []string

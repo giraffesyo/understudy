@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/giraffesyo/understudy/internal/factcache"
 	"github.com/giraffesyo/understudy/internal/modules/pyre"
 	"github.com/giraffesyo/understudy/internal/omap"
 	"github.com/giraffesyo/understudy/internal/template"
@@ -64,6 +65,13 @@ type Options struct {
 	// ExtraVars are the run's extra vars (-e), which the constructed and
 	// generator plugins can template with (use_extra_vars).
 	ExtraVars map[string]any
+	// FactCache is the fact cache's configuration, which the constructed
+	// plugin reads hosts' facts from (the zero value: memory, none).
+	FactCache factcache.Settings
+	// PluginOption reads a plugin option from the environment and the
+	// configuration file (env names, then "section.key" ini entries),
+	// as ConfigManager does; nil: the environment only.
+	PluginOption func(env, ini []string) (value, origin string, ok bool)
 }
 
 // DefaultEnabled is ansible-core's INVENTORY_ENABLED default.

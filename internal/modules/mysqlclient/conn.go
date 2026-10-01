@@ -30,6 +30,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/giraffesyo/understudy/internal/modules/resolv"
 )
 
 // Capability flags (CLIENT_*).
@@ -143,7 +145,7 @@ func Connect(cfg Config) (*Conn, error) {
 		c.secure = true
 	} else {
 		d := net.Dialer{Timeout: cfg.ConnectTimeout}
-		c.nc, err = d.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+		c.nc, err = d.Dial("tcp", resolv.Addr(net.JoinHostPort(host, strconv.Itoa(port))))
 	}
 	if err != nil {
 		return nil, &Error{Code: 2003, Msg: fmt.Sprintf("Can't connect to MySQL server on %s (%s)", PyRepr(host), pyOSError(err))}
