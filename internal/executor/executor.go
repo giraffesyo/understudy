@@ -1912,7 +1912,7 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 	}
 
 	// Loop: aggregate per-item results Ansible-style.
-	var itemResults []any
+	var itemResults, itemOrigins []any
 	var notify [][]string
 	anyChanged, anyFailed, allSkipped := false, false, true
 	for i, item := range items {
@@ -1933,9 +1933,16 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 			res.Extra = map[string]any{}
 		}
 		lc.annotate(res.Extra, i)
+		if lc.origin != nil {
+			if res.ValueOrigins == nil {
+				res.ValueOrigins = map[string]any{}
+			}
+			res.ValueOrigins[task.LoopVar] = *lc.origin(i)
+		}
 		r.Callback.HostResult(host, task, shown(task, res), false, lc.label(itemCtx, i))
 		m := orderedResult(task, task.Module, res.ToVars())
 		itemResults = append(itemResults, m)
+		itemOrigins = append(itemOrigins, originTree(m, res.ValueOrigins))
 		anyChanged = anyChanged || res.Changed
 		anyFailed = anyFailed || res.Failed
 		allSkipped = allSkipped && res.Skipped
@@ -1948,6 +1955,7 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 	}
 	agg := loopResult(itemResults, anyChanged, anyFailed, allSkipped)
 	agg.Notify = notify
+	agg.ValueOrigins = map[string]any{"results": builtTree{itemOrigins}}
 	return agg, itemResults, task
 }
 
@@ -2017,6 +2025,15 @@ func (r *Runner) resolveLoop(task *playbook.Task, vctx *vars.Context) ([]any, bo
 
 // runOnce executes one occurrence (one loop item or the whole task).
 func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, vctx *vars.Context, item any) *agentproto.Result {
+	res := r.runAction(ctx, play, task, host, vctx, item)
+	if res != nil && !res.Skipped {
+		res.ValueOrigins = argOrigins(task, vctx, res)
+	}
+	return res
+}
+
+// runAction is runOnce without the result's value origins.
+func (r *Runner) runAction(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, vctx *vars.Context, item any) *agentproto.Result {
 	// The connection's settings join the task's variables under the names
 	// they do not define: all their names for the conditional and the
 	// arguments, the connection plugin's own for what runs after.
@@ -3027,7 +3044,8 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 				r.Store.SetHostVarRaw(h, task.Register, orderedResult(task, task.Module, res.ToVars()))
 				continue
 			}
-			r.Store.SetHostFact(h, task.Register, orderedResult(task, task.Module, res.ToVars()))
+			reg := orderedResult(task, task.Module, res.ToVars())
+			r.Store.SetHostFactOrigin(h, task.Register, reg, registeredOrigin(reg, res.ValueOrigins))
 		}
 	}
 	// Gathered facts land in the facts layer, both prefixed at top level

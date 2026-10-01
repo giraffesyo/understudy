@@ -115,6 +115,11 @@ type Result struct {
 	// templated for it, one list per result (a loop's items that ran).
 	Notify [][]string `json:"-"`
 
+	// ValueOrigins are the origins (the controller's) of the values an
+	// action passed back from its arguments, by result key: a registered
+	// result's other values are untrusted.
+	ValueOrigins map[string]any `json:"-"`
+
 	// Control-plane display hints; never cross the agent wire.
 	Origin        string `json:"-"` // "action" (control-side) or "module"
 	VerboseAlways bool   `json:"-"` // shown with its JSON even at -v0 (debug, assert)
