@@ -7,9 +7,11 @@ package vars
 import (
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -414,7 +416,42 @@ func (c *Context) items() *Context {
 }
 
 // deepTemplate walks a raw value, rendering every string through the engine.
+// A container met again inside itself (a recursive structure, as a YAML
+// alias inside its own anchor builds) is the one being rendered, so the
+// result recurses the same way; one met again elsewhere is rendered anew,
+// as ansible-core's templating copies it.
 func (c *Context) deepTemplate(v any) (any, error) {
+	return c.deepTemplateIn(v, map[containerID]any{})
+}
+
+// containerID identifies a list (its backing array and length) or a map.
+type containerID struct {
+	ptr uintptr
+	n   int
+}
+
+func idOf(v any) (containerID, bool) {
+	switch t := v.(type) {
+	case []any:
+		if len(t) == 0 {
+			return containerID{}, false
+		}
+		return containerID{uintptr(unsafe.Pointer(&t[0])), len(t)}, true
+	case map[string]any:
+		return containerID{reflect.ValueOf(t).Pointer(), -1}, true
+	case *yaml.OMap:
+		return containerID{uintptr(unsafe.Pointer(t)), -2}, true
+	}
+	return containerID{}, false
+}
+
+func (c *Context) deepTemplateIn(v any, seen map[containerID]any) (any, error) {
+	id, isContainer := idOf(v)
+	if isContainer {
+		if out, ok := seen[id]; ok {
+			return out, nil
+		}
+	}
 	switch t := v.(type) {
 	case string:
 		return c.store.engine.RenderTemplate(t, c, c.origin(t))
@@ -433,9 +470,15 @@ func (c *Context) deepTemplate(v any) (any, error) {
 		// The decrypted value may itself contain templates.
 		return c.store.engine.RenderTemplate(plain, c, c.pos)
 	case []any:
-		out := make([]any, len(t))
+		// Its own backing array even when empty: the list has an identity
+		// to_yaml aliases by, as PyYAML does by id().
+		out := make([]any, len(t), max(len(t), 1))
+		if isContainer {
+			seen[id] = out
+			defer delete(seen, id)
+		}
 		for i, item := range t {
-			r, err := c.items().deepTemplate(item)
+			r, err := c.items().deepTemplateIn(item, seen)
 			if err != nil {
 				return nil, err
 			}
@@ -444,8 +487,10 @@ func (c *Context) deepTemplate(v any) (any, error) {
 		return out, nil
 	case map[string]any:
 		out := make(map[string]any, len(t))
+		seen[id] = out
+		defer delete(seen, id)
 		for k, val := range t {
-			r, err := c.items().deepTemplate(val)
+			r, err := c.items().deepTemplateIn(val, seen)
 			if err != nil {
 				return nil, err
 			}
@@ -456,8 +501,10 @@ func (c *Context) deepTemplate(v any) (any, error) {
 		// Recurse into ordered maps (a dict-valued var/arg) so nested template
 		// strings are rendered, and keep the key order the result should carry.
 		out := yaml.NewOMap()
+		seen[id] = out
+		defer delete(seen, id)
 		for _, k := range t.Keys() {
-			r, err := c.items().deepTemplate(t.Get(k))
+			r, err := c.items().deepTemplateIn(t.Get(k), seen)
 			if err != nil {
 				return nil, err
 			}

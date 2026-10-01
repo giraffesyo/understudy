@@ -1,0 +1,6 @@
+db:
+  hosts:
+    d4:
+      ansible_host: 10.1.1.4
+  vars:
+    engine: pg

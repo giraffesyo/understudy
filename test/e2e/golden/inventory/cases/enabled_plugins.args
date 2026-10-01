@@ -1,0 +1,3 @@
+-i
+@INV@/sources/yaml_syntax.yml
+@INV@/playbook.yml

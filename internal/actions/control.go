@@ -2,6 +2,7 @@ package actions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
@@ -36,9 +37,19 @@ func runDebug(_ context.Context, actx *Context, args map[string]any, _ string) *
 		// debug var= evaluates the NAME as an expression against host vars.
 		val, err := actx.Vars.At(actx.ArgPos["var"]).EvalExpr(varName)
 		if err != nil {
+			var re *template.RecursionError
 			if ue, isUndef := err.(*template.UndefinedError); isUndef {
 				// ansible-core 2.19+ renders the template error in place.
 				val = fmt.Sprintf("<< error 1 - '%s' is undefined >>", ue.Name)
+			} else if errors.As(err, &re) {
+				// A recursive value cannot be finalized.
+				inner := "Error while resolving `var` expression: " + re.Error()
+				res := agentproto.Fail("Task failed: %s", inner)
+				res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: inner}
+				if p, has := actx.ArgPos["var"]; has {
+					res.ErrorChain.InnerFile, res.ErrorChain.InnerLine, res.ErrorChain.InnerCol = p.File, p.Line, p.Col
+				}
+				return res
 			} else {
 				return agentproto.Fail("debug var=%s: %v", varName, err)
 			}

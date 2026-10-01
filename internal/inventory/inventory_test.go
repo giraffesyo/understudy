@@ -36,6 +36,7 @@ func loadSample(t *testing.T) *Inventory {
 	if err := LoadINI(inv, []byte(sampleINI), "hosts.ini"); err != nil {
 		t.Fatal(err)
 	}
+	inv.reconcile()
 	if err := inv.finalize(); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +79,7 @@ func TestGroupVarPrecedence(t *testing.T) {
 	if vars["retries"] != int64(3) {
 		t.Errorf("retries = %#v", vars["retries"])
 	}
-	// group_names order: depth then alpha.
+	// group_names: sorted.
 	names := inv.GroupNames(web1)
 	want := []string{"site", "web"}
 	if !reflect.DeepEqual(names, want) {
@@ -205,9 +206,18 @@ func TestEmptyInventoryImplicitLocalhost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, ok := inv.Hosts["localhost"]
-	if !ok {
+	if len(inv.Hosts) != 0 || len(inv.ListHosts()) != 0 {
+		t.Fatalf("hosts = %v", inv.SortedHostNames())
+	}
+	h := inv.GetHost("localhost")
+	if h == nil || !h.Implicit() {
 		t.Fatal("implicit localhost missing")
+	}
+	if hosts, _ := inv.Match("all"); len(hosts) != 0 {
+		t.Errorf("all matched %d hosts; the implicit localhost is not in all", len(hosts))
+	}
+	if hosts, _ := inv.Match("localhost"); len(hosts) != 1 || hosts[0] != h {
+		t.Errorf("localhost matched %v", hosts)
 	}
 	if h.Vars["ansible_connection"] != "local" {
 		t.Error("implicit localhost should default to local connection")
@@ -236,7 +246,10 @@ func TestRanges(t *testing.T) {
 			t.Errorf("ExpandRange(%q) = %v, want %v", c.in, got, c.want)
 		}
 	}
-	for _, bad := range []string{"w[3:1]", "w[1:", "w[1:2:0]"} {
+	if got, err := ExpandRange("w[3:1]"); err != nil || len(got) != 0 {
+		t.Errorf("ExpandRange(w[3:1]) = %v, %v; want nothing (an empty Python range)", got, err)
+	}
+	for _, bad := range []string{"w[1:", "w[1:2:0]", "w[a:5]", "w[c:a]", "w[01:2]"} {
 		if _, err := ExpandRange(bad); err == nil {
 			t.Errorf("ExpandRange(%q): expected error", bad)
 		}

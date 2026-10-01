@@ -1,0 +1,4 @@
+-i
+@INV@/sources/yaml_syntax.yml
+--syntax-check
+@INV@/playbook.yml

@@ -1,9 +1,10 @@
 package inventory
 
 import (
+	"errors"
 	"fmt"
 	"path"
-	"sort"
+	"regexp"
 	"strings"
 )
 
@@ -60,7 +61,7 @@ func (inv *Inventory) Match(pattern string) ([]*Host, error) {
 	var out []*Host
 	for _, name := range order {
 		if selected[name] {
-			out = append(out, inv.Hosts[name])
+			out = append(out, inv.GetHost(name))
 		}
 	}
 	return out, nil
@@ -72,6 +73,9 @@ func (inv *Inventory) Match(pattern string) ([]*Host, error) {
 func (inv *Inventory) matchTerm(term string) ([]string, error) {
 	if term == "all" || term == "*" {
 		return inv.groupHostNames(inv.Groups["all"]), nil
+	}
+	if _, ok := inv.Hosts[term]; ok {
+		return []string{term}, nil
 	}
 	if strings.HasPrefix(term, "~") {
 		return nil, fmt.Errorf("regex host patterns (~) are not supported yet")
@@ -99,64 +103,60 @@ func (inv *Inventory) matchTerm(term string) ([]string, error) {
 			}
 		}
 	}
-	// Unknown names match nothing (Ansible warns).
+	if len(out) == 0 && localhostNames[term] {
+		// The implicit localhost, created on first use.
+		return []string{inv.GetHost(term).Name}, nil
+	}
+	if len(out) == 0 && !matchedGroup {
+		msg := "Could not match supplied host pattern, ignoring: " + term
+		switch inv.PatternMismatch {
+		case "error":
+			return nil, errors.New(msg)
+		case "ignore":
+		default:
+			inv.warning(msg)
+		}
+	}
 	return dedupe(out), nil
 }
 
 // groupNamesInOrder lists groups in creation order ("all", "ungrouped",
 // then as loaded), the order Ansible's groups dict iterates in.
 func (inv *Inventory) groupNamesInOrder() []string {
-	out := []string{"all"}
-	for _, g := range inv.Groups["all"].childOrder {
-		out = append(out, g.Name)
+	out := make([]string, len(inv.groupOrder))
+	for i, g := range inv.groupOrder {
+		out[i] = g.Name
 	}
-	seen := map[string]bool{}
-	for _, n := range out {
-		seen[n] = true
-	}
-	var rest []string
-	for n := range inv.Groups {
-		if !seen[n] {
-			rest = append(rest, n)
-		}
-	}
-	sort.Strings(rest)
-	return append(out, rest...)
+	return out
 }
 
 // splitPattern splits on ',' (preferred) or ':', avoiding splits inside
 // [] ranges (IPv6 addresses, host ranges).
 func splitPattern(pattern string) []string {
-	sep := byte(':')
-	if strings.ContainsRune(pattern, ',') {
-		sep = ','
-	}
-	var terms []string
-	var cur strings.Builder
-	depth := 0
-	for i := 0; i < len(pattern); i++ {
-		c := pattern[i]
-		switch {
-		case c == '[':
-			depth++
-			cur.WriteByte(c)
-		case c == ']':
-			depth--
-			cur.WriteByte(c)
-		case c == sep && depth == 0:
-			if t := strings.TrimSpace(cur.String()); t != "" {
-				terms = append(terms, t)
-			}
-			cur.Reset()
-		default:
-			cur.WriteByte(c)
+	var parts []string
+	switch {
+	case strings.Contains(pattern, ","):
+		parts = strings.Split(pattern, ",")
+	default:
+		if _, _, err := parseAddress(pattern, true); err == nil {
+			// One address: IPv6 colons and [x:y] ranges do not split.
+			parts = []string{pattern}
+		} else {
+			parts = colonTerms.FindAllString(pattern, -1)
 		}
 	}
-	if t := strings.TrimSpace(cur.String()); t != "" {
-		terms = append(terms, t)
+	var terms []string
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			terms = append(terms, t)
+		}
 	}
 	return terms
 }
+
+// colonTerms splits a ':'-separated pattern list, keeping [..]
+// expressions whole.
+var colonTerms = regexp.MustCompile(`(?:[^\s:\[\]]|\[[^\]]*\])+`)
 
 func dedupe(names []string) []string {
 	seen := map[string]bool{}

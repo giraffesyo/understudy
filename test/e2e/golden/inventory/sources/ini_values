@@ -1,0 +1,23 @@
+; values go through ast.literal_eval
+[web]
+h1 a=yes b=True c=1 d=1.5 e="quoted str" f=[1,2] g={'k':'v'} h=None i=0x1F j='single' k=1e3 l=no m=on n=None2
+h2:2222 ansible_host=10.0.0.2
+
+[web:vars]
+spaced = hello world # not a comment
+list = ['a', "b"]
+tuple = (1, 2)
+neg = -5
+complex = 1j
+ellipsis = ...
+empty =
+
+[site:children]
+web
+late
+
+[late]
+h3
+
+[late:vars]
+x=1

@@ -1,0 +1,5 @@
+-i
+@INV@/sources/json_inv.json
+-l
+zzz
+@INV@/playbook.yml

@@ -1,0 +1,6 @@
+[app-servers]
+d1 svc_port=8080
+d2:2200
+
+[db]
+d3

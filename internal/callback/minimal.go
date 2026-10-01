@@ -44,6 +44,8 @@ func (m *Minimal) TaskStart(*playbook.Task, string, bool)                      {
 func (m *Minimal) Included(*playbook.Task, string, []string, any, bool)        {}
 func (m *Minimal) LoopResult(string, *playbook.Task, *agentproto.Result, bool) {}
 func (m *Minimal) Recap(map[string]*executor.HostStats, []string)              {}
+func (m *Minimal) PlaybookStart(string)                                        {}
+func (m *Minimal) HandlerNotified(*playbook.Task, string)                      {}
 
 func (m *Minimal) HostResult(host string, task *playbook.Task, res *agentproto.Result, ignored bool, item any) {
 	m.mu.Lock()

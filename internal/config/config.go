@@ -43,6 +43,20 @@ type Config struct {
 	// InjectFactsSet: inject_facts_as_vars is configured (ini or
 	// ANSIBLE_INJECT_FACT_VARS) rather than left at its default.
 	InjectFactsSet bool
+
+	// Inventory settings: localhost_warning, [inventory]
+	// inventory_unparsed_warning, unparsed_is_failed,
+	// any_unparsed_is_failed, enable_plugins, ignore_extensions and
+	// ignore_patterns, and host_pattern_mismatch, with their
+	// ANSIBLE_* environment variables.
+	LocalhostWarning             bool
+	InventoryUnparsedWarning     bool
+	InventoryUnparsedIsFailed    bool
+	InventoryAnyUnparsedIsFailed bool
+	InventoryEnabled             []string
+	InventoryIgnoreExts          []string
+	InventoryIgnorePatterns      []string
+	HostPatternMismatch          string // "warning", "error" or "ignore"
 }
 
 // Defaults returns Ansible's defaults for the supported keys.
@@ -56,6 +70,10 @@ func Defaults() *Config {
 		DisplaySkippedHosts: true,
 		DeprecationWarnings: true,
 		DuplicateDictKey:    "warn",
+
+		LocalhostWarning:         true,
+		InventoryUnparsedWarning: true,
+		HostPatternMismatch:      "warning",
 	}
 }
 
@@ -86,6 +104,11 @@ func Load() (*Config, error) {
 		for i, p := range cfg.RolesPath {
 			if !filepath.IsAbs(p) {
 				cfg.RolesPath[i] = filepath.Join(filepath.Dir(path), p)
+			}
+		}
+		for i, p := range cfg.Inventory {
+			if !filepath.IsAbs(p) {
+				cfg.Inventory[i] = filepath.Join(filepath.Dir(path), p)
 			}
 		}
 		break
@@ -169,6 +192,31 @@ func applyINI(cfg *Config, content string) {
 				}
 			case "interpreter_python":
 				// Parsed and ignored.
+			case "localhost_warning":
+				cfg.LocalhostWarning = iniBool(val, cfg.LocalhostWarning)
+			case "host_pattern_mismatch":
+				cfg.HostPatternMismatch = strings.ToLower(val)
+			case "inventory_ignore_extensions":
+				cfg.InventoryIgnoreExts = splitList(val)
+			case "inventory_ignore_patterns":
+				cfg.InventoryIgnorePatterns = splitList(val)
+			}
+		case "inventory":
+			switch key {
+			case "inventory_unparsed_warning":
+				cfg.InventoryUnparsedWarning = iniBool(val, cfg.InventoryUnparsedWarning)
+			case "unparsed_is_failed":
+				cfg.InventoryUnparsedIsFailed = iniBool(val, cfg.InventoryUnparsedIsFailed)
+			case "any_unparsed_is_failed":
+				cfg.InventoryAnyUnparsedIsFailed = iniBool(val, cfg.InventoryAnyUnparsedIsFailed)
+			case "enable_plugins":
+				cfg.InventoryEnabled = splitList(val)
+			case "ignore_extensions":
+				cfg.InventoryIgnoreExts = splitList(val)
+			case "ignore_patterns":
+				cfg.InventoryIgnorePatterns = splitList(val)
+			case "host_pattern_mismatch":
+				cfg.HostPatternMismatch = strings.ToLower(val)
 			}
 		}
 	}
@@ -275,6 +323,28 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ANSIBLE_DEPRECATION_WARNINGS"); v != "" {
 		cfg.DeprecationWarnings = iniBool(v, cfg.DeprecationWarnings)
+	}
+	for env, dst := range map[string]*bool{
+		"ANSIBLE_LOCALHOST_WARNING":                &cfg.LocalhostWarning,
+		"ANSIBLE_INVENTORY_UNPARSED_WARNING":       &cfg.InventoryUnparsedWarning,
+		"ANSIBLE_INVENTORY_UNPARSED_FAILED":        &cfg.InventoryUnparsedIsFailed,
+		"ANSIBLE_INVENTORY_ANY_UNPARSED_IS_FAILED": &cfg.InventoryAnyUnparsedIsFailed,
+	} {
+		if v := os.Getenv(env); v != "" {
+			*dst = iniBool(v, *dst)
+		}
+	}
+	if v := os.Getenv("ANSIBLE_INVENTORY_ENABLED"); v != "" {
+		cfg.InventoryEnabled = splitList(v)
+	}
+	if v := os.Getenv("ANSIBLE_INVENTORY_IGNORE"); v != "" {
+		cfg.InventoryIgnoreExts = splitList(v)
+	}
+	if v := os.Getenv("ANSIBLE_INVENTORY_IGNORE_REGEX"); v != "" {
+		cfg.InventoryIgnorePatterns = splitList(v)
+	}
+	if v := os.Getenv("ANSIBLE_HOST_PATTERN_MISMATCH"); v != "" {
+		cfg.HostPatternMismatch = strings.ToLower(strings.TrimSpace(v))
 	}
 }
 

@@ -87,7 +87,12 @@ understudy playbook -i 'localhost,' -c local site.yml
 
 Inventory works the way you expect — INI and YAML formats, host ranges
 (`web[01:20].example.com`), `group_vars/`, `host_vars/`, patterns
-(`web:&staging:!db`), and `--limit`.
+(`web:&staging:!db`), and `--limit`. Sources go through ansible-core's
+plugin chain (`host_list`, `script`, `auto`, `yaml`, `ini`): INI values
+are Python literals as ansible-core reads them (`yes` stays a string), a
+source no plugin can parse is reported with each plugin's failure and
+skipped, and with nothing parsed only the implicit localhost remains
+(which `all` does not match).
 
 ## Playbooks in Go
 
@@ -295,7 +300,9 @@ understudy splits cleanly into two planes:
 
 - **Language plane** — `internal/yaml` (a port of libyaml, the parser
   ansible-core loads YAML with: same errors and positions, PyYAML-compatible
-  construction, source positions), `internal/template` (the Jinja2-compatible
+  construction, source positions; and of its emitter, which `to_yaml` and
+  `to_nice_yaml` dump through as ansible-core's do, aliases for values
+  referenced twice included), `internal/template` (the Jinja2-compatible
   engine), and `internal/vars` (layered precedence with lazy, use-time
   resolution).
 - **Execution plane** — `internal/inventory`, `internal/playbook`,
@@ -341,6 +348,11 @@ than silently diverging. Known boundaries:
   de-duplication; filters warn only for the values they read.
   `deprecation_warnings = False` (or `ANSIBLE_DEPRECATION_WARNINGS`)
   silences them.
+- **Inventory plugins**: the built-in file plugins are native (`host_list`,
+  `script`, `auto`, `yaml`, `ini`); TOML sources and plugin configs for
+  other inventory plugins (`constructed`, `generator`, collection plugins)
+  fail to parse with a clear message, and the source is skipped as
+  ansible-core skips one it cannot parse.
 - **Exit codes**: as ansible-playbook, the result of the last play run
   (failed and unreachable hosts carry over between plays until
   `clear_host_errors`); several playbooks each end with a recap, and one
@@ -414,8 +426,21 @@ than silently diverging. Known boundaries:
   `Removed: <nevra>`). dnf4's module iterates a set, so for multi-package
   transactions understudy lists the requested packages first and their
   dependencies after, by name.
+- **Verbose output**: `-vv` prints what ansible-core does: the `PLAYBOOK:`
+  banner and play count, task paths, handler notifications, `META:` lines,
+  skipped stdout callbacks, static imports, plugin redirects
+  (`redirecting (type: modules) ...`, at load and each time a task resolves
+  one) and the password hashing backend. Its version banner names
+  understudy's build rather than ansible-core's Python installation.
+  At `-vvv`, results dump indented and the local connection announces
+  itself (`<host> ESTABLISH LOCAL CONNECTION FOR USER: ...`); the lines that
+  trace ansible-core's Python machinery are not reproduced: the `EXEC`/`PUT`
+  commands that stage and run AnsiballZ payloads, `Using module file`, the
+  variable manager's repeated ``Read `vars_file` `` lines, inventory
+  plugins' parse attempts, and SSH connection tracing (understudy's agent
+  protocol runs no per-command `ssh`).
 - **Documented divergences**: YAML timestamps and sexagesimals resolve as
-  strings; a recursive YAML alias is a load error; regular expressions use
+  strings; regular expressions use
   Go's RE2 (lookaround and backreferences in *patterns* are rejected with a
   clear error rather than mis-matched),
   iterated with Python's `re.sub`/`findall` match rules; a task that hits
@@ -440,7 +465,9 @@ protocol packages, so it stays small.
 
 The golden suite runs every `test/e2e/golden/*.yml` through the installed
 `ansible-playbook` and through understudy, comparing per-task statuses and
-recaps, and stdout byte for byte at the default verbosity and at `-v`. It
+recaps, and stdout byte for byte at the default verbosity, `-v`, `-vv` and
+`-vvv` (the version banner masked at `-vv`, and at `-vvv` the lines listed
+under **Verbose output** left out). It
 needs the `ansible` package (the corpus uses a few `community.general`
 plugins) and `passlib`, e.g. `pip install ansible passlib`, with the
 matching `ansible-core` release. Set `ANSIBLE_PYTHON_INTERPRETER` to that
