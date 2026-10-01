@@ -5,6 +5,7 @@ package executor
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -1254,7 +1255,7 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 	// Resolve the loop (nil = run once with no loop var).
 	items, isLoop, err := r.resolveLoop(task, base)
 	if err != nil {
-		return agentproto.Fail("error templating loop: %v", err), nil, task
+		return loopFailure(err), nil, task
 	}
 
 	if !isLoop {
@@ -1334,7 +1335,7 @@ func (r *Runner) resolveLoop(task *playbook.Task, vctx *vars.Context) ([]any, bo
 	}
 	v, err := vctx.At(pos).KeepingDeprecated().TemplateValue(task.Loop)
 	if err != nil {
-		return nil, false, err
+		return nil, false, &loopTemplateError{pos: pos, err: err}
 	}
 	v = template.Undeprecate(v) // the list itself (play_hosts)
 	if task.LoopWith != "" {
@@ -1368,7 +1369,7 @@ func (r *Runner) resolveLoop(task *playbook.Task, vctx *vars.Context) ([]any, bo
 func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playbook.Task, host string, vctx *vars.Context, item any) *agentproto.Result {
 	// when: gate.
 	if skip, err := whenSkip(vctx, task.When, task.WhenPos); err != nil {
-		return agentproto.Fail("The conditional check failed: %v", err)
+		return err.result()
 	} else if skip != nil {
 		return skip
 	}
@@ -1465,9 +1466,10 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 		}
 		done := !res.Failed
 		if task.Until != "" {
-			ok, err := vctx.WithOverlay(registerOverlay(task, res)).EvalWhen([]string{task.Until})
+			pos := conditionalPos(task, "until", task.Until)
+			ok, err := vctx.WithOverlay(registerOverlay(task, res)).At(pos).EvalWhen([]string{task.Until})
 			if err != nil {
-				return agentproto.Fail("error evaluating until condition: %v", err)
+				return (&conditionalError{keyword: "until", pos: pos, err: err}).result()
 			}
 			done = ok
 		}
@@ -1532,17 +1534,17 @@ func applyChangedFailedWhen(task *playbook.Task, vctx *vars.Context, res *agentp
 	if len(task.ChangedWhen) > 0 || len(task.FailedWhen) > 0 {
 		resCtx := vctx.WithOverlay(registerOverlay(task, res))
 		if len(task.ChangedWhen) > 0 {
-			ok, err := resCtx.EvalWhen(task.ChangedWhen)
+			ok, err := evalConditionals(task, resCtx, "changed_when", task.ChangedWhen)
 			if err != nil {
-				return agentproto.Fail("error evaluating changed_when: %v", err)
+				return err.actionResult(res)
 			}
 			res.Changed = ok
 			setExtra(res, "changed_when_result", ok)
 		}
 		if len(task.FailedWhen) > 0 {
-			ok, err := resCtx.EvalWhen(task.FailedWhen)
+			ok, err := evalConditionals(task, resCtx, "failed_when", task.FailedWhen)
 			if err != nil {
-				return agentproto.Fail("error evaluating failed_when: %v", err)
+				return err.actionResult(res)
 			}
 			if res.Failed && !ok {
 				// ansible-core 2.19+ records that a failure was overridden.
@@ -2471,17 +2473,112 @@ func argPositions(task *playbook.Task) map[string]template.Position {
 	return out
 }
 
+// loopTemplateError is a loop value that did not template.
+type loopTemplateError struct {
+	pos template.Position
+	err error
+}
+
+func (e *loopTemplateError) Error() string { return e.err.Error() }
+func (e *loopTemplateError) Unwrap() error { return e.err }
+
+// loopFailure is the failed result of a task whose loop could not be
+// resolved: a template error is raised as is, at the loop's origin.
+func loopFailure(err error) *agentproto.Result {
+	var le *loopTemplateError
+	if errors.As(err, &le) {
+		if cause, ok := template.Cause(le.err); ok {
+			res := agentproto.Fail("%s", cause)
+			res.Origin = "verbatim"
+			res.ErrorChain = &agentproto.ErrorChain{Inner: cause,
+				InnerFile: le.pos.File, InnerLine: le.pos.Line, InnerCol: le.pos.Col}
+			return res
+		}
+	}
+	return agentproto.Fail("error templating loop: %v", err)
+}
+
+// conditionalError is a conditional keyword (when, until, changed_when,
+// failed_when) that did not evaluate, at the conditional's origin.
+type conditionalError struct {
+	keyword string
+	pos     template.Position
+	err     error
+}
+
+func (e *conditionalError) Error() string { return e.message() }
+
+// message is ansible-core's "A 'when' expression failed: <cause>".
+func (e *conditionalError) message() string {
+	article := "A"
+	if e.keyword == "until" {
+		article = "An"
+	}
+	return fmt.Sprintf("%s '%s' expression failed: %s", article, e.keyword, template.ConditionalCause(e.err))
+}
+
+// result is the task's failed result: "Task failed" caused by the
+// conditional's error.
+func (e *conditionalError) result() *agentproto.Result {
+	inner := e.message()
+	res := agentproto.Fail("Task failed: %s", inner)
+	res.Origin = "verbatim"
+	res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: inner,
+		InnerFile: e.pos.File, InnerLine: e.pos.Line, InnerCol: e.pos.Col}
+	return res
+}
+
+// actionResult is the module's result failed by a changed_when or
+// failed_when that did not evaluate (raised in the action: "Task failed:
+// Action failed").
+func (e *conditionalError) actionResult(res *agentproto.Result) *agentproto.Result {
+	inner := e.message()
+	out := *res
+	out.Failed = true
+	out.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed: Action failed.", Inner: inner,
+		InnerFile: e.pos.File, InnerLine: e.pos.Line, InnerCol: e.pos.Col}
+	return &out
+}
+
+// evalConditionals evaluates a conditional keyword's list: all must
+// hold, each evaluated at its own origin.
+func evalConditionals(task *playbook.Task, vctx *vars.Context, keyword string, conds []string) (bool, *conditionalError) {
+	for _, cond := range conds {
+		if cond == "" {
+			continue
+		}
+		pos := conditionalPos(task, keyword, cond)
+		ok, err := vctx.At(pos).EvalWhen([]string{cond})
+		if err != nil {
+			return false, &conditionalError{keyword: keyword, pos: pos, err: err}
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// conditionalPos is where a conditional keyword's expression came from:
+// the list entry's own origin, else the keyword's value.
+func conditionalPos(task *playbook.Task, keyword, cond string) template.Position {
+	if file, line, col, ok := yaml.Origin(cond); ok {
+		return template.Position{File: file, Line: line, Col: col}
+	}
+	return task.KeywordPos[keyword]
+}
+
 // whenSkip evaluates when: conditions in order. Like Ansible, a skip
 // reports the first condition that was false (a literal false as the
 // boolean itself). nil means the task runs.
-func whenSkip(vctx *vars.Context, when []string, pos map[string]template.Position) (*agentproto.Result, error) {
+func whenSkip(vctx *vars.Context, when []string, pos map[string]template.Position) (*agentproto.Result, *conditionalError) {
 	for _, cond := range when {
 		if cond == "" {
 			continue
 		}
 		ok, err := vctx.At(pos[cond]).EvalWhen([]string{cond})
 		if err != nil {
-			return nil, err
+			return nil, &conditionalError{keyword: "when", pos: pos[cond], err: err}
 		}
 		if !ok {
 			var failed any = cond

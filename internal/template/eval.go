@@ -685,7 +685,8 @@ func (ec *EvalCtx) evalCall(t *callExpr) (any, error) {
 	case globalFunc:
 		out, err := f(ec, args, kwargs)
 		if err != nil {
-			if _, ok := err.(*TemplateError); ok {
+			switch err.(type) {
+			case *TemplateError, *UndefinedError:
 				return nil, err
 			}
 			return nil, ec.errf(t.off, "%s", err)

@@ -193,7 +193,19 @@ func runTemplate(ctx context.Context, actx *Context, args map[string]any, _ stri
 	}
 	rendered, err := tvars.RenderFileWith(string(raw), pos, opts, searchPath...)
 	if err != nil {
-		return actionFail("template: error rendering %s: %v", src, err)
+		cause, ok := template.Cause(err)
+		if !ok {
+			return actionFail("template: error rendering %s: %v", src, err)
+		}
+		// Raised by the action: "Task failed", caused by the error at
+		// the template file (a syntax error's line, else just the file).
+		res := actionRaise("Task failed: %s", cause)
+		res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: cause, InnerFile: resolved, InnerPathOnly: true}
+		if file, line, col, ok := template.FileErrorOrigin(err); ok && line > 0 {
+			res.ErrorChain.InnerFile, res.ErrorChain.InnerLine, res.ErrorChain.InnerCol = file, line, col
+			res.ErrorChain.InnerPathOnly = false
+		}
+		return res
 	}
 	encoding, _ := args["output_encoding"].(string)
 	content, err := encodeOutput(rendered, encoding)

@@ -164,6 +164,45 @@ func Cause(err error) (msg string, ok bool) {
 	return "", false
 }
 
+// FileErrorOrigin is the origin ansible-core gives an error raised
+// rendering a template file (Position.WholeFile): the file and the line of
+// a syntax error (col is NoColumn), or just the file (line 0) for an
+// undefined value or a rendering error. ok is false for other errors, and
+// for a plugin's error, which ansible-core attributes to the outermost
+// template.
+func FileErrorOrigin(err error) (file string, line, col int, ok bool) {
+	var te *TemplateError
+	if errors.As(err, &te) {
+		if !te.Pos.WholeFile || te.Plugin {
+			return "", 0, 0, false
+		}
+		if te.Syntax && te.Line > 0 {
+			return te.Pos.File, te.Line, NoColumn, true
+		}
+		return te.Pos.File, 0, 0, true
+	}
+	var ue *UndefinedError
+	if errors.As(err, &ue) && ue.Pos.WholeFile {
+		return ue.Pos.File, 0, 0, true
+	}
+	return "", 0, 0, false
+}
+
+// ConditionalCause words the error of a conditional (when, until,
+// changed_when, failed_when, assert's that) that did not evaluate: as
+// Cause, an undefined value as "Error while evaluating conditional: ...".
+func ConditionalCause(err error) string {
+	msg, ok := Cause(err)
+	if !ok {
+		return err.Error()
+	}
+	var ue *UndefinedError
+	if errors.As(err, &ue) {
+		return "Error while evaluating conditional: " + msg
+	}
+	return msg
+}
+
 // undefinedCause words an undefined name as Jinja's undefined error:
 // an attribute or index missing on a defined value ("<type> object.attr"
 // or "<type> object[i]") names the value's type, anything else the
@@ -343,6 +382,7 @@ func (e *Engine) WithOptions(opts Options) *Engine {
 // search path: the template's own directory, then role and playbook
 // template directories).
 func (e *Engine) RenderFile(src string, vars VarGetter, pos Position, searchPath []string) (string, error) {
+	pos.WholeFile = true
 	if err := e.syntaxError(src, pos, false, false); err != nil {
 		return "", err
 	}

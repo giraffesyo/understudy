@@ -7,6 +7,10 @@ import (
 	"strings"
 )
 
+// NoColumn is the column of an origin that names only a line (ansible-core's
+// col_num None): "Origin: file:line", the line underlined.
+const NoColumn = -1 << 30
+
 // SourceExcerpt is the source context ansible-core shows under an error's
 // or warning's "Origin:" line: up to three lines ending at line, then a
 // caret at col.
@@ -53,6 +57,15 @@ func ExcerptLines(lines []string, line, col int) string {
 			usable = maxLen - len(marker)
 		}
 		fmt.Fprintf(&b, "%s\n", strings.TrimRight(fmt.Sprintf("%*d %s", width, n, string(src)), " \t\r"))
+	}
+	if col == NoColumn {
+		// No column: the target line is underlined.
+		src := []rune(strings.ReplaceAll(strings.TrimRight(lines[line-1], "\r"), "\t", " "))
+		if len(src) > maxLen {
+			src = src[:maxLen]
+		}
+		fmt.Fprintf(&b, "%s %s\n", strings.Repeat(" ", width), strings.Repeat("^", len(src)))
+		return b.String()
 	}
 	if col >= 1 && col <= usable {
 		label := fmt.Sprintf("column %d", col)
