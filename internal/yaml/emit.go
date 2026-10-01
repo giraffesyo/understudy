@@ -3,6 +3,7 @@ package yaml
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"reflect"
 	"sort"
 	"strconv"
@@ -47,6 +48,8 @@ func emitValue(b *strings.Builder, v any, depth, indent int, inline bool) error 
 		b.WriteString(strconv.FormatBool(t))
 	case int:
 		b.WriteString(strconv.Itoa(t))
+	case *big.Int:
+		b.WriteString(t.String())
 	case int64:
 		b.WriteString(strconv.FormatInt(t, 10))
 	case float64:

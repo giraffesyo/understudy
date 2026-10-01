@@ -1,0 +1,8 @@
+plugin: constructed
+strict: true
+compose:
+  greeting: greet ~ ' ' ~ inventory_hostname
+keyed_groups:
+  - key: os
+    prefix: "{{ pfx }}"
+    parent_group: "{{ parent }}"

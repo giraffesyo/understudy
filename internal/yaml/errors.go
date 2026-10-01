@@ -44,6 +44,24 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("%s:%d:%d: %s", file, line, col, e.Message())
 }
 
+// PyYAMLString is str() of the PyYAML exception (MarkedYAMLError) for a
+// stream named name ("<unicode string>" for a str): the context, the
+// problem and its mark, one per line; an unmarked error is its message.
+func (e *Error) PyYAMLString(name string) string {
+	if e.Line == 0 {
+		return e.Msg
+	}
+	var lines []string
+	if e.Context != "" {
+		lines = append(lines, e.Context)
+	}
+	if e.Problem != "" {
+		lines = append(lines, e.Problem)
+	}
+	lines = append(lines, fmt.Sprintf("  in \"%s\", line %d, column %d", name, e.Line, e.Col))
+	return strings.Join(lines, "\n")
+}
+
 // Message is ansible-core's wording for the failure.
 func (e *Error) Message() string {
 	e.analyzeOnce()

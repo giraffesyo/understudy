@@ -120,6 +120,18 @@ type TemplateError struct {
 	Src    string
 	Off    int
 	Syntax bool // a lexer/parser error (else raised while rendering)
+	// Expr marks a syntax error in a bare expression (a conditional)
+	// rather than a template.
+	Expr bool
+	// Line is the line of the template the syntax error is on (Jinja's
+	// lineno), 0 when unknown.
+	Line int
+	// Plugin marks an error a filter or test plugin raised: Msg is
+	// ansible-core's "The filter plugin '...' failed: ..." chain.
+	Plugin bool
+	// pluginHead and pluginDetail split a plugin failure whose exception
+	// was raised while handling another (see SplitCause).
+	pluginHead, pluginDetail string
 }
 
 // Cause is the error as ansible-core words a template failure's cause:
@@ -129,12 +141,25 @@ type TemplateError struct {
 func Cause(err error) (msg string, ok bool) {
 	var ue *UndefinedError
 	if errors.As(err, &ue) {
+		if ue.Hint != "" {
+			return ue.Hint, true
+		}
 		return undefinedCause(ue.Name), true
 	}
 	var te *TemplateError
 	if errors.As(err, &te) {
 		if te.Syntax {
-			return "Syntax error in template: " + te.Msg, true
+			head := "Syntax error in template"
+			if te.Expr {
+				head = "Syntax error in expression"
+				if HasTemplate(te.Src) {
+					head += ". Template delimiters are not supported in expressions"
+				}
+			}
+			return head + ": " + te.Msg, true
+		}
+		if te.Plugin {
+			return te.Msg, true
 		}
 		return "Error rendering template: " + te.Msg, true
 	}
@@ -143,6 +168,45 @@ func Cause(err error) (msg string, ok bool) {
 		return re.Error(), true
 	}
 	return "", false
+}
+
+// FileErrorOrigin is the origin ansible-core gives an error raised
+// rendering a template file (Position.WholeFile): the file and the line of
+// a syntax error (col is NoColumn), or just the file (line 0) for an
+// undefined value or a rendering error. ok is false for other errors, and
+// for a plugin's error, which ansible-core attributes to the outermost
+// template.
+func FileErrorOrigin(err error) (file string, line, col int, ok bool) {
+	var te *TemplateError
+	if errors.As(err, &te) {
+		if !te.Pos.WholeFile || te.Plugin {
+			return "", 0, 0, false
+		}
+		if te.Syntax && te.Line > 0 {
+			return te.Pos.File, te.Line, NoColumn, true
+		}
+		return te.Pos.File, 0, 0, true
+	}
+	var ue *UndefinedError
+	if errors.As(err, &ue) && ue.Pos.WholeFile {
+		return ue.Pos.File, 0, 0, true
+	}
+	return "", 0, 0, false
+}
+
+// ConditionalCause words the error of a conditional (when, until,
+// changed_when, failed_when, assert's that) that did not evaluate: as
+// Cause, an undefined value as "Error while evaluating conditional: ...".
+func ConditionalCause(err error) string {
+	msg, ok := Cause(err)
+	if !ok {
+		return err.Error()
+	}
+	var ue *UndefinedError
+	if errors.As(err, &ue) {
+		return "Error while evaluating conditional: " + msg
+	}
+	return msg
 }
 
 // undefinedCause words an undefined name as Jinja's undefined error:
@@ -205,6 +269,12 @@ type EvalCtx struct {
 	lastDeprecated *Deprecated // the deprecated value access() read last
 
 	own *ownership // what the render may mutate in place (nil: nothing)
+
+	// filterVars marks which of the running filter's input and positional
+	// arguments were read from variables (see pyClassName).
+	filterVars []bool
+	// testKwargs are the running test's keyword arguments.
+	testKwargs map[string]any
 }
 
 func (ec *EvalCtx) Engine() *Engine    { return ec.engine }
@@ -253,6 +323,9 @@ func HasTemplate(s string) bool {
 func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, error) {
 	if !HasTemplate(src) {
 		return src, nil
+	}
+	if err := e.syntaxError(src, pos, false, true); err != nil {
+		return nil, err
 	}
 	nodes, err := e.parseTemplate(src, pos)
 	if err != nil {
@@ -321,6 +394,10 @@ func (e *Engine) WithOptions(opts Options) *Engine {
 // search path: the template's own directory, then role and playbook
 // template directories).
 func (e *Engine) RenderFile(src string, vars VarGetter, pos Position, searchPath []string) (string, error) {
+	pos.WholeFile = true
+	if err := e.syntaxError(src, pos, false, false); err != nil {
+		return "", err
+	}
 	// Jinja (keep_trailing_newline=False) drops one trailing newline; Ansible
 	// then restores the source's trailing newlines the output lacks.
 	nodes, err := e.parseTemplate(strings.TrimSuffix(src, "\n"), pos)
@@ -379,6 +456,9 @@ func (e *Engine) EvalExpression(src string, vars VarGetter, pos Position) (any, 
 
 // evalExpression evaluates src without finalizing the result.
 func (e *Engine) evalExpression(src string, vars VarGetter, pos Position) (any, *EvalCtx, error) {
+	if err := e.syntaxError(src, pos, true, false); err != nil {
+		return nil, nil, err
+	}
 	// The spaces matter: "{{-" would otherwise read as a whitespace-control
 	// marker and eat a leading minus sign.
 	toks, err := lex("{{ "+src+" }}", e.Opts.exprOpts(), pos)
@@ -415,6 +495,22 @@ func (e *Engine) EvalBool(src string, vars VarGetter, pos Position) (bool, error
 		return false, err
 	}
 	return truthy(v), nil
+}
+
+// syntaxError is the TemplateSyntaxError Jinja raises compiling src (a
+// template, or with expression set a bare expression), nil when it
+// compiles. escapeBackslashes is ansible-core's escape_backslashes
+// option (string literals in {{ }} keep their backslashes).
+func (e *Engine) syntaxError(src string, pos Position, expression, escapeBackslashes bool) error {
+	je := e.jinjaCheck(src, e.Opts, expression, escapeBackslashes)
+	if je == nil {
+		return nil
+	}
+	msg := je.msg
+	if je.cause != "" && !strings.HasSuffix(msg, je.cause) {
+		msg = strings.TrimRight(msg, ". ") + ": " + je.cause
+	}
+	return &TemplateError{Pos: pos, Msg: msg, Src: src, Syntax: true, Expr: expression, Line: je.line}
 }
 
 // singleOutput reports whether nodes are exactly one output expression plus

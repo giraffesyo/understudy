@@ -72,7 +72,7 @@ func argInt(args []any, i int, def int64) (int64, error) {
 	}
 	n, ok := asInt(args[i])
 	if !ok {
-		return 0, fmt.Errorf("argument %d must be an integer, got %s", i+1, typeName(args[i]))
+		return 0, fmt.Errorf("'%s' object cannot be interpreted as an integer", pyClassName(args[i], false))
 	}
 	return n, nil
 }

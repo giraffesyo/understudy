@@ -1,7 +1,10 @@
 package template
 
 import (
+	"errors"
 	"fmt"
+	"math"
+	"math/big"
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -101,8 +104,11 @@ func (ec *EvalCtx) eval(e Expr) (any, error) {
 			}
 			return nil, ec.errf(t.off, "bad operand type for unary +: %s", typeName(x))
 		}
-		if i, ok := asInt(x); ok {
+		if i, ok := asInt(x); ok && i != math.MinInt64 {
 			return -i, nil
+		}
+		if b, ok := asBigInt(x); ok {
+			return normInt(new(big.Int).Neg(b)), nil
 		}
 		if f, ok := x.(float64); ok {
 			return -f, nil
@@ -486,7 +492,7 @@ func (ec *EvalCtx) compareOnce(op string, l, r any, off int) (bool, error) {
 		}
 		return found, nil
 	}
-	c, err := compare(l, r)
+	c, err := compareOp(l, r, op)
 	if err != nil {
 		return false, ec.errf(off, "%s", err)
 	}
@@ -515,7 +521,9 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 	}
 	fn, ok := ec.engine.Filters[t.name]
 	if !ok {
-		return nil, ec.errf(t.off, "no filter named %q", t.name)
+		// Compiling rejects an unknown filter outside if-statements and
+		// conditional expressions; inside them it fails when called.
+		return nil, ec.errf(t.off, "No filter named %s found.", pyStrRepr(t.full))
 	}
 	if isUndefined(in) && !undefinedTolerantFilters[t.name] {
 		u := in.(Undefined)
@@ -529,7 +537,14 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 	// (to_json all of them, dict2items the values); those it passes on
 	// stay deprecated.
 	ec.filterReads(t.name, in, args, kwargs)
+	saved := ec.filterVars
+	ec.filterVars = make([]bool, 1+len(t.args))
+	ec.filterVars[0] = ec.isVarRef(t.x)
+	for i, a := range t.args {
+		ec.filterVars[i+1] = ec.isVarRef(a)
+	}
 	out, err := fn(ec, in, args, kwargs)
+	ec.filterVars = saved
 	if err != nil {
 		if _, ok := err.(*TemplateError); ok {
 			return nil, err
@@ -537,9 +552,29 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 		if _, ok := err.(*UndefinedError); ok {
 			return nil, err
 		}
-		return nil, ec.errf(t.off, "filter %q: %s", t.name, err)
+		return nil, ec.pluginError("filter", t.full, err)
 	}
 	return out, nil
+}
+
+// pluginError is AnsibleTemplatePluginRuntimeError: "The filter plugin
+// 'ansible.builtin.combine' failed", caused by the plugin's exception.
+func (ec *EvalCtx) pluginError(kind, name string, err error) error {
+	if !strings.Contains(name, ".") {
+		name = "ansible.builtin." + name
+	}
+	head := fmt.Sprintf("The %s plugin %s failed.", kind, pyStrRepr(name))
+	detail := err.Error()
+	msg := head
+	if !strings.HasSuffix(head, detail) {
+		msg = strings.TrimRight(head, ". ") + ": " + detail
+	}
+	te := &TemplateError{Pos: ec.pos, Msg: msg, Src: ec.src, Plugin: true}
+	var he *handlingError
+	if errors.As(err, &he) {
+		te.pluginHead, te.pluginDetail = head, detail
+	}
+	return te
 }
 
 // undefinedTolerantTests may receive an Undefined input.
@@ -554,22 +589,28 @@ func (ec *EvalCtx) evalTest(t *testExpr) (any, error) {
 	}
 	fn, ok := ec.engine.Tests[t.name]
 	if !ok {
-		return nil, ec.errf(t.off, "no test named %q", t.name)
+		return nil, ec.errf(t.off, "No test named %s found.", pyStrRepr(t.full))
 	}
 	if isUndefined(in) && !undefinedTolerantTests[t.name] {
 		u := in.(Undefined)
 		return nil, u.useError(ec.pos)
 	}
-	args, _, err := ec.evalArgs(t.args, nil)
+	args, kwargs, err := ec.evalArgs(t.args, t.kwargs)
 	if err != nil {
 		return nil, err
 	}
+	saved := ec.testKwargs
+	ec.testKwargs = kwargs
 	res, err := fn(ec, in, args)
+	ec.testKwargs = saved
 	if err != nil {
 		if _, ok := err.(*TemplateError); ok {
 			return nil, err
 		}
-		return nil, ec.errf(t.off, "test %q: %s", t.name, err)
+		if _, ok := err.(*UndefinedError); ok {
+			return nil, err
+		}
+		return nil, ec.pluginError("test", t.full, err)
 	}
 	if t.negated {
 		return !res, nil
@@ -664,7 +705,8 @@ func (ec *EvalCtx) evalCall(t *callExpr) (any, error) {
 	case globalFunc:
 		out, err := f(ec, args, kwargs)
 		if err != nil {
-			if _, ok := err.(*TemplateError); ok {
+			switch err.(type) {
+			case *TemplateError, *UndefinedError:
 				return nil, err
 			}
 			return nil, ec.errf(t.off, "%s", err)

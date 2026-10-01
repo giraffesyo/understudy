@@ -2,6 +2,7 @@ package yaml
 
 import (
 	"math"
+	"math/big"
 	"reflect"
 	"strings"
 	"testing"
@@ -54,7 +55,7 @@ func TestScalarResolution11(t *testing.T) {
 		{"0o755", int64(493)}, // 1.2-style octal (our extension)
 		{"0x1F", int64(31)},   // hex
 		{"0b1010", int64(10)}, // binary
-		{"9999999999999999999999", "9999999999999999999999"}, // int64 overflow -> string
+		{"9999999999999999999999", testBigInt("9999999999999999999999")}, // Python ints have no size limit
 		// Floats.
 		{"1.5", 1.5}, {"1.10", 1.1}, {"-2.0", -2.0}, {".5", 0.5},
 		{"1.5e+3", 1500.0}, {"1.5E-2", 0.015},
@@ -395,4 +396,9 @@ func TestKeyOrderPreserved(t *testing.T) {
 	if got := child.Keys(); !reflect.DeepEqual(got, []string{"x", "y", "first"}) {
 		t.Errorf("merge order = %v, want [x y first]", got)
 	}
+}
+
+func testBigInt(s string) *big.Int {
+	b, _ := new(big.Int).SetString(s, 10)
+	return b
 }

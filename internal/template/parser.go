@@ -535,6 +535,7 @@ func (p *parser) parseFilterExpr(node Expr) (Expr, error) {
 				return nil, err
 			}
 			name := t.val
+			full := t.val
 			// Dotted filter names (ansible.builtin.combine) collapse to the
 			// final segment.
 			for p.kind() == tokDot {
@@ -544,6 +545,7 @@ func (p *parser) parseFilterExpr(node Expr) (Expr, error) {
 					return nil, err
 				}
 				name = seg.val
+				full += "." + seg.val
 			}
 			var args []Expr
 			var kwargs []kwarg
@@ -554,7 +556,7 @@ func (p *parser) parseFilterExpr(node Expr) (Expr, error) {
 					return nil, err
 				}
 			}
-			node = &filterExpr{off: t.off, x: node, name: name, args: args, kwargs: kwargs}
+			node = &filterExpr{off: t.off, x: node, name: name, full: full, args: args, kwargs: kwargs}
 		case p.isName("is"):
 			p.next()
 			negated := p.acceptName("not")
@@ -563,6 +565,7 @@ func (p *parser) parseFilterExpr(node Expr) (Expr, error) {
 				return nil, err
 			}
 			name := t.val
+			full := t.val
 			// Dotted test names (ansible.builtin.version) collapse to the
 			// final segment, like filters.
 			for p.kind() == tokDot {
@@ -572,11 +575,13 @@ func (p *parser) parseFilterExpr(node Expr) (Expr, error) {
 					return nil, err
 				}
 				name = seg.val
+				full += "." + seg.val
 			}
 			var args []Expr
+			var kwargs []kwarg
 			if p.kind() == tokLParen {
 				p.next()
-				args, _, err = p.parseCallArgs()
+				args, kwargs, err = p.parseCallArgs()
 				if err != nil {
 					return nil, err
 				}
@@ -588,7 +593,7 @@ func (p *parser) parseFilterExpr(node Expr) (Expr, error) {
 				}
 				args = []Expr{arg}
 			}
-			node = &testExpr{off: t.off, x: node, name: name, args: args, negated: negated}
+			node = &testExpr{off: t.off, x: node, name: name, full: full, args: args, kwargs: kwargs, negated: negated}
 		default:
 			return node, nil
 		}
