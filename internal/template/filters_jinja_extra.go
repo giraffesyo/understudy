@@ -43,7 +43,7 @@ func registerJinjaExtraFilters(e *Engine) {
 			}
 		}
 		if m, ok := lookupMethod(Undeprecate(in), name); ok {
-			return m, nil
+			return &methodValue{call: m, name: name, recv: Undeprecate(in), fromVar: ec.fromVar(-1)}, nil
 		}
 		return missingItem(in, name), nil
 	}
