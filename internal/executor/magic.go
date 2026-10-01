@@ -1,8 +1,11 @@
 package executor
 
 import (
+	"os/exec"
 	"path/filepath"
+	"sync"
 
+	"github.com/giraffesyo/understudy/internal/modules"
 	"github.com/giraffesyo/understudy/internal/vars"
 )
 
@@ -24,9 +27,13 @@ func strList(s []string) []any {
 // every host: ansible_version, ansible_run_tags, ansible_skip_tags,
 // ansible_diff_mode, ansible_forks, ansible_verbosity, ansible_config_file,
 // ansible_inventory_sources, ansible_play_batch, the role-name lists, and
-// an empty ansible_facts before facts are gathered.
-func (r *Runner) setRunMagic(c *vars.Context, host string, playHosts []string) {
+// an empty ansible_facts before facts are gathered (withPlay: the play's
+// too: the batch and role names).
+func (r *Runner) setRunMagic(c *vars.Context, host string, playHosts []string, withPlay bool) {
 	c.SetMagic("ansible_version", AnsibleVersion)
+	if py := playbookPython(); py != "" {
+		c.SetMagic("ansible_playbook_python", py)
+	}
 	runTags := strList(r.Opts.Tags)
 	if len(runTags) == 0 {
 		runTags = []any{"all"}
@@ -52,10 +59,10 @@ func (r *Runner) setRunMagic(c *vars.Context, host string, playHosts []string) {
 		sources = []any{}
 	}
 	c.SetMagic("ansible_inventory_sources", sources)
-	if playHosts != nil {
+	if playHosts != nil && withPlay {
 		c.SetMagic("ansible_play_batch", strList(playHosts))
 	}
-	if p := r.curPlay; p != nil {
+	if p := r.curPlay; p != nil && withPlay {
 		play := strList(p.PlayRoleNames)
 		deps := strList(p.DependentRoleNames)
 		c.SetMagic("ansible_play_role_names", play)
@@ -67,6 +74,20 @@ func (r *Runner) setRunMagic(c *vars.Context, host string, playHosts []string) {
 		c.SetMagic("ansible_facts", map[string]any{})
 	}
 }
+
+// playbookPython is ansible_playbook_python: sys.executable of the Python
+// ansible-playbook would run under, the first python3 on PATH ("" when
+// there is none, and the variable is not set).
+var playbookPython = sync.OnceValue(func() string {
+	p, err := exec.LookPath("python3")
+	if err != nil {
+		return ""
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	return modules.PySysExecutable(p)
+})
 
 // isHostList reports an inline host list inventory ("a,b,").
 func isHostList(s string) bool {

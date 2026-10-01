@@ -611,9 +611,14 @@ than silently diverging. Known boundaries:
   `ALLOW_BROKEN_CONDITIONALS`, warns), naming where the result's value
   came from: a variable's definition (play, `vars_files`, `include_vars`,
   role, YAML and INI inventory, `-e`), a `set_fact` argument, an item of
-  one of those, or the expression for a computed or registered value.
-  Not tracked: the items of a loop over a literal list of numbers and
-  values reached through `hostvars` name the expression instead.
+  one of those (a loop's item included, and values read through
+  `hostvars`), or the expression for a computed or registered value.
+- **`hostvars`**: a host's variables through `hostvars` are those
+  ansible-core's `get_vars` gives without a play (inventory, facts,
+  `include_vars`, `set_fact` and registered values, extra vars and the
+  run's magic variables, no play or role variables), listed in the order
+  it combines them; `ansible_playbook_python` names the first `python3`
+  on `PATH`.
 - **`debug var=`**: undefined values render in place as ansible-core's
   placeholders. A method or class (`d.items`, `range`) fails as
   "unsupported for variable storage" there and in any template's result,

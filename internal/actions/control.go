@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -153,7 +155,8 @@ func runSetFact(_ context.Context, actx *Context, args map[string]any, _ string)
 		return agentproto.Fail("set_fact requires at least one key=value pair")
 	}
 	facts := make(map[string]any, len(args))
-	for k, v := range args {
+	for _, k := range slices.Sorted(maps.Keys(args)) { // set in the order the arguments were finalized
+		v := args[k]
 		if k == "cacheable" {
 			continue
 		}

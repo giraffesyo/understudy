@@ -47,7 +47,10 @@ type Store struct {
 	// origins is where each layer's values came from, where known (a
 	// broken conditional names its result's origin).
 	origins [layerCount]map[string]map[string]valueOrigin
-	engine  *template.Engine
+	// order is each layer's variable names in the order they were
+	// first set.
+	order  [layerCount]map[string][]string
+	engine *template.Engine
 
 	// VaultDecrypt decrypts a !vault-tagged value at use time. Nil means no
 	// vault password is configured; encountering an encrypted value errors.
@@ -59,6 +62,13 @@ func NewStore(engine *template.Engine) *Store {
 }
 
 func (s *Store) set(layer Layer, scope string, vars map[string]any) {
+	s.setOrdered(layer, scope, vars, nil)
+}
+
+// setOrdered is set with the order of vars' keys (those order leaves
+// out follow, by where they were written, then by name): a variable keeps
+// the place it was first set at, as a Python dict's key does.
+func (s *Store) setOrdered(layer Layer, scope string, vars map[string]any, order []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.layers[layer] == nil {
@@ -77,7 +87,14 @@ func (s *Store) set(layer Layer, scope string, vars map[string]any) {
 		orig = map[string]valueOrigin{}
 		s.origins[layer][scope] = orig
 	}
+	if s.order[layer] == nil {
+		s.order[layer] = map[string][]string{}
+	}
+	var added []string
 	for k, v := range vars {
+		if _, had := dst[k]; !had {
+			added = append(added, k)
+		}
 		dst[k] = v
 		if file, line, col, ok := yaml.ChildOrigin(vars, k); ok {
 			orig[k] = valueOrigin{pos: template.Position{File: file, Line: line, Col: col}}
@@ -85,6 +102,39 @@ func (s *Store) set(layer Layer, scope string, vars map[string]any) {
 			delete(orig, k)
 		}
 	}
+	rank := make(map[string]int, len(order))
+	for i, k := range order {
+		if _, dup := rank[k]; !dup {
+			rank[k] = i
+		}
+	}
+	sort.Slice(added, func(i, j int) bool {
+		a, b := added[i], added[j]
+		ra, aRanked := rank[a]
+		rb, bRanked := rank[b]
+		if aRanked != bRanked {
+			return aRanked
+		}
+		if aRanked {
+			return ra < rb
+		}
+		oa, aKnown := orig[a]
+		ob, bKnown := orig[b]
+		if aKnown != bKnown {
+			return aKnown
+		}
+		if aKnown && oa.pos != ob.pos {
+			if oa.pos.File != ob.pos.File {
+				return oa.pos.File < ob.pos.File
+			}
+			if oa.pos.Line != ob.pos.Line {
+				return oa.pos.Line < ob.pos.Line
+			}
+			return oa.pos.Col < ob.pos.Col
+		}
+		return a < b
+	})
+	s.order[layer][scope] = append(s.order[layer][scope], added...)
 }
 
 // valueOrigin is where a variable's value came from; inherit: its items
@@ -119,6 +169,9 @@ func (s *Store) SetPlayVars(vars map[string]any) {
 	s.layers[LPlayVarsFiles] = nil
 	s.layers[LRoleDefaults] = nil
 	s.layers[LRoleVars] = nil
+	for _, l := range []Layer{LPlayVars, LPlayVarsFiles, LRoleDefaults, LRoleVars} {
+		s.order[l] = nil
+	}
 	s.origins[LPlayVars] = nil
 	s.origins[LPlayVarsFiles] = nil
 	s.origins[LRoleDefaults] = nil
@@ -175,14 +228,16 @@ func (s *Store) SetHostVarRaw(host, name string, value any) {
 }
 
 // SetInventoryVars installs a host's merged inventory vars (group vars in
-// depth order + host vars — the inventory package pre-merges them).
-func (s *Store) SetInventoryVars(host string, vars map[string]any) {
+// depth order + host vars — the inventory package pre-merges them), in
+// order (as ansible-core's get_vars combines them).
+func (s *Store) SetInventoryVars(host string, vars map[string]any, order []string) {
 	s.mu.Lock()
 	if s.layers[LHostVars] != nil {
 		delete(s.layers[LHostVars], host)
+		delete(s.order[LHostVars], host)
 	}
 	s.mu.Unlock()
-	s.set(LHostVars, host, vars)
+	s.setOrdered(LHostVars, host, vars, order)
 }
 
 // RawHostVar fetches an untemplated var for one host (behavioral
@@ -223,6 +278,7 @@ func (s *Store) ClearFacts(host string) {
 	defer s.mu.Unlock()
 	if s.layers[LFacts] != nil {
 		delete(s.layers[LFacts], host)
+		delete(s.order[LFacts], host)
 	}
 }
 
@@ -240,6 +296,11 @@ func (s *Store) flattenWith(host string, roleDefaults, roleVars []map[string]any
 
 // flattenOrigins is flattenWith with where each value came from.
 func (s *Store) flattenOrigins(host string, roleDefaults, roleVars []map[string]any) (map[string]any, map[string]valueOrigin) {
+	return s.flattenLayers(host, roleDefaults, roleVars, nil)
+}
+
+// flattenLayers is flattenOrigins without the layers skip names.
+func (s *Store) flattenLayers(host string, roleDefaults, roleVars []map[string]any, skip map[Layer]bool) (map[string]any, map[string]valueOrigin) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := map[string]any{}
@@ -253,6 +314,9 @@ func (s *Store) flattenOrigins(host string, roleDefaults, roleVars []map[string]
 		}
 	}
 	for layer := Layer(0); layer < layerCount; layer++ {
+		if skip[layer] {
+			continue
+		}
 		if scopes := s.layers[layer]; scopes != nil {
 			scopeOrigins := s.origins[layer]
 			for k, v := range scopes[""] {
@@ -328,8 +392,10 @@ type Context struct {
 	// names the task's variables do not define (PlayContext.update_vars,
 	// ConnectionBase.update_vars): visible by name, but not among the
 	// variables "vars" and hostvars list.
-	conn   map[string]any
-	noConn bool
+	conn map[string]any
+	// nameOrder is the order Names lists variables in (nil: by name).
+	nameOrder []string
+	noConn    bool
 }
 
 // NewContext builds a variable context for one host and task.
@@ -426,8 +492,56 @@ func (c *Context) Names() []string {
 	add(c.overlay)
 	add(c.magic)
 	sort.Strings(out)
-	return out
+	if c.nameOrder == nil {
+		return out
+	}
+	// The order the variables were combined in, the others after it.
+	ordered := make([]string, 0, len(out))
+	placed := map[string]bool{}
+	for _, k := range c.nameOrder {
+		if seen[k] && !placed[k] {
+			placed[k] = true
+			ordered = append(ordered, k)
+		}
+	}
+	for _, k := range out {
+		if !placed[k] {
+			ordered = append(ordered, k)
+		}
+	}
+	return ordered
 }
+
+// hostVarsSkip are the layers a host's variables through hostvars leave
+// out: the play's (get_vars without a play or task).
+var hostVarsSkip = map[Layer]bool{LPlayVars: true, LPlayVarsFiles: true, LRoleDefaults: true, LRoleVars: true, LTaskVars: true}
+
+// NewHostVarsContext is a host's variables as hostvars shows them: no
+// play's, nor the omit placeholder.
+func (s *Store) NewHostVarsContext(host string, pos template.Position) *Context {
+	c := s.NewContext(host, pos)
+	c.flat, c.flatOrigins = s.flattenLayers(host, nil, nil, hostVarsSkip)
+	delete(c.magic, "omit")
+	return c
+}
+
+// HostLayerOrder is the order of a host's variable names as get_vars
+// combines them without a play: its inventory variables, then (after
+// the magic names a host carries, which the caller places) its facts,
+// include_vars, set_fact and registered values, and the extra vars.
+func (s *Store) HostLayerOrder(host string) (inventory, rest []string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	inventory = append(inventory, s.order[LHostVars][host]...)
+	for _, l := range []Layer{LFacts, LIncludeVars, LHostFacts} {
+		rest = append(rest, s.order[l][host]...)
+	}
+	rest = append(rest, s.order[LExtraVars][""]...)
+	return inventory, rest
+}
+
+// SetNameOrder sets the order Names lists the variables in.
+func (c *Context) SetNameOrder(order []string) { c.nameOrder = order }
 
 // AsMapping exposes a context as a template.Mapping (GetItem/Keys/Len), so
 // one host's resolved variables can be read from another host — the basis
@@ -439,6 +553,11 @@ type contextMapping struct{ ctx *Context }
 func (m *contextMapping) GetItem(key string) (any, bool) { return m.ctx.getSafe(key) }
 func (m *contextMapping) Keys() []string                 { return m.ctx.Names() }
 func (m *contextMapping) Len() int                       { return len(m.ctx.Names()) }
+
+// VarOrigin is where the context's variable came from.
+func (m *contextMapping) VarOrigin(name string) (template.OriginRef, bool) {
+	return m.ctx.VarOrigin(name)
+}
 
 // varsMapping is the "vars" magic variable: the context's variables,
 // without itself.
@@ -877,4 +996,10 @@ func (s *Store) extraVar(name string) (any, bool) {
 func isAllTemplate(s string) bool {
 	return strings.HasPrefix(s, "{{") && strings.HasSuffix(s, "}}") ||
 		strings.HasPrefix(s, "{%") && strings.HasSuffix(s, "%}")
+}
+
+// ItemOrigin is where item i of the list raw (written at pos) resolves
+// to came from: a loop's item, read through its loop variable.
+func (c *Context) ItemOrigin(raw any, pos template.Position, i int) (template.OriginRef, bool) {
+	return c.store.engine.ItemOrigin(c.ValueOrigin(raw, pos), i, c)
 }

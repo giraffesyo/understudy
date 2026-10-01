@@ -254,7 +254,7 @@ func raisedFailure(msg string) *agentproto.Result {
 func (r *Runner) refreshInventoryVars(hosts []string) {
 	for _, name := range hosts {
 		if h := r.Inv.Host(name); h != nil {
-			r.Store.SetInventoryVars(name, r.Inv.EffectiveVars(h))
+			r.Store.SetInventoryVars(name, r.Inv.EffectiveVars(h), r.Inv.EffectiveVarOrder(h))
 		}
 	}
 }

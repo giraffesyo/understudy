@@ -149,6 +149,9 @@ func pySysExecutable(path string) string {
 	return path
 }
 
+// PySysExecutable is pySysExecutable for the controller's Python.
+func PySysExecutable(path string) string { return pySysExecutable(path) }
+
 // missingRequiredLib is basic.missing_required_lib() naming the task's
 // Python; reason and url are optional.
 func missingRequiredLib(env *RunEnv, library, reason, url string) string {

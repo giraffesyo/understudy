@@ -296,12 +296,17 @@ func (ec *EvalCtx) originOfExpr(e Expr, depth int) (OriginRef, bool) {
 	case *getAttrExpr:
 		ref, ok := ec.originOfExpr(t.x, depth+1)
 		if !ok {
-			return OriginRef{}, false
+			return ec.sourceOrigin(t.x, t.name)
 		}
 		return ec.childRef(ref, t.name, depth)
 	case *getItemExpr:
 		ref, ok := ec.originOfExpr(t.x, depth+1)
 		if !ok {
+			if idx, err := ec.eval(t.index); err == nil {
+				if k, isStr := Undeprecate(idx).(string); isStr {
+					return ec.sourceOrigin(t.x, k)
+				}
+			}
 			return OriginRef{}, false
 		}
 		idx, err := ec.eval(t.index)
@@ -327,6 +332,20 @@ func (ec *EvalCtx) originOfExpr(e Expr, depth int) (OriginRef, bool) {
 				return ec.originOfExpr(t.args[0], depth+1)
 			}
 		}
+	}
+	return OriginRef{}, false
+}
+
+// sourceOrigin is the origin of variable name of the value e evaluates
+// to, where that value knows where its variables came from (a host's
+// variables through hostvars).
+func (ec *EvalCtx) sourceOrigin(e Expr, name string) (OriginRef, bool) {
+	x, err := ec.eval(e)
+	if err != nil {
+		return OriginRef{}, false
+	}
+	if src, ok := Undeprecate(x).(OriginSource); ok {
+		return src.VarOrigin(name)
 	}
 	return OriginRef{}, false
 }
@@ -407,6 +426,18 @@ func IsBrokenConditional(err error) (*BrokenConditionalError, bool) {
 	var be *BrokenConditionalError
 	ok := errors.As(err, &be)
 	return be, ok
+}
+
+// ItemOrigin is the origin of item i of the list ref's raw value (or the
+// value a template in it passes along) resolves to, in vars: where a
+// loop's item came from. ok is false where that is unknown.
+func (e *Engine) ItemOrigin(ref OriginRef, i int, vars VarGetter) (OriginRef, bool) {
+	ec := &EvalCtx{engine: e, vars: vars, locals: map[string]any{}, pos: ref.Pos}
+	out, ok := ec.childRef(ref, strconv.Itoa(i), 0)
+	if !ok || out.Pos.File == "" {
+		return OriginRef{}, false
+	}
+	return out, true
 }
 
 // ResolveOrigin follows ref (a raw value with its origin) through a

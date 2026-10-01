@@ -1,0 +1,29 @@
+---
+# hostvars['x'] is the host's variables as ansible-core's get_vars
+# combines them without a play: group variables (all first), the host's
+# own, its magic variables, facts, set_fact and registered values, the
+# extra vars and the run's magic variables, in that order; a play's
+# variables are not among them.
+- hosts: h1
+  gather_facts: false
+  vars:
+    play_var: from the play
+  tasks:
+    - set_fact:
+        zfact: 1
+        afact: 2
+    - command: echo hi
+      register: reg
+      changed_when: false
+    - name: this host's, in order
+      debug:
+        msg: "{{ hostvars['h1'] | list }}"
+    - name: another's
+      debug:
+        msg: "{{ hostvars['h2'].keys() | list }}"
+    - name: no play variables
+      debug:
+        msg: "{{ hostvars['h1'].play_var | default('not there') }} {{ hostvars['h1'].omit | default('nor omit') }}"
+    - name: the values follow the keys
+      debug:
+        msg: "{{ hostvars['h2'] | dict2items | map(attribute='key') | first }}"
