@@ -557,8 +557,9 @@ than silently diverging. Known boundaries:
     `--version`.
   - Name lookup failures (`uri`, `get_url`, `mysql_*`) read as Python's
     `socket.gaierror`, worded by the target's C library (glibc, musl on
-    Alpine, macOS). The lookup itself is Go's resolver, which applies a
-    `resolv.conf` search list as glibc does, not as musl does.
+    Alpine, macOS). The lookup itself is Go's resolver, with the search
+    list applied as the C library applies it: on musl, a name with at
+    least `ndots` dots is looked up as given only.
   - Missing package-manager bindings: without python3-apt, `apt` and
     `apt_repository` fail as ansible's do where they cannot install it
     (check mode, `install_python_apt: false`, `auto_install_module_deps:
