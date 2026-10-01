@@ -1,0 +1,3 @@
+ansible-playbook
+--check=1
+p.yml

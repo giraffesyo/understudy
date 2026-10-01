@@ -8,6 +8,7 @@ import (
 
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/vars"
+	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
 // PlaybookCallback is implemented by callbacks that also take the
@@ -19,6 +20,22 @@ type PlaybookCallback interface {
 	// on a host ("NOTIFIED HANDLER <name> for <host>").
 	HandlerNotified(handler *playbook.Task, host string)
 }
+
+// NoHostsMatchedCallback is implemented by callbacks that report a play
+// whose pattern matched no hosts (v2_playbook_on_no_hosts_matched).
+type NoHostsMatchedCallback interface {
+	NoHostsMatched()
+}
+
+// ForwardNoHostsMatched reports a play that matched no hosts to a
+// callback that shows it.
+func ForwardNoHostsMatched(cb Callback) {
+	if c, ok := cb.(NoHostsMatchedCallback); ok {
+		c.NoHostsMatched()
+	}
+}
+
+func (f *freeCallback) NoHostsMatched() { ForwardNoHostsMatched(f.Callback) }
 
 // COLOR_VERBOSE, the color Display.verbose (display.v, display.vv, ...)
 // prints in.
@@ -136,6 +153,14 @@ func (r *Runner) displayLoadNotes(plays []*playbook.Play) {
 func ForwardPlaybookStart(cb Callback, path string) {
 	if pc, ok := cb.(PlaybookCallback); ok {
 		pc.PlaybookStart(path)
+	}
+}
+
+// ForwardCustomStats hands the run's custom stats to a callback that
+// shows them.
+func ForwardCustomStats(cb Callback, custom map[string]*yaml.OMap) {
+	if cs, ok := cb.(CustomStatsCallback); ok {
+		cs.CustomStats(custom)
 	}
 }
 

@@ -1,0 +1,588 @@
+[
+ {
+  "text": "one-step-at-a-time: confirm each task before running",
+  "width": 10,
+  "lines": [
+   "one-step-",
+   "at-a-time:",
+   "confirm",
+   "each task",
+   "before",
+   "running"
+  ]
+ },
+ {
+  "text": "one-step-at-a-time: confirm each task before running",
+  "width": 15,
+  "lines": [
+   "one-step-at-a-",
+   "time: confirm",
+   "each task",
+   "before running"
+  ]
+ },
+ {
+  "text": "one-step-at-a-time: confirm each task before running",
+  "width": 20,
+  "lines": [
+   "one-step-at-a-time:",
+   "confirm each task",
+   "before running"
+  ]
+ },
+ {
+  "text": "one-step-at-a-time: confirm each task before running",
+  "width": 30,
+  "lines": [
+   "one-step-at-a-time: confirm",
+   "each task before running"
+  ]
+ },
+ {
+  "text": "one-step-at-a-time: confirm each task before running",
+  "width": 54,
+  "lines": [
+   "one-step-at-a-time: confirm each task before running"
+  ]
+ },
+ {
+  "text": "one-step-at-a-time: confirm each task before running",
+  "width": 76,
+  "lines": [
+   "one-step-at-a-time: confirm each task before running"
+  ]
+ },
+ {
+  "text": "privilege escalation method to use (default=sudo), use `ansible-doc -t become -l` to list valid choices.",
+  "width": 10,
+  "lines": [
+   "privilege",
+   "escalation",
+   "method to",
+   "use (defau",
+   "lt=sudo),",
+   "use",
+   "`ansible-",
+   "doc -t",
+   "become -l`",
+   "to list",
+   "valid",
+   "choices."
+  ]
+ },
+ {
+  "text": "privilege escalation method to use (default=sudo), use `ansible-doc -t become -l` to list valid choices.",
+  "width": 15,
+  "lines": [
+   "privilege",
+   "escalation",
+   "method to use",
+   "(default=sudo),",
+   "use `ansible-",
+   "doc -t become",
+   "-l` to list",
+   "valid choices."
+  ]
+ },
+ {
+  "text": "privilege escalation method to use (default=sudo), use `ansible-doc -t become -l` to list valid choices.",
+  "width": 20,
+  "lines": [
+   "privilege escalation",
+   "method to use",
+   "(default=sudo), use",
+   "`ansible-doc -t",
+   "become -l` to list",
+   "valid choices."
+  ]
+ },
+ {
+  "text": "privilege escalation method to use (default=sudo), use `ansible-doc -t become -l` to list valid choices.",
+  "width": 30,
+  "lines": [
+   "privilege escalation method to",
+   "use (default=sudo), use",
+   "`ansible-doc -t become -l` to",
+   "list valid choices."
+  ]
+ },
+ {
+  "text": "privilege escalation method to use (default=sudo), use `ansible-doc -t become -l` to list valid choices.",
+  "width": 54,
+  "lines": [
+   "privilege escalation method to use (default=sudo), use",
+   "`ansible-doc -t become -l` to list valid choices."
+  ]
+ },
+ {
+  "text": "privilege escalation method to use (default=sudo), use `ansible-doc -t become -l` to list valid choices.",
+  "width": 76,
+  "lines": [
+   "privilege escalation method to use (default=sudo), use `ansible-doc -t",
+   "become -l` to list valid choices."
+  ]
+ },
+ {
+  "text": "prepend colon-separated path(s) to module library (default={{ ANSIBLE_HOME ~ \"/plugins/modules:/usr/share/ansible/plugins/modules\" }}). This argument may be specified multiple times.",
+  "width": 10,
+  "lines": [
+   "prepend",
+   "colon-",
+   "separated",
+   "path(s) to",
+   "module",
+   "library (d",
+   "efault={{",
+   "ANSIBLE_HO",
+   "ME ~ \"/plu",
+   "gins/modul",
+   "es:/usr/sh",
+   "are/ansibl",
+   "e/plugins/",
+   "modules\"",
+   "}}). This",
+   "argument",
+   "may be",
+   "specified",
+   "multiple",
+   "times."
+  ]
+ },
+ {
+  "text": "prepend colon-separated path(s) to module library (default={{ ANSIBLE_HOME ~ \"/plugins/modules:/usr/share/ansible/plugins/modules\" }}). This argument may be specified multiple times.",
+  "width": 15,
+  "lines": [
+   "prepend colon-",
+   "separated",
+   "path(s) to",
+   "module library",
+   "(default={{",
+   "ANSIBLE_HOME ~",
+   "\"/plugins/modul",
+   "es:/usr/share/a",
+   "nsible/plugins/",
+   "modules\" }}).",
+   "This argument",
+   "may be",
+   "specified",
+   "multiple times."
+  ]
+ },
+ {
+  "text": "prepend colon-separated path(s) to module library (default={{ ANSIBLE_HOME ~ \"/plugins/modules:/usr/share/ansible/plugins/modules\" }}). This argument may be specified multiple times.",
+  "width": 20,
+  "lines": [
+   "prepend colon-",
+   "separated path(s) to",
+   "module library",
+   "(default={{",
+   "ANSIBLE_HOME ~ \"/plu",
+   "gins/modules:/usr/sh",
+   "are/ansible/plugins/",
+   "modules\" }}). This",
+   "argument may be",
+   "specified multiple",
+   "times."
+  ]
+ },
+ {
+  "text": "prepend colon-separated path(s) to module library (default={{ ANSIBLE_HOME ~ \"/plugins/modules:/usr/share/ansible/plugins/modules\" }}). This argument may be specified multiple times.",
+  "width": 30,
+  "lines": [
+   "prepend colon-separated",
+   "path(s) to module library",
+   "(default={{ ANSIBLE_HOME ~ \"/p",
+   "lugins/modules:/usr/share/ansi",
+   "ble/plugins/modules\" }}). This",
+   "argument may be specified",
+   "multiple times."
+  ]
+ },
+ {
+  "text": "prepend colon-separated path(s) to module library (default={{ ANSIBLE_HOME ~ \"/plugins/modules:/usr/share/ansible/plugins/modules\" }}). This argument may be specified multiple times.",
+  "width": 54,
+  "lines": [
+   "prepend colon-separated path(s) to module library",
+   "(default={{ ANSIBLE_HOME ~",
+   "\"/plugins/modules:/usr/share/ansible/plugins/modules\"",
+   "}}). This argument may be specified multiple times."
+  ]
+ },
+ {
+  "text": "prepend colon-separated path(s) to module library (default={{ ANSIBLE_HOME ~ \"/plugins/modules:/usr/share/ansible/plugins/modules\" }}). This argument may be specified multiple times.",
+  "width": 76,
+  "lines": [
+   "prepend colon-separated path(s) to module library (default={{ ANSIBLE_HOME ~",
+   "\"/plugins/modules:/usr/share/ansible/plugins/modules\" }}). This argument may",
+   "be specified multiple times."
+  ]
+ },
+ {
+  "text": "Causes Ansible to print more debug messages. Adding multiple -v will increase the verbosity, the builtin plugins currently evaluate up to -vvvvvv. A reasonable level to start is -vvv, connection debugging might require -vvvv.",
+  "width": 10,
+  "lines": [
+   "Causes",
+   "Ansible to",
+   "print more",
+   "debug",
+   "messages.",
+   "Adding",
+   "multiple",
+   "-v will",
+   "increase",
+   "the",
+   "verbosity,",
+   "the",
+   "builtin",
+   "plugins",
+   "currently",
+   "evaluate",
+   "up to",
+   "-vvvvvv. A",
+   "reasonable",
+   "level to",
+   "start is",
+   "-vvv,",
+   "connection",
+   "debugging",
+   "might",
+   "require",
+   "-vvvv."
+  ]
+ },
+ {
+  "text": "Causes Ansible to print more debug messages. Adding multiple -v will increase the verbosity, the builtin plugins currently evaluate up to -vvvvvv. A reasonable level to start is -vvv, connection debugging might require -vvvv.",
+  "width": 15,
+  "lines": [
+   "Causes Ansible",
+   "to print more",
+   "debug messages.",
+   "Adding multiple",
+   "-v will",
+   "increase the",
+   "verbosity, the",
+   "builtin plugins",
+   "currently",
+   "evaluate up to",
+   "-vvvvvv. A",
+   "reasonable",
+   "level to start",
+   "is -vvv,",
+   "connection",
+   "debugging might",
+   "require -vvvv."
+  ]
+ },
+ {
+  "text": "Causes Ansible to print more debug messages. Adding multiple -v will increase the verbosity, the builtin plugins currently evaluate up to -vvvvvv. A reasonable level to start is -vvv, connection debugging might require -vvvv.",
+  "width": 20,
+  "lines": [
+   "Causes Ansible to",
+   "print more debug",
+   "messages. Adding",
+   "multiple -v will",
+   "increase the",
+   "verbosity, the",
+   "builtin plugins",
+   "currently evaluate",
+   "up to -vvvvvv. A",
+   "reasonable level to",
+   "start is -vvv,",
+   "connection debugging",
+   "might require -vvvv."
+  ]
+ },
+ {
+  "text": "Causes Ansible to print more debug messages. Adding multiple -v will increase the verbosity, the builtin plugins currently evaluate up to -vvvvvv. A reasonable level to start is -vvv, connection debugging might require -vvvv.",
+  "width": 30,
+  "lines": [
+   "Causes Ansible to print more",
+   "debug messages. Adding",
+   "multiple -v will increase the",
+   "verbosity, the builtin plugins",
+   "currently evaluate up to",
+   "-vvvvvv. A reasonable level to",
+   "start is -vvv, connection",
+   "debugging might require -vvvv."
+  ]
+ },
+ {
+  "text": "Causes Ansible to print more debug messages. Adding multiple -v will increase the verbosity, the builtin plugins currently evaluate up to -vvvvvv. A reasonable level to start is -vvv, connection debugging might require -vvvv.",
+  "width": 54,
+  "lines": [
+   "Causes Ansible to print more debug messages. Adding",
+   "multiple -v will increase the verbosity, the builtin",
+   "plugins currently evaluate up to -vvvvvv. A reasonable",
+   "level to start is -vvv, connection debugging might",
+   "require -vvvv."
+  ]
+ },
+ {
+  "text": "Causes Ansible to print more debug messages. Adding multiple -v will increase the verbosity, the builtin plugins currently evaluate up to -vvvvvv. A reasonable level to start is -vvv, connection debugging might require -vvvv.",
+  "width": 76,
+  "lines": [
+   "Causes Ansible to print more debug messages. Adding multiple -v will",
+   "increase the verbosity, the builtin plugins currently evaluate up to",
+   "-vvvvvv. A reasonable level to start is -vvv, connection debugging might",
+   "require -vvvv."
+  ]
+ },
+ {
+  "text": "The action's options in space separated k=v format: -a 'opt1=val1 opt2=val2' or a json string: -a '{\"opt1\": \"val1\", \"opt2\": \"val2\"}'",
+  "width": 10,
+  "lines": [
+   "The",
+   "action's",
+   "options in",
+   "space",
+   "separated",
+   "k=v",
+   "format: -a",
+   "'opt1=val1",
+   "opt2=val2'",
+   "or a json",
+   "string: -a",
+   "'{\"opt1\":",
+   "\"val1\",",
+   "\"opt2\":",
+   "\"val2\"}'"
+  ]
+ },
+ {
+  "text": "The action's options in space separated k=v format: -a 'opt1=val1 opt2=val2' or a json string: -a '{\"opt1\": \"val1\", \"opt2\": \"val2\"}'",
+  "width": 15,
+  "lines": [
+   "The action's",
+   "options in",
+   "space separated",
+   "k=v format: -a",
+   "'opt1=val1",
+   "opt2=val2' or a",
+   "json string: -a",
+   "'{\"opt1\":",
+   "\"val1\", \"opt2\":",
+   "\"val2\"}'"
+  ]
+ },
+ {
+  "text": "The action's options in space separated k=v format: -a 'opt1=val1 opt2=val2' or a json string: -a '{\"opt1\": \"val1\", \"opt2\": \"val2\"}'",
+  "width": 20,
+  "lines": [
+   "The action's options",
+   "in space separated",
+   "k=v format: -a",
+   "'opt1=val1",
+   "opt2=val2' or a json",
+   "string: -a '{\"opt1\":",
+   "\"val1\", \"opt2\":",
+   "\"val2\"}'"
+  ]
+ },
+ {
+  "text": "The action's options in space separated k=v format: -a 'opt1=val1 opt2=val2' or a json string: -a '{\"opt1\": \"val1\", \"opt2\": \"val2\"}'",
+  "width": 30,
+  "lines": [
+   "The action's options in space",
+   "separated k=v format: -a",
+   "'opt1=val1 opt2=val2' or a",
+   "json string: -a '{\"opt1\":",
+   "\"val1\", \"opt2\": \"val2\"}'"
+  ]
+ },
+ {
+  "text": "The action's options in space separated k=v format: -a 'opt1=val1 opt2=val2' or a json string: -a '{\"opt1\": \"val1\", \"opt2\": \"val2\"}'",
+  "width": 54,
+  "lines": [
+   "The action's options in space separated k=v format: -a",
+   "'opt1=val1 opt2=val2' or a json string: -a '{\"opt1\":",
+   "\"val1\", \"opt2\": \"val2\"}'"
+  ]
+ },
+ {
+  "text": "The action's options in space separated k=v format: -a 'opt1=val1 opt2=val2' or a json string: -a '{\"opt1\": \"val1\", \"opt2\": \"val2\"}'",
+  "width": 76,
+  "lines": [
+   "The action's options in space separated k=v format: -a 'opt1=val1 opt2=val2'",
+   "or a json string: -a '{\"opt1\": \"val1\", \"opt2\": \"val2\"}'"
+  ]
+ },
+ {
+  "text": "a well-known self-evident x-ray e-mail co-operate re--enter foo--bar a--b ab-cd-ef A-B-C-D 12-34 ab-1c",
+  "width": 10,
+  "lines": [
+   "a well-",
+   "known",
+   "self-",
+   "evident",
+   "x-ray",
+   "e-mail co-",
+   "operate re",
+   "--enter",
+   "foo--bar a",
+   "--b ab-cd-",
+   "ef A-B-C-D",
+   "12-34",
+   "ab-1c"
+  ]
+ },
+ {
+  "text": "a well-known self-evident x-ray e-mail co-operate re--enter foo--bar a--b ab-cd-ef A-B-C-D 12-34 ab-1c",
+  "width": 15,
+  "lines": [
+   "a well-known",
+   "self-evident",
+   "x-ray e-mail",
+   "co-operate re--",
+   "enter foo--bar",
+   "a--b ab-cd-ef",
+   "A-B-C-D 12-34",
+   "ab-1c"
+  ]
+ },
+ {
+  "text": "a well-known self-evident x-ray e-mail co-operate re--enter foo--bar a--b ab-cd-ef A-B-C-D 12-34 ab-1c",
+  "width": 20,
+  "lines": [
+   "a well-known self-",
+   "evident x-ray e-mail",
+   "co-operate re--enter",
+   "foo--bar a--b ab-cd-",
+   "ef A-B-C-D 12-34",
+   "ab-1c"
+  ]
+ },
+ {
+  "text": "a well-known self-evident x-ray e-mail co-operate re--enter foo--bar a--b ab-cd-ef A-B-C-D 12-34 ab-1c",
+  "width": 30,
+  "lines": [
+   "a well-known self-evident",
+   "x-ray e-mail co-operate re--",
+   "enter foo--bar a--b ab-cd-ef",
+   "A-B-C-D 12-34 ab-1c"
+  ]
+ },
+ {
+  "text": "a well-known self-evident x-ray e-mail co-operate re--enter foo--bar a--b ab-cd-ef A-B-C-D 12-34 ab-1c",
+  "width": 54,
+  "lines": [
+   "a well-known self-evident x-ray e-mail co-operate re--",
+   "enter foo--bar a--b ab-cd-ef A-B-C-D 12-34 ab-1c"
+  ]
+ },
+ {
+  "text": "a well-known self-evident x-ray e-mail co-operate re--enter foo--bar a--b ab-cd-ef A-B-C-D 12-34 ab-1c",
+  "width": 76,
+  "lines": [
+   "a well-known self-evident x-ray e-mail co-operate re--enter foo--bar a--b",
+   "ab-cd-ef A-B-C-D 12-34 ab-1c"
+  ]
+ },
+ {
+  "text": "supercalifragilisticexpialidocious-hyphenated-very-long-word-here and more",
+  "width": 10,
+  "lines": [
+   "supercalif",
+   "ragilistic",
+   "expialidoc",
+   "ious-hyphe",
+   "nated-",
+   "very-long-",
+   "word-here",
+   "and more"
+  ]
+ },
+ {
+  "text": "supercalifragilisticexpialidocious-hyphenated-very-long-word-here and more",
+  "width": 15,
+  "lines": [
+   "supercalifragil",
+   "isticexpialidoc",
+   "ious-",
+   "hyphenated-",
+   "very-long-word-",
+   "here and more"
+  ]
+ },
+ {
+  "text": "supercalifragilisticexpialidocious-hyphenated-very-long-word-here and more",
+  "width": 20,
+  "lines": [
+   "supercalifragilistic",
+   "expialidocious-",
+   "hyphenated-very-",
+   "long-word-here and",
+   "more"
+  ]
+ },
+ {
+  "text": "supercalifragilisticexpialidocious-hyphenated-very-long-word-here and more",
+  "width": 30,
+  "lines": [
+   "supercalifragilisticexpialidoc",
+   "ious-hyphenated-very-long-",
+   "word-here and more"
+  ]
+ },
+ {
+  "text": "supercalifragilisticexpialidocious-hyphenated-very-long-word-here and more",
+  "width": 54,
+  "lines": [
+   "supercalifragilisticexpialidocious-hyphenated-very-",
+   "long-word-here and more"
+  ]
+ },
+ {
+  "text": "supercalifragilisticexpialidocious-hyphenated-very-long-word-here and more",
+  "width": 76,
+  "lines": [
+   "supercalifragilisticexpialidocious-hyphenated-very-long-word-here and more"
+  ]
+ },
+ {
+  "text": "word---triple dash--x ---lead",
+  "width": 10,
+  "lines": [
+   "word---",
+   "triple",
+   "dash--x",
+   "---lead"
+  ]
+ },
+ {
+  "text": "word---triple dash--x ---lead",
+  "width": 15,
+  "lines": [
+   "word---triple",
+   "dash--x ---lead"
+  ]
+ },
+ {
+  "text": "word---triple dash--x ---lead",
+  "width": 20,
+  "lines": [
+   "word---triple dash--",
+   "x ---lead"
+  ]
+ },
+ {
+  "text": "word---triple dash--x ---lead",
+  "width": 30,
+  "lines": [
+   "word---triple dash--x ---lead"
+  ]
+ },
+ {
+  "text": "word---triple dash--x ---lead",
+  "width": 54,
+  "lines": [
+   "word---triple dash--x ---lead"
+  ]
+ },
+ {
+  "text": "word---triple dash--x ---lead",
+  "width": 76,
+  "lines": [
+   "word---triple dash--x ---lead"
+  ]
+ }
+]

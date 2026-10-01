@@ -47,6 +47,12 @@ func (r *Runner) runMeta(ctx context.Context, play *playbook.Play, task *playboo
 		if len(task.When) == 0 {
 			return true, nil
 		}
+		switch action {
+		case "noop", "refresh_inventory", "reset_connection":
+			// These run whatever their when: says.
+			r.warnBlock(fmt.Sprintf("[WARNING]: %s task does not support when conditional\n", action))
+			return true, nil
+		}
 		return r.newHostContext(host, pos, playHosts).WithRoleScope(task.ScopeDefaults, task.ScopeVars).EvalWhen(task.When)
 	}
 
@@ -102,9 +108,9 @@ func (r *Runner) runMeta(ctx context.Context, play *playbook.Play, task *playboo
 		return nil
 	}
 	if action == "refresh_inventory" && r.Opts.RefreshInventory != nil {
-		// The sources are re-parsed for what parsing shows; inventories
-		// understudy loads are static, so the hosts and groups stay.
-		r.Opts.RefreshInventory()
+		if err := r.refreshInventory(play, playHosts); err != nil {
+			return err
+		}
 	}
 	r.displayVerbose(2, "META: "+metaMsg(action, active[0]))
 	switch action {

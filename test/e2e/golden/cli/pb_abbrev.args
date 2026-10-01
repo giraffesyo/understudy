@@ -1,0 +1,4 @@
+ansible-playbook
+--syntax
+--forc
+p.yml

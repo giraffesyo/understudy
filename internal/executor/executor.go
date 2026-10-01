@@ -58,6 +58,12 @@ type Callback interface {
 	Recap(stats map[string]*HostStats, order []string)
 }
 
+// CustomStatsCallback is a callback that shows the run's custom stats
+// (set_stats) with the recap: CustomStats comes just before Recap.
+type CustomStatsCallback interface {
+	CustomStats(custom map[string]*yaml.OMap)
+}
+
 // HostStats is one host's play-recap line.
 type HostStats struct {
 	OK, Changed, Unreachable, Failed, Skipped, Rescued, Ignored int
@@ -114,8 +120,9 @@ type Options struct {
 	NoColor bool
 	// RefreshInventory re-parses the inventory sources for meta:
 	// refresh_inventory, as ansible-core's InventoryManager does (its
-	// plugins' output and warnings included). nil: nothing to re-read.
-	RefreshInventory func()
+	// plugins' output and warnings included), returning the inventory
+	// that replaces the run's. nil: nothing to re-read.
+	RefreshInventory func() (*inventory.Inventory, error)
 }
 
 // Runner executes playbooks.
@@ -168,8 +175,11 @@ type Runner struct {
 	quitCode       int
 	dbgReader      *bufio.Reader
 	dbgMu          sync.Mutex
-	playEnded      bool // meta: end_play
-	batchEnded     bool // meta: end_batch
+	custom         map[string]*yaml.OMap // set_stats: host ("_run": the run's) -> stats
+	playVarOrigins []template.KeyOrigin  // where the play's vars and vars_files name reserved variables
+	refreshedHosts []string              // the play's hosts after a meta: refresh_inventory (nil: none ran)
+	playEnded      bool                  // meta: end_play
+	batchEnded     bool                  // meta: end_batch
 	mu             sync.Mutex
 	implicitMu     sync.Mutex
 	implicitSet    bool // the implicit localhost's inventory vars are set
@@ -307,6 +317,7 @@ func (r *Runner) RunPlaybooks(ctx context.Context, books [][]*playbook.Play) (in
 				break
 			}
 		}
+		ForwardCustomStats(r.Callback, r.CustomStats())
 		r.Callback.Recap(r.stats, r.order)
 		if code = r.result(); code != 0 {
 			break
@@ -355,6 +366,7 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 	r.curPlay = play
 	r.ended = map[string]bool{}
 	r.playEnded = false
+	r.refreshedHosts = nil
 	r.mu.Unlock()
 	r.Store.SetPlayVars(play.Vars)
 	reserved := append([]template.KeyOrigin{}, play.VarOrigins...)
@@ -400,6 +412,7 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 	}
 	// The play's variables, before any host's, are checked for reserved
 	// names (VariableManager.get_vars warns as it merges them).
+	r.playVarOrigins = reserved
 	r.warnReserved(append(reserved, r.Opts.ExtraVarOrigins...))
 	// ansible-core reads vars_files and resolves the play's hosts before
 	// the banner: a file that fails to parse, or a pattern that is an
@@ -410,7 +423,7 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 	}
 	r.Callback.PlayStart(play)
 	if len(allHosts) == 0 {
-		fmt.Println("skipping: no hosts matched")
+		ForwardNoHostsMatched(r.Callback)
 		return nil
 	}
 
@@ -1274,9 +1287,17 @@ func (r *Runner) newHostContext(host string, pos template.Position, playHosts []
 		for i, h := range playHosts {
 			list[i] = h
 		}
-		c.SetMagic("ansible_play_hosts", list)
+		all := list
+		if refreshed := r.playHostsRefreshed(); refreshed != nil {
+			// After meta: refresh_inventory, the play's hosts are the
+			// refreshed inventory's, and its batch those still in it.
+			all = strList(refreshed)
+			playHosts = intersect(playHosts, refreshed)
+			list = strList(playHosts)
+		}
+		c.SetMagic("ansible_play_hosts", all)
 		c.SetMagic("play_hosts", deprecate(deprecatedPlayHosts, list))
-		c.SetMagic("ansible_play_hosts_all", list)
+		c.SetMagic("ansible_play_hosts_all", all)
 	}
 	c.SetMagic("playbook_dir", r.Opts.BaseDir)
 	c.SetMagic("ansible_check_mode", r.Opts.CheckMode)
@@ -1306,6 +1327,55 @@ func (r *Runner) newHostContext(host string, pos template.Position, playHosts []
 		c.SetMagic("hostvars", newHostVars(r, pos, playHosts))
 	}
 	return c
+}
+
+// playHostsRefreshed is the play's hosts in the refreshed inventory, nil
+// unless meta: refresh_inventory ran in the play.
+func (r *Runner) playHostsRefreshed() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.refreshedHosts
+}
+
+// refreshInventory is meta: refresh_inventory: the inventory sources
+// parsed again replace the run's inventory (its hosts, groups and
+// variables). A play host the refreshed inventory no longer matches runs
+// nothing more in the play; one it newly matches runs from the next play
+// (PlayIterator gives it no tasks in this one).
+func (r *Runner) refreshInventory(play *playbook.Play, playHosts []string) error {
+	inv, err := r.Opts.RefreshInventory()
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.Inv = inv
+	r.mu.Unlock()
+	r.implicitMu.Lock()
+	r.implicitSet = false
+	r.implicitMu.Unlock()
+	for _, name := range inv.SortedHostNames() {
+		r.Store.SetInventoryVars(name, inv.EffectiveVars(inv.Hosts[name]))
+	}
+	hosts, err := r.resolvePlayHosts(play)
+	if err != nil {
+		return err
+	}
+	keep := map[string]bool{}
+	for _, h := range hosts {
+		keep[h] = true
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, h := range playHosts {
+		if !keep[h] {
+			r.ended[h] = true
+		}
+	}
+	if hosts == nil {
+		hosts = []string{}
+	}
+	r.refreshedHosts = hosts
+	return nil
 }
 
 // hostVars is the lazy `hostvars` magic variable.
@@ -2435,6 +2505,9 @@ func (r *Runner) dispatch(ctx context.Context, task *playbook.Task, actx *action
 	if task.Module == "include_vars" {
 		return r.runIncludeVars(task, actx, args)
 	}
+	if task.Module == "set_stats" {
+		return r.runSetStats(task, actx, args)
+	}
 	if a := actions.Lookup(task.Module); a != nil {
 		res := a.Run(ctx, actx, args, freeForm)
 		if res != nil && res.Origin == "" {
@@ -2487,6 +2560,11 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 			if !r.notifyHandlers(h, res.Notify, h == host) {
 				return // the run ends here, before the result prints
 			}
+		}
+	}
+	if !res.Failed && !res.Skipped {
+		for _, st := range statsOf(res, loopItems) {
+			r.applyStats(host, task, st)
 		}
 	}
 	if loopItems == nil {
@@ -3060,25 +3138,65 @@ func (r *Runner) warnReserved(origins []template.KeyOrigin) {
 }
 
 // warnReservedFor checks the variables a task sees on host, as get_vars
-// does before the task runs: the play's roles' defaults, the host's
-// inventory variables (its groups' then its own), the roles' vars, then
-// the task's (and its blocks') vars.
+// does before the task runs: warn_if_reserved over the merged variables,
+// whose names keep the place (and origin) they were first set at, in
+// get_vars' order: the play's roles' defaults; the inventory's all
+// group, the host's other groups, the all group's group_vars files (next
+// to the inventory, then the playbook), the other groups' files; the
+// host's inventory variables and host_vars files; the play's vars and
+// vars_files; the roles' vars; the task's (and its blocks') vars; extra
+// vars.
 func (r *Runner) warnReservedFor(host string, task *playbook.Task) {
-	if play := r.curPlay; play != nil {
-		r.warnReserved(play.RoleDefaultOrigins)
+	if r.Inv != nil {
+		for _, w := range r.Inv.VarsWarnings() {
+			r.warnBlock("[WARNING]: " + w + "\n")
+		}
+	}
+	var seq []template.KeyOrigin
+	play := r.curPlay
+	if play != nil {
+		seq = append(seq, play.RoleDefaultOrigins...)
 	}
 	if r.Inv != nil {
 		if h := r.Inv.Hosts[host]; h != nil {
+			var all *inventory.Group
+			var groups []*inventory.Group
 			for _, g := range r.Inv.OrderedGroups(h) {
-				r.warnReserved(g.VarOrigins)
+				if g.Name == "all" {
+					all = g
+				} else {
+					groups = append(groups, g)
+				}
 			}
-			r.warnReserved(h.VarOrigins)
+			if all != nil {
+				seq = append(seq, all.VarOrigins...)
+			}
+			for _, g := range groups {
+				seq = append(seq, g.VarOrigins...)
+			}
+			if all != nil {
+				seq = append(append(seq, all.FileVarOrigins[0]...), all.FileVarOrigins[1]...)
+			}
+			for _, layer := range []int{0, 1} {
+				for _, g := range groups {
+					seq = append(seq, g.FileVarOrigins[layer]...)
+				}
+			}
+			seq = append(append(append(seq, h.VarOrigins...), h.FileVarOrigins[0]...), h.FileVarOrigins[1]...)
 		}
 	}
-	if play := r.curPlay; play != nil {
-		r.warnReserved(play.RoleVarOrigins)
+	seq = append(seq, r.playVarOrigins...)
+	if play != nil {
+		seq = append(seq, play.RoleVarOrigins...)
 	}
-	r.warnReserved(task.VarOrigins)
+	seq = append(append(seq, task.VarOrigins...), r.Opts.ExtraVarOrigins...)
+	seen := map[string]bool{}
+	for _, o := range seq {
+		if !seen[o.Name] {
+			seen[o.Name] = true
+			r.warnReserved([]template.KeyOrigin{o})
+		}
+	}
 }
 
 // isUnreachable reports whether a host has an unreachable result.

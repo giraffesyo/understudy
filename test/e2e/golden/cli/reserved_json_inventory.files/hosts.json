@@ -1,0 +1,1 @@
+{"all": {"vars": {"port": 1}, "hosts": {"h1": {"ansible_connection": "local", "name": "x"}}}}

@@ -1419,6 +1419,20 @@ func parseModuleArgs(task *Task, node *yaml.Node, file string) error {
 				key, val := node.Content[i], node.Content[i+1]
 				task.ArgPos[key.Value] = Pos{File: file, Line: val.Line, Col: val.Column}
 				task.ArgKeyPos[key.Value] = Pos{File: file, Line: key.Line, Col: key.Column}
+				if val.Kind == yaml.MappingNode {
+					if task.ArgSubKeys == nil {
+						task.ArgSubKeys = map[string][]ArgKey{}
+					}
+					for j := 0; j+1 < len(val.Content); j += 2 {
+						sub := val.Content[j]
+						kv, err := sub.Decode()
+						if err != nil {
+							kv = sub.Value
+						}
+						task.ArgSubKeys[key.Value] = append(task.ArgSubKeys[key.Value], ArgKey{
+							Name: yaml.KeyName(sub), Value: kv, Pos: Pos{File: file, Line: sub.Line, Col: sub.Column}})
+					}
+				}
 			}
 		}
 		return nil

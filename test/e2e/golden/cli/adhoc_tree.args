@@ -1,0 +1,10 @@
+ansible
+localhost
+-i
+localhost,
+-c
+local
+-t
+@WORK@/tree
+-m
+ping

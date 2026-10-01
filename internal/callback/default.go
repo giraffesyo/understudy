@@ -7,8 +7,10 @@ package callback
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/executor"
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/template"
+	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
 type color string
@@ -53,6 +56,10 @@ type Default struct {
 	errors    map[string]bool // Display de-duplicates repeated errors
 	warns     map[string]bool // ... and repeated warnings
 	play      *playbook.Play  // the current play (task paths of synthesized tasks)
+
+	// ShowCustomStats shows the run's set_stats results after the recap.
+	ShowCustomStats bool
+	custom          map[string]*yaml.OMap
 }
 
 // New builds the default callback, auto-detecting color and terminal width.
@@ -308,6 +315,52 @@ func (d *Default) Recap(stats map[string]*executor.HostStats, order []string) {
 		)
 	}
 	fmt.Fprintln(d.Out)
+	if len(d.custom) == 0 || !d.ShowCustomStats {
+		return
+	}
+	d.banner("CUSTOM STATS:") // Display.banner strips "CUSTOM STATS: "
+	for _, host := range slices.Sorted(maps.Keys(d.custom)) {
+		if host != "_run" {
+			fmt.Fprintf(d.Out, "\t%s: %s\n", host, d.dumpStats(d.custom[host]))
+		}
+	}
+	if run, ok := d.custom["_run"]; ok {
+		fmt.Fprintln(d.Out)
+		fmt.Fprintf(d.Out, "\tRUN: %s\n", d.dumpStats(run))
+	}
+	fmt.Fprintln(d.Out)
+}
+
+// NoHostsMatched is v2_playbook_on_no_hosts_matched.
+func (d *Default) NoHostsMatched() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.display(cCyan, "skipping: no hosts matched")
+}
+
+// CustomStats keeps the run's custom stats for the recap.
+func (d *Default) CustomStats(custom map[string]*yaml.OMap) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.custom = custom
+}
+
+// dumpStats is _dump_results(stats, indent=1) with its newlines removed.
+func (d *Default) dumpStats(stats *yaml.OMap) string {
+	m := map[string]any{}
+	for _, k := range stats.Keys() {
+		if !strings.HasPrefix(k, "_ansible_") {
+			m[k] = stats.Get(k)
+		}
+	}
+	if d.Verbosity < 3 {
+		delete(m, "invocation")
+		delete(m, "diff")
+	}
+	delete(m, "exception")
+	delete(m, "warnings")
+	delete(m, "deprecations")
+	return strings.ReplaceAll(template.PyJSON(m, 1, true, false), "\n", "")
 }
 
 // hostColor is Ansible's hostcolor(): "%-26s" plain, "%-37s" colored (the
@@ -542,6 +595,11 @@ func (d *Default) taskErrorChain(task *playbook.Task, ec *agentproto.ErrorChain)
 			b.WriteString(c.Inner + "\nOrigin: " + c.InnerFile + "\n")
 		case c.InnerFile != "" && c.InnerLine > 0:
 			b.WriteString(c.Inner + "\n" + d.origin(c.InnerFile, c.InnerLine, c.InnerCol))
+			if c.Help != "" {
+				b.WriteString("\n" + c.Help)
+			}
+		case c.InnerValue != "":
+			b.WriteString(c.Inner + "\nOrigin: <unknown>\n\n" + c.InnerValue + "\n")
 			if c.Help != "" {
 				b.WriteString("\n" + c.Help)
 			}

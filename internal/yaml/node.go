@@ -97,6 +97,9 @@ func keyName(k *Node) string {
 	return k.Value
 }
 
+// KeyName is a key node's name as a constructed dict key.
+func KeyName(k *Node) string { return keyName(k) }
+
 // MapGet returns the value node for a key, or nil. The receiver may be an
 // alias to a mapping; merge keys are expanded.
 func (n *Node) MapGet(key string) *Node {

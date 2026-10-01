@@ -12,6 +12,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/executor"
 	"github.com/giraffesyo/understudy/internal/playbook"
+	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
 // Settings are the ansible.cfg / ANSIBLE_* callback settings.
@@ -20,6 +21,7 @@ type Settings struct {
 	CallbacksEnabled    []string // extra (notification/aggregate) callbacks
 	DisplayOkHosts      bool
 	DisplaySkippedHosts bool
+	ShowCustomStats     bool // show_custom_stats: set_stats results after the recap
 	Verbosity           int
 	Adhoc               bool                // the ad-hoc command's default is minimal
 	PluginDirs          []string            // where external (executable) callback plugins live
@@ -41,6 +43,7 @@ func Build(s Settings, warn func(string)) (executor.Callback, error) {
 		stdout, out = m, m.writer()
 	case name == "", name == "default":
 		d := New(s.Verbosity)
+		d.ShowCustomStats = s.ShowCustomStats
 		stdout, out = d, d.writer()
 	default:
 		path, _ := findPlugin(s.StdoutCallback, s.PluginDirs)
@@ -167,6 +170,12 @@ func (f *filtered) PlayStart(play *playbook.Play) {
 
 func (f *filtered) PlaybookStart(path string) { executor.ForwardPlaybookStart(f.Callback, path) }
 
+func (f *filtered) NoHostsMatched() { executor.ForwardNoHostsMatched(f.Callback) }
+
+func (f *filtered) CustomStats(custom map[string]*yaml.OMap) {
+	executor.ForwardCustomStats(f.Callback, custom)
+}
+
 func (f *filtered) HandlerNotified(handler *playbook.Task, host string) {
 	executor.ForwardHandlerNotified(f.Callback, handler, host)
 }
@@ -232,6 +241,20 @@ func (m *fanout) HandlerNotified(handler *playbook.Task, host string) {
 		executor.ForwardHandlerNotified(c, handler, host)
 	}
 }
+func (m *fanout) NoHostsMatched() {
+	executor.ForwardNoHostsMatched(m.primary)
+	for _, c := range m.extras {
+		executor.ForwardNoHostsMatched(c)
+	}
+}
+
+func (m *fanout) CustomStats(custom map[string]*yaml.OMap) {
+	executor.ForwardCustomStats(m.primary, custom)
+	for _, c := range m.extras {
+		executor.ForwardCustomStats(c, custom)
+	}
+}
+
 func (m *fanout) Recap(stats map[string]*executor.HostStats, order []string) {
 	m.primary.Recap(stats, order)
 	for _, c := range m.extras {

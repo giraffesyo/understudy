@@ -1,0 +1,14 @@
+ansible
+localhost
+-i
+localhost,
+-c
+local
+-m
+fail
+-a
+msg=x
+--task-timeout
+5
+-P
+3

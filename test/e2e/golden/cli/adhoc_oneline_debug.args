@@ -1,0 +1,11 @@
+ansible
+localhost
+-i
+localhost,
+-c
+local
+--one-line
+-m
+debug
+-a
+msg={{ {'a': [1, {'b': 2}]} }}

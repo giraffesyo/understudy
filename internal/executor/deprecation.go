@@ -25,12 +25,6 @@ var (
 		Version: "2.24"}
 )
 
-// deprecationHint precedes the first deprecation warning Display shows.
-const deprecationHint = "[WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.\n"
-
-// deprecationHintShown: the load's deprecation warnings showed the hint.
-var deprecationHintShown atomic.Bool
-
 // deprecate wraps v in the deprecation d.
 func deprecate(d template.Deprecated, v any) template.Deprecated {
 	d.Value = v
@@ -94,9 +88,18 @@ func (r *Runner) deprecation(pos template.Position, d template.Deprecated) {
 		return
 	}
 	r.warned[msg] = true
-	if !r.warned[deprecationHint] && !deprecationHintShown.Load() {
-		r.warned[deprecationHint] = true
-		fmt.Fprint(os.Stderr, deprecationHint)
+	fmt.Fprint(os.Stderr, DeprecationHint()+msg)
+}
+
+// deprecationHinted: Display's one-time hint on silencing deprecation
+// warnings has been shown (by whatever showed the first one).
+var deprecationHinted atomic.Bool
+
+// DeprecationHint is the hint the first deprecation warning of the run
+// comes after ("" once shown).
+func DeprecationHint() string {
+	if deprecationHinted.CompareAndSwap(false, true) {
+		return "[WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.\n"
 	}
-	fmt.Fprint(os.Stderr, msg)
+	return ""
 }

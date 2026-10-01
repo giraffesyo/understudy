@@ -14,6 +14,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/giraffesyo/understudy/internal/omap"
+	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
@@ -131,8 +133,13 @@ func LoadWith(sources []string, o Options) (*Inventory, error) {
 
 	// vars directories: inventory-adjacent first, then explicit (playbook)
 	// dirs — later application wins on key conflicts.
-	for _, dir := range append(adjacentDirs, o.VarsDirs...) {
-		if err := applyVarsDirs(inv, dir); err != nil {
+	for _, dir := range adjacentDirs {
+		if err := applyVarsDirs(inv, dir, 0); err != nil {
+			return nil, err
+		}
+	}
+	for _, dir := range o.VarsDirs {
+		if err := applyVarsDirs(inv, dir, 1); err != nil {
 			return nil, err
 		}
 	}
@@ -642,108 +649,170 @@ func shellJoin(args []string) string {
 	return strings.Join(out, " ")
 }
 
-// applyVarsDirs loads group_vars/ and host_vars/ under dir. Both file
-// (group_vars/web.yml, bare group_vars/web) and directory
-// (group_vars/web/*.yml) forms are supported.
-func applyVarsDirs(inv *Inventory, dir string) error {
-	if err := applyVarsDir(inv, filepath.Join(dir, "group_vars"), func(name string) map[string]any {
-		if g, ok := inv.Groups[name]; ok {
-			return g.Vars
-		}
-		return nil
-	}); err != nil {
-		return err
+// applyVarsDirs is the host_group_vars vars plugin for one directory:
+// each group's and host's files under its group_vars/ and host_vars/
+// (layer 0 next to the inventory sources, 1 next to the playbook), found
+// as DataLoader.find_vars_files finds them.
+func applyVarsDirs(inv *Inventory, dir string, layer int) error {
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = real // the plugin works from the directory's real path
 	}
-	return applyVarsDir(inv, filepath.Join(dir, "host_vars"), func(name string) map[string]any {
-		if h, ok := inv.Hosts[name]; ok {
-			return h.Vars
+	groups := make([]string, 0, len(inv.Groups))
+	for name := range inv.Groups {
+		groups = append(groups, name)
+	}
+	sort.Strings(groups)
+	for _, name := range groups {
+		g := inv.Groups[name]
+		if err := applyVarsFiles(inv.deferWarning, filepath.Join(dir, "group_vars"), name, g.Vars, &g.FileVarOrigins[layer]); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	hosts := make([]string, 0, len(inv.Hosts))
+	for name := range inv.Hosts {
+		hosts = append(hosts, name)
+	}
+	sort.Strings(hosts)
+	for _, name := range hosts {
+		h := inv.Hosts[name]
+		if err := applyVarsFiles(inv.deferWarning, filepath.Join(dir, "host_vars"), name, h.Vars, &h.FileVarOrigins[layer]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func applyVarsDir(inv *Inventory, dir string, lookup func(string) map[string]any) error {
+// varsExtensions are YAML_FILENAME_EXTENSIONS, after the bare name.
+var varsExtensions = []string{"", ".yml", ".yaml", ".json"}
+
+// applyVarsFiles merges an entity's vars files under dir into vars,
+// recording where they name reserved variables; warn reports a
+// group_vars or host_vars that is not a directory.
+func applyVarsFiles(warn func(string), dir, name string, vars map[string]any, origins *[]template.KeyOrigin) error {
+	if strings.HasPrefix(name, "/") {
+		return nil // a chroot-like host name
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return nil
+	}
+	if !info.IsDir() {
+		warn(fmt.Sprintf("Found %s that is not a directory, skipping: %s", filepath.Base(dir), dir))
+		return nil
+	}
+	for _, path := range findVarsFiles(dir, name) {
+		found, err := mergeVarsFile(path, vars)
+		if err != nil {
+			return err
+		}
+		for _, o := range found {
+			*origins = addOrigin(*origins, o)
+		}
+	}
+	return nil
+}
+
+// findVarsFiles is DataLoader.find_vars_files: the first of <name>,
+// <name>.yml, <name>.yaml and <name>.json that exists; a directory gives
+// its files (recursively, sorted; hidden files, backups and other
+// extensions skipped).
+func findVarsFiles(dir, name string) []string {
+	for _, ext := range varsExtensions {
+		full := filepath.Join(dir, name+ext)
+		info, err := os.Stat(full)
+		if err != nil {
+			continue
+		}
+		if info.IsDir() {
+			return dirVarsFiles(full)
+		}
+		return []string{full}
+	}
+	return nil
+}
+
+func dirVarsFiles(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+		return nil
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
 	sort.Strings(names)
-	for _, name := range names {
-		full := filepath.Join(dir, name)
+	var out []string
+	for _, n := range names {
+		if strings.HasPrefix(n, ".") || strings.HasSuffix(n, "~") {
+			continue
+		}
+		full := filepath.Join(dir, n)
+		ext := pySplitExt(n)
 		info, err := os.Stat(full)
 		if err != nil {
-			return err
-		}
-		base := strings.TrimSuffix(strings.TrimSuffix(name, ".yml"), ".yaml")
-		target := lookup(base)
-		if target == nil {
-			continue // vars for a group/host not in this inventory
-		}
-		if info.IsDir() {
-			subEntries, err := os.ReadDir(full)
-			if err != nil {
-				return err
-			}
-			var subNames []string
-			for _, se := range subEntries {
-				if !se.IsDir() && (strings.HasSuffix(se.Name(), ".yml") || strings.HasSuffix(se.Name(), ".yaml")) {
-					subNames = append(subNames, se.Name())
-				}
-			}
-			sort.Strings(subNames)
-			for _, sn := range subNames {
-				if err := mergeVarsFile(filepath.Join(full, sn), target); err != nil {
-					return err
-				}
-			}
 			continue
 		}
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
-		if err := mergeVarsFile(full, target); err != nil {
-			return err
+		switch {
+		case info.IsDir() && ext == "":
+			out = append(out, dirVarsFiles(full)...)
+		case info.Mode().IsRegular() && (ext == "" || slices.Contains(varsExtensions, ext)):
+			out = append(out, full)
 		}
 	}
-	return nil
+	return out
 }
 
-func mergeVarsFile(path string, into map[string]any) error {
+// mergeVarsFile merges a vars file into into, returning where it names
+// reserved variables (no position for a file that parses as JSON:
+// ansible-core loads those as JSON, without origins).
+func mergeVarsFile(path string, into map[string]any) ([]template.KeyOrigin, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if Decrypt != nil {
 		if data, err = Decrypt(data); err != nil {
-			return fmt.Errorf("%s: %w", path, err)
+			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 	}
 	v, err := yaml.Unmarshal(data, absPath(path))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if v == nil {
-		return nil
+		return nil, nil
 	}
 	m, ok := yaml.PlainMap(v)
 	if !ok {
-		return fmt.Errorf("%s: vars file must contain a mapping", path)
+		return nil, fmt.Errorf("%s: vars file must contain a mapping", path)
 	}
-	origins := yaml.ChildOrigins(into)
-	if origins == nil {
-		origins = map[string]yaml.ChildPos{}
+	if len(m) == 0 {
+		return nil, nil // an empty file is ignored
+	}
+	childOrigins := yaml.ChildOrigins(into)
+	if childOrigins == nil {
+		childOrigins = map[string]yaml.ChildPos{}
 	}
 	for k, val := range m {
 		into[k] = val
-		yaml.MergeChildOrigin(origins, k, m)
+		yaml.MergeChildOrigin(childOrigins, k, m)
 	}
-	yaml.SetChildOrigins(into, origins)
-	return nil
+	yaml.SetChildOrigins(into, childOrigins)
+	var origins []template.KeyOrigin
+	if _, jsonErr := omap.UnmarshalJSON(data); jsonErr == nil {
+		for _, k := range orderedKeys(v) {
+			if template.IsReservedName(k) {
+				origins = append(origins, template.KeyOrigin{Name: k})
+			}
+		}
+	} else if node, err := yaml.ParseSingle(data, absPath(path)); err == nil {
+		origins = keyOrigins(node, absPath(path))
+	}
+	return origins, nil
+}
+
+// orderedKeys are a mapping's keys in order.
+func orderedKeys(v any) []string {
+	keys, _, _ := orderedMap(v)
+	return keys
 }

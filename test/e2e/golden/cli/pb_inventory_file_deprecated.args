@@ -1,0 +1,5 @@
+ansible-playbook
+--inventory-file
+localhost,
+--syntax-check
+p.yml

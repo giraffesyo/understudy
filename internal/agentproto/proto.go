@@ -133,6 +133,9 @@ type ErrorChain struct {
 	InnerFile           string
 	InnerLine, InnerCol int
 	InnerPathOnly       bool
+	// InnerValue, with no origin, is the value the cause is about: shown
+	// as its source ("Origin: <unknown>").
+	InnerValue string
 
 	// Root, when set, is the cause of Inner (its Inner and origin
 	// fields): an error raised in a template file Inner's value read.

@@ -3,10 +3,11 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -33,6 +34,21 @@ type Config struct {
 	CallbacksEnabled    []string
 	DisplayOkHosts      bool
 	DisplaySkippedHosts bool
+	ShowCustomStats     bool // show_custom_stats / ANSIBLE_SHOW_CUSTOM_STATS
+
+	// The command line's defaults: transport (-c), become_method and
+	// become_user (--become-method, --become-user), poll_interval (-P)
+	// and module_name (-m).
+	Transport    string
+	BecomeMethod string
+	BecomeUser   string
+	PollInterval int
+	ModuleName   string
+	Verbosity    int // verbosity / ANSIBLE_VERBOSITY: where -v counts from
+
+	// Warnings are the configuration's own warnings (a world writable
+	// working directory's ansible.cfg, ignored).
+	Warnings []string
 
 	DeprecationWarnings bool // deprecation_warnings / ANSIBLE_DEPRECATION_WARNINGS
 	// DuplicateDictKey is what loading YAML with a repeated mapping key
@@ -40,13 +56,13 @@ type Config struct {
 	// ANSIBLE_DUPLICATE_YAML_DICT_KEY).
 	DuplicateDictKey string
 	TaskTimeout      int // task_timeout / ANSIBLE_TASK_TIMEOUT: the timeout keyword's default (0 = none)
-	// InjectFactsSet: inject_facts_as_vars is configured (ini or
-	// ANSIBLE_INJECT_FACT_VARS) rather than left at its default.
-	InjectFactsSet bool
 	// AllowBrokenConditionals is allow_broken_conditionals /
 	// ANSIBLE_ALLOW_BROKEN_CONDITIONALS: a conditional that is not a
 	// boolean warns rather than failing.
 	AllowBrokenConditionals bool
+	// InjectFactsSet: inject_facts_as_vars is configured (ini or
+	// ANSIBLE_INJECT_FACT_VARS) rather than left at its default.
+	InjectFactsSet bool
 
 	// Inventory settings: localhost_warning, [inventory]
 	// inventory_unparsed_warning, unparsed_is_failed,
@@ -74,6 +90,11 @@ func Defaults() *Config {
 		DisplaySkippedHosts: true,
 		DeprecationWarnings: true,
 		DuplicateDictKey:    "warn",
+		Transport:           "ssh",
+		BecomeMethod:        "sudo",
+		BecomeUser:          "root",
+		PollInterval:        15,
+		ModuleName:          "command",
 
 		LocalhostWarning:         true,
 		InventoryUnparsedWarning: true,
@@ -81,29 +102,51 @@ func Defaults() *Config {
 	}
 }
 
-// Load discovers and parses ansible.cfg: ANSIBLE_CONFIG, ./ansible.cfg,
-// ~/.ansible.cfg, /etc/ansible/ansible.cfg — first hit wins (no merging,
-// like Ansible). Environment variables override file values.
+// Error is a configuration error ansible-core raises while loading its
+// constants, before the command line is even parsed: shown as
+// "ERROR: <message>", exit code 5.
+type Error struct{ Msg string }
+
+func (e *Error) Error() string { return e.Msg }
+
+// ExitCode is ansible's exit status for a configuration error.
+func (e *Error) ExitCode() int { return 5 }
+
+// Load discovers and parses ansible.cfg as ansible-core's ConfigManager
+// does: ANSIBLE_CONFIG (a directory names its ansible.cfg), then
+// ./ansible.cfg (unless the directory is world writable, which warns),
+// ~/.ansible.cfg and /etc/ansible/ansible.cfg; the first readable one
+// wins (no merging). Environment variables override file values. A file
+// configparser cannot read, or a setting of the wrong type or outside its
+// choices, is an *Error.
 func Load() (*Config, error) {
 	cfg := Defaults()
-
-	var candidates []string
-	if env := os.Getenv("ANSIBLE_CONFIG"); env != "" {
-		candidates = append(candidates, env)
-	}
-	candidates = append(candidates, "ansible.cfg")
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates, filepath.Join(home, ".ansible.cfg"))
-	}
-	candidates = append(candidates, "/etc/ansible/ansible.cfg")
-
-	for _, path := range candidates {
+	path, warnings := findConfigFile()
+	cfg.Warnings = warnings
+	var ini *iniFile
+	if path != "" {
+		switch ext := filepath.Ext(path); ext {
+		case ".ini", ".cfg":
+		case ".yaml", ".yml":
+			return nil, &Error{"Unsupported configuration file type: yaml"}
+		default:
+			return nil, &Error{fmt.Sprintf("Unsupported configuration file extension for %s: %s", path, ext)}
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			continue
+			return nil, &Error{fmt.Sprintf("Error reading config file (%s): %v", path, err)}
 		}
-		applyINI(cfg, string(data))
+		// Undecodable bytes are kept (surrogateescape), not an error.
+		if ini, err = parseINI(string(data)); err != nil {
+			return nil, &Error{fmt.Sprintf("Error reading config file (%s): %v", path, err)}
+		}
 		cfg.Source = path
+	}
+	if err := checkTypedSettings(ini, path); err != nil {
+		return nil, err
+	}
+	if ini != nil {
+		applyINI(cfg, ini)
 		// pathspec values in the file resolve against its directory.
 		for i, p := range cfg.RolesPath {
 			if !filepath.IsAbs(p) {
@@ -115,116 +158,138 @@ func Load() (*Config, error) {
 				cfg.Inventory[i] = filepath.Join(filepath.Dir(path), p)
 			}
 		}
-		break
 	}
 
 	applyEnvOverrides(cfg)
 	return cfg, nil
 }
 
-// applyINI parses the tiny ansible.cfg INI dialect (key = value under
-// [section] headers) and applies known keys.
-func applyINI(cfg *Config, content string) {
-	section := ""
-	for _, raw := range strings.Split(content, "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" || line[0] == '#' || line[0] == ';' {
-			continue
+// findConfigFile is find_ini_config_file: the config file in effect ("" =
+// none) and the warning for a world writable working directory's
+// ansible.cfg, skipped.
+func findConfigFile() (string, []string) {
+	var candidates []string
+	fromEnv, envSet := os.LookupEnv("ANSIBLE_CONFIG")
+	if envSet {
+		fromEnv = unfrackPath(fromEnv)
+		if st, err := os.Stat(fromEnv); err == nil && st.IsDir() {
+			fromEnv = filepath.Join(fromEnv, "ansible.cfg")
 		}
-		if line[0] == '[' {
-			if end := strings.IndexByte(line, ']'); end > 0 {
-				section = line[1:end]
-			}
-			continue
-		}
-		key, val, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		key = strings.TrimSpace(key)
-		val = strings.TrimSpace(val)
-		switch section {
-		case "defaults":
-			switch key {
-			case "inventory":
-				cfg.Inventory = splitPathList(val)
-			case "remote_user":
-				cfg.RemoteUser = val
-			case "forks":
-				if n, err := strconv.Atoi(val); err == nil && n > 0 {
-					cfg.Forks = n
+		candidates = append(candidates, fromEnv)
+	}
+	warnCwd := false
+	cwd, err := syscall.Getwd() // os.getcwd(): the real path, not $PWD
+	if err == nil {
+		if st, err := os.Stat(cwd); err == nil {
+			cwdCfg := filepath.Join(cwd, "ansible.cfg")
+			if st.Mode().Perm()&0o002 != 0 {
+				if _, err := os.Stat(cwdCfg); err == nil {
+					warnCwd = true
 				}
-			case "host_key_checking":
-				cfg.HostKeyChecking = iniBool(val, cfg.HostKeyChecking)
-			case "private_key_file":
-				cfg.PrivateKeyFile = expandUser(val)
-			case "timeout":
-				if n, err := strconv.Atoi(val); err == nil && n > 0 {
-					cfg.Timeout = time.Duration(n) * time.Second
-				}
-			case "remote_tmp":
-				cfg.RemoteTmp = val
-			case "admin_users":
-				cfg.AdminUsers = splitList(val)
-			case "system_tmpdirs":
-				cfg.SystemTmpdirs = splitList(val)
-			case "common_remote_group":
-				cfg.CommonRemoteGroup = val
-			case "allow_world_readable_tmpfiles":
-				cfg.WorldReadableTemp = iniBool(val, cfg.WorldReadableTemp)
-			case "callback_plugins":
-				cfg.CallbackPlugins = splitColonList(val)
-			case "stdout_callback":
-				cfg.StdoutCallback = val
-			case "callbacks_enabled", "callback_whitelist", "callback_enabled":
-				cfg.CallbacksEnabled = splitList(val)
-			case "display_ok_hosts":
-				cfg.DisplayOkHosts = iniBool(val, cfg.DisplayOkHosts)
-			case "display_skipped_hosts":
-				cfg.DisplaySkippedHosts = iniBool(val, cfg.DisplaySkippedHosts)
-			case "roles_path":
-				cfg.RolesPath = splitPathspec(val)
-			case "duplicate_dict_key":
-				cfg.DuplicateDictKey = strings.ToLower(strings.TrimSpace(val))
-			case "deprecation_warnings":
-				cfg.DeprecationWarnings = iniBool(val, cfg.DeprecationWarnings)
-			case "inject_facts_as_vars":
-				cfg.InjectFactsSet = true
-			case "allow_broken_conditionals":
-				cfg.AllowBrokenConditionals = iniBool(val, cfg.AllowBrokenConditionals)
-			case "task_timeout":
-				if n, err := strconv.Atoi(val); err == nil {
-					cfg.TaskTimeout = n
-				}
-			case "interpreter_python":
-				// Parsed and ignored.
-			case "localhost_warning":
-				cfg.LocalhostWarning = iniBool(val, cfg.LocalhostWarning)
-			case "host_pattern_mismatch":
-				cfg.HostPatternMismatch = strings.ToLower(val)
-			case "inventory_ignore_extensions":
-				cfg.InventoryIgnoreExts = splitList(val)
-			case "inventory_ignore_patterns":
-				cfg.InventoryIgnorePatterns = splitList(val)
-			}
-		case "inventory":
-			switch key {
-			case "inventory_unparsed_warning":
-				cfg.InventoryUnparsedWarning = iniBool(val, cfg.InventoryUnparsedWarning)
-			case "unparsed_is_failed":
-				cfg.InventoryUnparsedIsFailed = iniBool(val, cfg.InventoryUnparsedIsFailed)
-			case "any_unparsed_is_failed":
-				cfg.InventoryAnyUnparsedIsFailed = iniBool(val, cfg.InventoryAnyUnparsedIsFailed)
-			case "enable_plugins":
-				cfg.InventoryEnabled = splitList(val)
-			case "ignore_extensions":
-				cfg.InventoryIgnoreExts = splitList(val)
-			case "ignore_patterns":
-				cfg.InventoryIgnorePatterns = splitList(val)
-			case "host_pattern_mismatch":
-				cfg.HostPatternMismatch = strings.ToLower(val)
+			} else {
+				candidates = append(candidates, cwdCfg)
 			}
 		}
+	}
+	candidates = append(candidates, unfrackPath("~/.ansible.cfg"), "/etc/ansible/ansible.cfg")
+	path := ""
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil && syscall.Access(c, 4) == nil { // R_OK
+			path = c
+			break
+		}
+	}
+	var warnings []string
+	if warnCwd && !(envSet && fromEnv == path) {
+		warnings = append(warnings, fmt.Sprintf("Ansible is being run in a world writable directory (%s), ignoring it as an ansible.cfg source. "+
+			"For more information see https://docs.ansible.com/ansible/devel/reference_appendices/config.html#cfg-in-world-writable-dir", cwd))
+	}
+	return path, warnings
+}
+
+// unfrackPath is unfrackpath(path, follow=False): ~ and $VARS expanded,
+// made absolute and normalized.
+func unfrackPath(p string) string {
+	p = os.ExpandEnv(expandUser(p))
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return filepath.Clean(p)
+}
+
+// iniString is a string setting's ini value, unquoted as ensure_type
+// unquotes ini strings.
+func iniString(f *iniFile, section, key string) (string, bool) {
+	v, ok := f.get(section, key)
+	return unquote(v), ok
+}
+
+// applyINI applies the file's settings understudy knows. Where a setting
+// has several keys, the last one set wins (ConfigManager._loop_entries).
+func applyINI(cfg *Config, f *iniFile) {
+	str := func(section, key string, set func(string)) {
+		if v, ok := iniString(f, section, key); ok {
+			set(v)
+		}
+	}
+	boolean := func(section, key string, dst *bool) {
+		if v, ok := iniString(f, section, key); ok {
+			*dst = pyBoolean(v)
+		}
+	}
+	integer := func(section, key string, set func(int)) {
+		if v, ok := f.get(section, key); ok {
+			if n, ok := pyDecimalInt(v); ok {
+				set(n)
+			}
+		}
+	}
+	str("defaults", "inventory", func(v string) { cfg.Inventory = splitPathList(v) })
+	str("defaults", "remote_user", func(v string) { cfg.RemoteUser = v })
+	integer("defaults", "forks", func(n int) { cfg.Forks = n })
+	boolean("defaults", "host_key_checking", &cfg.HostKeyChecking)
+	str("defaults", "private_key_file", func(v string) { cfg.PrivateKeyFile = expandUser(v) })
+	integer("defaults", "timeout", func(n int) { cfg.Timeout = time.Duration(n) * time.Second })
+	str("defaults", "remote_tmp", func(v string) { cfg.RemoteTmp = v })
+	str("defaults", "admin_users", func(v string) { cfg.AdminUsers = splitList(v) })
+	str("defaults", "system_tmpdirs", func(v string) { cfg.SystemTmpdirs = splitList(v) })
+	str("defaults", "common_remote_group", func(v string) { cfg.CommonRemoteGroup = v })
+	boolean("defaults", "allow_world_readable_tmpfiles", &cfg.WorldReadableTemp)
+	str("defaults", "callback_plugins", func(v string) { cfg.CallbackPlugins = splitColonList(v) })
+	str("defaults", "stdout_callback", func(v string) { cfg.StdoutCallback = v })
+	for _, k := range []string{"callback_whitelist", "callback_enabled", "callbacks_enabled"} {
+		str("defaults", k, func(v string) { cfg.CallbacksEnabled = splitList(v) })
+	}
+	boolean("defaults", "display_ok_hosts", &cfg.DisplayOkHosts)
+	boolean("defaults", "display_skipped_hosts", &cfg.DisplaySkippedHosts)
+	boolean("defaults", "show_custom_stats", &cfg.ShowCustomStats)
+	str("defaults", "roles_path", func(v string) { cfg.RolesPath = splitPathspec(v) })
+	str("defaults", "duplicate_dict_key", func(v string) { cfg.DuplicateDictKey = strings.ToLower(strings.TrimSpace(v)) })
+	boolean("defaults", "deprecation_warnings", &cfg.DeprecationWarnings)
+	if _, ok := f.get("defaults", "inject_facts_as_vars"); ok {
+		cfg.InjectFactsSet = true
+	}
+	boolean("defaults", "allow_broken_conditionals", &cfg.AllowBrokenConditionals)
+	integer("defaults", "task_timeout", func(n int) { cfg.TaskTimeout = n })
+	boolean("defaults", "localhost_warning", &cfg.LocalhostWarning)
+	str("defaults", "transport", func(v string) { cfg.Transport = v })
+	str("defaults", "module_name", func(v string) { cfg.ModuleName = v })
+	integer("defaults", "poll_interval", func(n int) { cfg.PollInterval = n })
+	integer("defaults", "verbosity", func(n int) { cfg.Verbosity = n })
+	str("privilege_escalation", "become_method", func(v string) { cfg.BecomeMethod = v })
+	str("privilege_escalation", "become_user", func(v string) { cfg.BecomeUser = v })
+	boolean("inventory", "inventory_unparsed_warning", &cfg.InventoryUnparsedWarning)
+	boolean("inventory", "unparsed_is_failed", &cfg.InventoryUnparsedIsFailed)
+	boolean("inventory", "any_unparsed_is_failed", &cfg.InventoryAnyUnparsedIsFailed)
+	str("inventory", "enable_plugins", func(v string) { cfg.InventoryEnabled = splitList(v) })
+	for _, sk := range [][2]string{{"defaults", "inventory_ignore_extensions"}, {"inventory", "ignore_extensions"}} {
+		str(sk[0], sk[1], func(v string) { cfg.InventoryIgnoreExts = splitList(v) })
+	}
+	for _, sk := range [][2]string{{"defaults", "inventory_ignore_patterns"}, {"inventory", "ignore_patterns"}} {
+		str(sk[0], sk[1], func(v string) { cfg.InventoryIgnorePatterns = splitList(v) })
+	}
+	for _, sk := range [][2]string{{"defaults", "host_pattern_mismatch"}, {"inventory", "host_pattern_mismatch"}} {
+		str(sk[0], sk[1], func(v string) { cfg.HostPatternMismatch = strings.ToLower(v) })
 	}
 }
 
@@ -265,19 +330,36 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ANSIBLE_REMOTE_USER"); v != "" {
 		cfg.RemoteUser = v
 	}
+	for env, dst := range map[string]*string{
+		"ANSIBLE_TRANSPORT": &cfg.Transport, "ANSIBLE_BECOME_METHOD": &cfg.BecomeMethod, "ANSIBLE_BECOME_USER": &cfg.BecomeUser,
+	} {
+		if v := os.Getenv(env); v != "" {
+			*dst = v
+		}
+	}
+	if v := os.Getenv("ANSIBLE_VERBOSITY"); v != "" {
+		if n, ok := pyDecimalInt(v); ok {
+			cfg.Verbosity = n
+		}
+	}
+	if v := os.Getenv("ANSIBLE_POLL_INTERVAL"); v != "" {
+		if n, ok := pyDecimalInt(v); ok {
+			cfg.PollInterval = n
+		}
+	}
 	if v := os.Getenv("ANSIBLE_FORKS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		if n, ok := pyDecimalInt(v); ok { // the command line rejects one below 1
 			cfg.Forks = n
 		}
 	}
 	if v := os.Getenv("ANSIBLE_HOST_KEY_CHECKING"); v != "" {
-		cfg.HostKeyChecking = iniBool(v, cfg.HostKeyChecking)
+		cfg.HostKeyChecking = pyBoolean(v)
 	}
 	if v := os.Getenv("ANSIBLE_PRIVATE_KEY_FILE"); v != "" {
 		cfg.PrivateKeyFile = expandUser(v)
 	}
 	if v := os.Getenv("ANSIBLE_TIMEOUT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		if n, ok := pyDecimalInt(v); ok && n > 0 {
 			cfg.Timeout = time.Duration(n) * time.Second
 		}
 	}
@@ -294,7 +376,7 @@ func applyEnvOverrides(cfg *Config) {
 		cfg.CommonRemoteGroup = v
 	}
 	if v := os.Getenv("ANSIBLE_SHELL_ALLOW_WORLD_READABLE_TEMP"); v != "" {
-		cfg.WorldReadableTemp = iniBool(v, cfg.WorldReadableTemp)
+		cfg.WorldReadableTemp = pyBoolean(v)
 	}
 	if v := os.Getenv("ANSIBLE_CALLBACK_PLUGINS"); v != "" {
 		cfg.CallbackPlugins = splitColonList(v)
@@ -308,30 +390,33 @@ func applyEnvOverrides(cfg *Config) {
 		}
 	}
 	if v := os.Getenv("ANSIBLE_DISPLAY_OK_HOSTS"); v != "" {
-		cfg.DisplayOkHosts = iniBool(v, cfg.DisplayOkHosts)
+		cfg.DisplayOkHosts = pyBoolean(v)
 	}
 	if v := os.Getenv("ANSIBLE_DUPLICATE_YAML_DICT_KEY"); v != "" {
 		cfg.DuplicateDictKey = strings.ToLower(strings.TrimSpace(v))
 	}
 	if v := os.Getenv("ANSIBLE_DEPRECATION_WARNINGS"); v != "" {
-		cfg.DeprecationWarnings = iniBool(v, cfg.DeprecationWarnings)
+		cfg.DeprecationWarnings = pyBoolean(v)
 	}
 	if os.Getenv("ANSIBLE_INJECT_FACT_VARS") != "" {
 		cfg.InjectFactsSet = true
 	}
 	if v := os.Getenv("ANSIBLE_ALLOW_BROKEN_CONDITIONALS"); v != "" {
-		cfg.AllowBrokenConditionals = iniBool(v, cfg.AllowBrokenConditionals)
+		cfg.AllowBrokenConditionals = pyBoolean(v)
 	}
 	if v := os.Getenv("ANSIBLE_TASK_TIMEOUT"); v != "" {
-		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+		if n, ok := pyDecimalInt(v); ok {
 			cfg.TaskTimeout = n
 		}
 	}
 	if v := os.Getenv("ANSIBLE_DISPLAY_SKIPPED_HOSTS"); v != "" {
-		cfg.DisplaySkippedHosts = iniBool(v, cfg.DisplaySkippedHosts)
+		cfg.DisplaySkippedHosts = pyBoolean(v)
+	}
+	if v := os.Getenv("ANSIBLE_SHOW_CUSTOM_STATS"); v != "" {
+		cfg.ShowCustomStats = pyBoolean(v)
 	}
 	if v := os.Getenv("ANSIBLE_DEPRECATION_WARNINGS"); v != "" {
-		cfg.DeprecationWarnings = iniBool(v, cfg.DeprecationWarnings)
+		cfg.DeprecationWarnings = pyBoolean(v)
 	}
 	for env, dst := range map[string]*bool{
 		"ANSIBLE_LOCALHOST_WARNING":                &cfg.LocalhostWarning,
@@ -340,7 +425,7 @@ func applyEnvOverrides(cfg *Config) {
 		"ANSIBLE_INVENTORY_ANY_UNPARSED_IS_FAILED": &cfg.InventoryAnyUnparsedIsFailed,
 	} {
 		if v := os.Getenv(env); v != "" {
-			*dst = iniBool(v, *dst)
+			*dst = pyBoolean(v)
 		}
 	}
 	if v := os.Getenv("ANSIBLE_INVENTORY_ENABLED"); v != "" {
@@ -355,16 +440,6 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ANSIBLE_HOST_PATTERN_MISMATCH"); v != "" {
 		cfg.HostPatternMismatch = strings.ToLower(strings.TrimSpace(v))
 	}
-}
-
-func iniBool(s string, def bool) bool {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "true", "yes", "on", "1":
-		return true
-	case "false", "no", "off", "0":
-		return false
-	}
-	return def
 }
 
 func splitPathList(s string) []string {

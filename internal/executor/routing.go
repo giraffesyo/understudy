@@ -68,10 +68,7 @@ func RoutingDeprecationWarnings(plays []*playbook.Play) []string {
 						"Origin: %s:%d:%d\n\n%s\n%s\n\n", d.Msg, d.Version, a.File, a.Line, a.Col, playbook.SourceContext(a.File, a.Line, a.Col), d.Help)
 					if !seen[msg] {
 						seen[msg] = true
-						if len(out) == 0 {
-							out = append(out, deprecationHint)
-						}
-						out = append(out, msg)
+						out = append(out, DeprecationHint()+msg)
 					}
 				}
 				d, ok := routingDeprecations[t.Module]
@@ -95,15 +92,9 @@ func RoutingDeprecationWarnings(plays []*playbook.Play) []string {
 					continue
 				}
 				seen[msg] = true
-				if len(out) == 0 {
-					out = append(out, deprecationHint)
-				}
-				out = append(out, msg)
+				out = append(out, DeprecationHint()+msg)
 			}
 		}
-	}
-	if len(out) > 0 {
-		deprecationHintShown.Store(true)
 	}
 	return out
 }

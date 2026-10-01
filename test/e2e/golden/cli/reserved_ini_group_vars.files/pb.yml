@@ -1,0 +1,6 @@
+- hosts: all
+  gather_facts: false
+  vars:
+    when: play
+  tasks:
+    - debug: msg=hi
