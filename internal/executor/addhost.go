@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -69,6 +70,37 @@ var addHostSpecialArgs = map[string]bool{"name": true, "hostname": true, "groupn
 // runAddHost is the add_host action: the host (with its variables and
 // groups) is added to the run's inventory at once.
 func (r *Runner) runAddHost(task *playbook.Task, actx *actions.Context, args map[string]any) *agentproto.Result {
+	keys := orderedArgKeys(task, args)
+	if raw, has := args["_raw_params"]; has {
+		// Raw params (a template giving the arguments) under the
+		// arguments given by name: combine_vars(raw, args).
+		delete(args, "_raw_params")
+		keys = slices.DeleteFunc(keys, func(k string) bool { return k == "_raw_params" })
+		m, ok := asStringMap(raw)
+		if !ok {
+			res := agentproto.Fail("Invalid raw parameters passed, requires a dictionary/mapping got a  %s", rawParamsClass(raw))
+			res.Origin = "raised"
+			return res
+		}
+		var rawKeys []string
+		if km, isOMap := raw.(interface{ Keys() []string }); isOMap {
+			rawKeys = km.Keys()
+		} else {
+			rawKeys = slices.Sorted(maps.Keys(m))
+		}
+		for _, k := range rawKeys {
+			if _, set := args[k]; !set {
+				args[k] = m[k]
+			}
+		}
+		merged := rawKeys
+		for _, k := range keys {
+			if !slices.Contains(merged, k) {
+				merged = append(merged, k)
+			}
+		}
+		keys = merged
+	}
 	newName, ok := firstArg(args, "name", "hostname", "host")
 	if !ok || newName == nil {
 		res := agentproto.Fail("name, host or hostname needs to be provided")
@@ -83,7 +115,6 @@ func (r *Runner) runAddHost(task *playbook.Task, actx *actions.Context, args map
 			name, port = host, p
 		}
 	}
-	keys := orderedArgKeys(task, args)
 	if port > 0 {
 		if _, set := args["ansible_ssh_port"]; !set {
 			keys = append(keys, "ansible_ssh_port")
@@ -294,4 +325,24 @@ func orderedArgKeys(task *playbook.Task, args map[string]any) []string {
 		return keys[i] < keys[j]
 	})
 	return keys
+}
+
+// rawParamsClass is type() of raw params that are not a mapping: the
+// words as written, or a template's value, carry their origin (a tagged
+// type).
+func rawParamsClass(v any) string {
+	tagged := "<class 'ansible.module_utils._internal._datatag._AnsibleTagged%s'>"
+	switch v.(type) {
+	case nil:
+		return "<class 'NoneType'>"
+	case bool:
+		return "<class 'bool'>"
+	case int, int64:
+		return fmt.Sprintf(tagged, "Int")
+	case float64:
+		return fmt.Sprintf(tagged, "Float")
+	case []any:
+		return fmt.Sprintf(tagged, "List")
+	}
+	return fmt.Sprintf(tagged, "Str")
 }
