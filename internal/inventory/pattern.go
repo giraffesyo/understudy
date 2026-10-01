@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -12,7 +13,27 @@ import (
 // by ':' or ',' and evaluated in order against an accumulating set:
 // plain = union, &term = intersect, !term = subtract. Each term matches an
 // exact host, exact group, or glob against host then group names.
+//
+// Results are cached by pattern until add_host or group_by reconcile the
+// inventory (InventoryManager's _hosts_patterns_cache).
 func (inv *Inventory) Match(pattern string) ([]*Host, error) {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
+	if hosts, ok := inv.matchCache[pattern]; ok {
+		return slices.Clone(hosts), nil
+	}
+	hosts, err := inv.match(pattern)
+	if err != nil {
+		return nil, err
+	}
+	if inv.matchCache == nil {
+		inv.matchCache = map[string][]*Host{}
+	}
+	inv.matchCache[pattern] = hosts
+	return slices.Clone(hosts), nil
+}
+
+func (inv *Inventory) match(pattern string) ([]*Host, error) {
 	terms := splitPattern(pattern)
 	if len(terms) == 0 {
 		return nil, fmt.Errorf("empty host pattern")
@@ -61,7 +82,7 @@ func (inv *Inventory) Match(pattern string) ([]*Host, error) {
 	var out []*Host
 	for _, name := range order {
 		if selected[name] {
-			out = append(out, inv.GetHost(name))
+			out = append(out, inv.getHost(name))
 		}
 	}
 	return out, nil
@@ -105,7 +126,7 @@ func (inv *Inventory) matchTerm(term string) ([]string, error) {
 	}
 	if len(out) == 0 && localhostNames[term] {
 		// The implicit localhost, created on first use.
-		return []string{inv.GetHost(term).Name}, nil
+		return []string{inv.getHost(term).Name}, nil
 	}
 	if len(out) == 0 && !matchedGroup {
 		msg := "Could not match supplied host pattern, ignoring: " + term

@@ -1,0 +1,6 @@
+ansible-playbook
+-f
+1
+-i
+inv/hosts
+pb.yml

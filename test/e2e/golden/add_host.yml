@@ -1,0 +1,88 @@
+# add_host bypasses the host loop: the first host runs it (once, or once
+# per loop item) and the result is that host's alone. The host joins the
+# in-memory inventory at once, in its groups, with its variables;
+# changed reports whether anything did change. Later plays target the
+# new hosts and groups, and groups, hostvars and the play's hosts list
+# them.
+- hosts: web
+  gather_facts: false
+  tasks:
+    - name: a new host in two groups
+      add_host:
+        name: n1
+        groups: [dyn, web]
+        color: blue
+        nested: {a: 1}
+      register: added
+    - debug:
+        msg: "{{ added.add_host }} {{ added.changed }}"
+      when: added is defined
+    - debug:
+        msg: "{{ inventory_hostname }} registered: {{ added is defined }}"
+    - debug:
+        msg: "{{ groups }} {{ ansible_play_hosts_all }} {{ ansible_play_hosts }} {{ ansible_play_batch }}"
+    - name: the same again changes nothing
+      add_host: name=n1 groups=dyn color=blue
+    - name: a changed variable is a change
+      add_host:
+        hostname: n1
+        color: green
+    - name: a mapping replaces the old one
+      add_host:
+        host: n1
+        nested: {b: 2}
+    - name: an existing host joins a group
+      add_host:
+        name: d1
+        groupname: dyn
+        group: kept-as-a-variable
+    - name: groups as a string, host:port
+      add_host:
+        name: "{{ item }}"
+        groups: " x, y ,x"
+      loop: [p1, "p2:2222", "[::1]:99", "z[1:3]", "bad:port"]
+    - name: changed_when overrides it
+      add_host: name=c1
+      changed_when: false
+    - name: skipped on the first host
+      add_host: name=s1
+      when: inventory_hostname == 'h2'
+    - name: failed_when, ignored
+      add_host: name=f1
+      failed_when: true
+      ignore_errors: true
+    - name: delegated
+      add_host: name=dl1
+      delegate_to: localhost
+    - name: raw params, a template giving the arguments
+      add_host: "{{ item }} groups=rawg"
+      loop:
+        - {name: r1, v: 1, groups: ignored}
+        - {name: r2, v: 2}
+    - name: with a templated name and variables
+      add_host:
+        name: "t-{{ inventory_hostname }}"
+        from_host: "{{ inventory_hostname }}"
+        role_of_first: "{{ role | default('none') }}"
+- hosts: dyn
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "{{ inventory_hostname }} {{ color | default('-') }} {{ nested | default('-') }} {{ group | default('-') }} {{ group_names }}"
+- hosts: x:y:f1:dl1:t-h1:s1:rawg
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "{{ inventory_hostname }} {{ ansible_ssh_port | default('-') }} {{ from_host | default('-') }} {{ v | default('-') }} {{ role_of_first | default('-') }} {{ group_names }} {{ inventory_file }} {{ inventory_dir }}"
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug:
+        msg: "{{ groups }} {{ hostvars | list }} {{ hostvars['p2']['ansible_ssh_port'] | type_debug }}"
+      run_once: true
+    - name: run_once with add_host registers for every host
+      add_host: name=ro1
+      run_once: true
+      register: ro
+    - debug:
+        msg: "{{ inventory_hostname }} {{ ro.add_host.host_name }} {{ ansible_play_hosts_all | length }}"

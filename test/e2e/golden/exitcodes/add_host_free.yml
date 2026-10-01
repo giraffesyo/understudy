@@ -1,0 +1,12 @@
+# The free strategy refuses an action that bypasses the host loop: the
+# first host to reach add_host ends the run (exit 1, no recap). run_once
+# is ignored there, with a warning; group_by runs as usual.
+- hosts: all
+  gather_facts: false
+  strategy: free
+  tasks:
+    - group_by: key=free_{{ inventory_hostname }}
+    - debug: msg=once
+      run_once: true
+    - add_host: name=never
+    - debug: msg=unreached

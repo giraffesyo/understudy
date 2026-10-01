@@ -1,0 +1,19 @@
+# ansible_play_hosts and ansible_play_batch leave out the play's removed
+# hosts (failed, here or in an earlier play, and ended); the play's hosts
+# are matched again for each serial batch, so ansible_play_hosts_all
+# lists them all.
+- hosts: web
+  gather_facts: false
+  tasks:
+    - fail:
+      when: inventory_hostname == 'h1'
+    - meta: end_host
+      when: inventory_hostname == 'h3'
+    - debug:
+        msg: "{{ ansible_play_hosts_all }} {{ ansible_play_hosts }} {{ ansible_play_batch }}"
+- hosts: all
+  gather_facts: false
+  serial: 1
+  tasks:
+    - debug:
+        msg: "{{ ansible_play_hosts_all }} {{ ansible_play_hosts }} {{ ansible_play_batch }}"

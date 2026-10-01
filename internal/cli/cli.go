@@ -609,6 +609,7 @@ func loadInventory(p *parsedArgs, playbookDir string) (*inventory.Inventory, err
 		return nil, errors.New(inventory.Inline(p.extraVarsErr))
 	}
 	inv.PatternMismatch = cfg.HostPatternMismatch
+	inv.TransformGroupChars = cfg.TransformInvalidGroupChars
 	return inv, nil
 }
 

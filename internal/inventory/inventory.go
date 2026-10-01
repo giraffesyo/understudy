@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/yaml"
@@ -24,6 +25,10 @@ type Host struct {
 	// playbook.
 	FileVarOrigins [2][]template.KeyOrigin
 	groups         map[string]*Group
+	// fileVars are its host_vars files' variables (next to the inventory
+	// sources, then the playbook), over Vars: the vars plugins' layer,
+	// which add_host does not see or change.
+	fileVars map[string]any
 
 	// implicit marks the implicit localhost: created on demand when a
 	// pattern names localhost and the inventory has none. It belongs to no
@@ -82,6 +87,24 @@ type Inventory struct {
 	// warn receives warnings raised while building the inventory
 	// (group names with invalid characters, conflicting names).
 	warn func(string)
+
+	// TransformGroupChars is TRANSFORM_INVALID_GROUP_CHARS ("never", the
+	// default, "always", "ignore" or "silently"), as add_host and
+	// group_by name the groups they create.
+	TransformGroupChars string
+
+	// mu guards the inventory while a run reads it and add_host or
+	// group_by change it (each public method takes it).
+	mu sync.Mutex
+	// dynHosts and dynGroups are the add_host and group_by changes made
+	// so far, which a refreshed inventory replays.
+	dynHosts  []dynamicHost
+	dynGroups []dynamicGroup
+	// varsDirs are where the host_group_vars plugin looks for the
+	// group_vars/ and host_vars/ files of groups and hosts added later.
+	varsDirs []varsDir
+	// matchCache holds Match's results by pattern.
+	matchCache map[string][]*Host
 }
 
 // localhostNames is ansible-core's C.LOCALHOST.
@@ -114,6 +137,11 @@ func (inv *Inventory) ensureGroup(name string) *Group {
 	if invalidGroupChars.MatchString(name) {
 		inv.warning("Invalid characters were found in group names but not replaced, use -vvvv to see details")
 	}
+	return inv.newGroup(name)
+}
+
+// newGroup adds a group named name (which must be new).
+func (inv *Inventory) newGroup(name string) *Group {
 	g := &Group{
 		Name:     name,
 		Vars:     map[string]any{},
@@ -306,6 +334,12 @@ func (inv *Inventory) finalize() error {
 // localhost-like name absent from the inventory, the implicit localhost
 // (created on first use).
 func (inv *Inventory) GetHost(name string) *Host {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
+	return inv.getHost(name)
+}
+
+func (inv *Inventory) getHost(name string) *Host {
 	if h, ok := inv.Hosts[name]; ok {
 		return h
 	}
@@ -327,6 +361,12 @@ func (inv *Inventory) GetHost(name string) *Host {
 // shallowest first (so deeper, more specific groups override), ties broken
 // alphabetically. The implicit localhost takes the all group's vars.
 func (inv *Inventory) OrderedGroups(h *Host) []*Group {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
+	return inv.orderedGroups(h)
+}
+
+func (inv *Inventory) orderedGroups(h *Host) []*Group {
 	if h.implicit {
 		return []*Group{inv.Groups["all"]}
 	}
@@ -346,6 +386,8 @@ func (inv *Inventory) OrderedGroups(h *Host) []*Group {
 // GroupNames returns a host's group names (excluding "all"), sorted — the
 // group_names magic variable.
 func (inv *Inventory) GroupNames(h *Host) []string {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
 	out := []string{}
 	for name := range h.groups {
 		if name != "all" {
@@ -359,6 +401,8 @@ func (inv *Inventory) GroupNames(h *Host) []string {
 // GroupsMap builds the `groups` magic variable: group name -> host names
 // in inventory order, with implicit all/ungrouped included.
 func (inv *Inventory) GroupsMap() *yaml.OMap {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
 	out := yaml.NewOMap()
 	for _, g := range inv.groupOrder {
 		if inv.Groups[g.Name] != g {
@@ -388,6 +432,9 @@ func (inv *Inventory) groupHostNames(g *Group) []string {
 			for _, h := range gr.hostOrder {
 				if !seenHost[h.Name] {
 					seenHost[h.Name] = true
+					if g.Name == "all" && h.implicit {
+						continue // the all group never lists the implicit localhost
+					}
 					out = append(out, h.Name)
 				}
 			}
@@ -406,9 +453,11 @@ func (inv *Inventory) groupHostNames(g *Group) []string {
 // EffectiveVars merges group vars (depth order) then host vars for one host.
 // The caller layers these under play/task/extra vars.
 func (inv *Inventory) EffectiveVars(h *Host) map[string]any {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
 	out := map[string]any{}
 	origins := map[string]yaml.ChildPos{}
-	for _, g := range inv.OrderedGroups(h) {
+	for _, g := range inv.orderedGroups(h) {
 		for k, v := range g.Vars {
 			out[k] = v
 			yaml.MergeChildOrigin(origins, k, g.Vars)
@@ -418,14 +467,27 @@ func (inv *Inventory) EffectiveVars(h *Host) map[string]any {
 		out[k] = v
 		yaml.MergeChildOrigin(origins, k, h.Vars)
 	}
+	for k, v := range h.fileVars {
+		out[k] = v
+		yaml.MergeChildOrigin(origins, k, h.fileVars)
+	}
 	// Where each value came from rides along (a broken conditional
 	// names it).
 	yaml.SetChildOrigins(out, origins)
 	return out
 }
 
+// Host is the named host (nil when the inventory has none).
+func (inv *Inventory) Host(name string) *Host {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
+	return inv.Hosts[name]
+}
+
 // HostNames returns all host names in inventory (first-seen) order.
 func (inv *Inventory) HostNames() []string {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
 	out := make([]string, len(inv.hostOrder))
 	for i, h := range inv.hostOrder {
 		out[i] = h.Name
@@ -435,6 +497,8 @@ func (inv *Inventory) HostNames() []string {
 
 // SortedHostNames returns all host names, sorted.
 func (inv *Inventory) SortedHostNames() []string {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
 	out := make([]string, 0, len(inv.Hosts))
 	for name := range inv.Hosts {
 		out = append(out, name)
@@ -446,6 +510,8 @@ func (inv *Inventory) SortedHostNames() []string {
 // ListHosts is InventoryManager.list_hosts("all"): the hosts "all"
 // matches (never the implicit localhost).
 func (inv *Inventory) ListHosts() []string {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
 	return inv.groupHostNames(inv.Groups["all"])
 }
 
@@ -514,6 +580,8 @@ func (inv *Inventory) deferWarning(msg string) {
 // host's variables are first looked up (a group_vars or host_vars that is
 // not a directory), each returned once.
 func (inv *Inventory) VarsWarnings() []string {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
 	out := inv.varsWarnings
 	inv.varsWarnings = nil
 	return out

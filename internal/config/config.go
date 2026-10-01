@@ -77,6 +77,9 @@ type Config struct {
 	InventoryIgnoreExts          []string
 	InventoryIgnorePatterns      []string
 	HostPatternMismatch          string // "warning", "error" or "ignore"
+	// TransformInvalidGroupChars is TRANSFORM_INVALID_GROUP_CHARS:
+	// "never", "always", "ignore" or "silently".
+	TransformInvalidGroupChars string
 }
 
 // Defaults returns Ansible's defaults for the supported keys.
@@ -99,6 +102,8 @@ func Defaults() *Config {
 		LocalhostWarning:         true,
 		InventoryUnparsedWarning: true,
 		HostPatternMismatch:      "warning",
+
+		TransformInvalidGroupChars: "never",
 	}
 }
 
@@ -291,6 +296,7 @@ func applyINI(cfg *Config, f *iniFile) {
 	for _, sk := range [][2]string{{"defaults", "host_pattern_mismatch"}, {"inventory", "host_pattern_mismatch"}} {
 		str(sk[0], sk[1], func(v string) { cfg.HostPatternMismatch = strings.ToLower(v) })
 	}
+	str("defaults", "force_valid_group_names", func(v string) { cfg.TransformInvalidGroupChars = strings.ToLower(v) })
 }
 
 // DefaultRolesPath is ansible-core's DEFAULT_ROLES_PATH.
@@ -439,6 +445,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ANSIBLE_HOST_PATTERN_MISMATCH"); v != "" {
 		cfg.HostPatternMismatch = strings.ToLower(strings.TrimSpace(v))
+	}
+	if v := os.Getenv("ANSIBLE_TRANSFORM_INVALID_GROUP_CHARS"); v != "" {
+		cfg.TransformInvalidGroupChars = strings.ToLower(strings.TrimSpace(v))
 	}
 }
 

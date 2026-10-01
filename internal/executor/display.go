@@ -105,7 +105,7 @@ func (r *Runner) connectingNote(ctx context.Context, local bool, vctx *vars.Cont
 			if tv, err := vctx.TemplateValue(v); err == nil {
 				addr = fmt.Sprint(tv)
 			}
-		} else if target == host && (target == "localhost" || target == "127.0.0.1") && r.Inv.Hosts[target] == nil {
+		} else if target == host && (target == "localhost" || target == "127.0.0.1") && r.Inv.Host(target) == nil {
 			addr = "127.0.0.1"
 		}
 		// A loop keeps its connection while the address stays the same.

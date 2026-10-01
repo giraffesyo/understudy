@@ -134,12 +134,13 @@ func LoadWith(sources []string, o Options) (*Inventory, error) {
 	// vars directories: inventory-adjacent first, then explicit (playbook)
 	// dirs — later application wins on key conflicts.
 	for _, dir := range adjacentDirs {
-		if err := applyVarsDirs(inv, dir, 0); err != nil {
-			return nil, err
-		}
+		inv.varsDirs = append(inv.varsDirs, varsDir{realDir(dir), 0})
 	}
 	for _, dir := range o.VarsDirs {
-		if err := applyVarsDirs(inv, dir, 1); err != nil {
+		inv.varsDirs = append(inv.varsDirs, varsDir{realDir(dir), 1})
+	}
+	for _, d := range inv.varsDirs {
+		if err := applyVarsDirs(inv, d.dir, d.layer); err != nil {
 			return nil, err
 		}
 	}
@@ -654,17 +655,13 @@ func shellJoin(args []string) string {
 // (layer 0 next to the inventory sources, 1 next to the playbook), found
 // as DataLoader.find_vars_files finds them.
 func applyVarsDirs(inv *Inventory, dir string, layer int) error {
-	if real, err := filepath.EvalSymlinks(dir); err == nil {
-		dir = real // the plugin works from the directory's real path
-	}
 	groups := make([]string, 0, len(inv.Groups))
 	for name := range inv.Groups {
 		groups = append(groups, name)
 	}
 	sort.Strings(groups)
 	for _, name := range groups {
-		g := inv.Groups[name]
-		if err := applyVarsFiles(inv.deferWarning, filepath.Join(dir, "group_vars"), name, g.Vars, &g.FileVarOrigins[layer]); err != nil {
+		if err := applyGroupVarsFiles(inv, inv.Groups[name], dir, layer); err != nil {
 			return err
 		}
 	}
@@ -674,12 +671,40 @@ func applyVarsDirs(inv *Inventory, dir string, layer int) error {
 	}
 	sort.Strings(hosts)
 	for _, name := range hosts {
-		h := inv.Hosts[name]
-		if err := applyVarsFiles(inv.deferWarning, filepath.Join(dir, "host_vars"), name, h.Vars, &h.FileVarOrigins[layer]); err != nil {
+		if err := applyHostVarsFiles(inv, inv.Hosts[name], dir, layer); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// varsDir is a directory the host_group_vars plugin reads group_vars/
+// and host_vars/ files from: layer 0 next to the inventory sources, 1
+// next to the playbook.
+type varsDir struct {
+	dir   string
+	layer int
+}
+
+// realDir is a vars directory's real path, which the plugin works from.
+func realDir(dir string) string {
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		return real
+	}
+	return dir
+}
+
+// applyHostVarsFiles merges a host's host_vars files under dir.
+func applyHostVarsFiles(inv *Inventory, h *Host, dir string, layer int) error {
+	if h.fileVars == nil {
+		h.fileVars = map[string]any{}
+	}
+	return applyVarsFiles(inv.deferWarning, filepath.Join(dir, "host_vars"), h.Name, h.fileVars, &h.FileVarOrigins[layer])
+}
+
+// applyGroupVarsFiles merges a group's group_vars files under dir.
+func applyGroupVarsFiles(inv *Inventory, g *Group, dir string, layer int) error {
+	return applyVarsFiles(inv.deferWarning, filepath.Join(dir, "group_vars"), g.Name, g.Vars, &g.FileVarOrigins[layer])
 }
 
 // varsExtensions are YAML_FILENAME_EXTENSIONS, after the bare name.
