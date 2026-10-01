@@ -40,6 +40,8 @@
       ignore_errors: true
     - name: apt installs python3-apt first
       apt: {name: sudo}
+      # (its cache_update_time is whenever the mirror last changed)
+      no_log: true
     - name: python3-apt is installed
       command: dpkg-query -W -f '${Status}' python3-apt
       changed_when: false
