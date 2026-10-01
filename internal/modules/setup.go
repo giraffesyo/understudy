@@ -120,6 +120,9 @@ type factEnv struct {
 
 	pyDone bool
 	py     *pyInfo
+	// python, when set, names the Python that runs the module: the path
+	// to run and its sys.executable (else python3 on PATH).
+	python func() (run, executable string)
 }
 
 type unameInfo struct {
@@ -366,6 +369,10 @@ func setupModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	timeout := time.Duration(p.Int("gather_timeout")) * time.Second
 
 	e := newFactEnv(p.Str("fact_path"), timeout)
+	if targetHasPython(env) {
+		// The python facts describe the interpreter running the module.
+		e.python = func() (string, string) { return targetPython(env).paths[0], targetPythonExecutable(env) }
+	}
 	facts, err := gatherFacts(e, subset, filter)
 	if err != nil {
 		return agentproto.Fail("%v", err)
