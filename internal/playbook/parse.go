@@ -595,6 +595,7 @@ func parseRoleRefs(node *yaml.Node, file string) ([]*RoleRef, error) {
 				for k, v := range m {
 					ref.Params[k] = v
 				}
+				ref.Vars = m
 			case "check_mode", "diff":
 				b, err := decodeBool(val, file, key)
 				if err != nil {
@@ -629,6 +630,10 @@ func parseRoleRefs(node *yaml.Node, file string) ([]*RoleRef, error) {
 					ref.Params = map[string]any{}
 				}
 				ref.Params[key] = v
+				if ref.InlineParams == nil {
+					ref.InlineParams = map[string]any{}
+				}
+				ref.InlineParams[key] = v
 			}
 		}
 		if ref.Name == "" {

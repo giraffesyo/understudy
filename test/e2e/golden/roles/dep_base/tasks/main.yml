@@ -1,0 +1,3 @@
+---
+- name: base task
+  debug: msg="base p={{ p | default('none') }}"

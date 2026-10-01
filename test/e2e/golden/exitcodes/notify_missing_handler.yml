@@ -1,7 +1,7 @@
 ---
 # A notification no handler answers (by name or listen topic) ends the
 # run with ansible-core's error before the result prints: exit 1, no recap.
-- hosts: all
+- hosts: a
   gather_facts: false
   tasks:
     - command: echo {{ item }}

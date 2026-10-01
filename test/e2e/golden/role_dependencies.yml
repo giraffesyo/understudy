@@ -1,0 +1,116 @@
+---
+# Role dependencies (meta/main.yml) and the play's role cache: include_role
+# and import_role compile a role's dependencies ahead of it (each with its
+# own params, when and tags, inherited down the chain); a role load that
+# completed on a host (one of its tasks ran there) does not run again
+# unless it allows duplicates (allow_duplicates in meta/main.yml, or
+# include_role/import_role's, true by default). Loads are the same when
+# their name, params, when, tags, vars, tasks_from and include-ness are.
+- name: include_role runs dependencies first
+  hosts: all
+  gather_facts: false
+  tasks:
+    - include_role:
+        name: dep_app
+    - debug: msg="{{ app_var | default('private') }} {{ base_default | default('private') }}"
+
+- name: import_role runs dependencies first, public
+  hosts: all
+  gather_facts: false
+  tasks:
+    - debug: msg="{{ base_default | default('private') }}"
+    - import_role:
+        name: dep_app
+    - debug: msg="{{ app_var | default('private') }}"
+
+- name: play roles, then the same roles included
+  hosts: all
+  gather_facts: false
+  roles:
+    - dep_app
+  tasks:
+    - include_role:
+        name: dep_app
+    - include_role:
+        name: dep_base
+    - include_role:
+        name: dep_base
+        allow_duplicates: false
+
+- name: include_role without duplicates
+  hosts: all
+  gather_facts: false
+  tasks:
+    - include_role:
+        name: dep_base
+        allow_duplicates: false
+    - include_role:
+        name: dep_base
+        allow_duplicates: false
+    - include_role:
+        name: dep_base
+        allow_duplicates: false
+      vars:
+        p: other
+    - import_role:
+        name: dep_base
+        allow_duplicates: false
+
+- name: play roles deduplicated by params and vars
+  hosts: all
+  gather_facts: false
+  roles:
+    - dep_base
+    - dep_app
+    - dep_params
+    - dep_base
+    - role: dep_base
+      p: 9
+    - dep_usesdup
+
+- name: a dependency's when inherits down its chain
+  hosts: all
+  gather_facts: false
+  vars:
+    run_mid: false
+  tasks:
+    - include_role:
+        name: dep_top
+    - import_role:
+        name: dep_top
+
+- name: public include_role
+  hosts: all
+  gather_facts: false
+  tasks:
+    - include_role:
+        name: dep_app
+        public: true
+    - debug: msg="{{ app_var | default('private') }} {{ base_default | default('nodefault') }}"
+
+- name: a role whose tasks all skipped runs again
+  hosts: all
+  gather_facts: false
+  roles:
+    - dep_skipper
+    - dep_skipper
+
+- name: a dependency completed by one include is not rerun by another
+  hosts: all
+  gather_facts: false
+  tasks:
+    - include_role:
+        name: dep_app
+        tasks_from: main
+    - include_role:
+        name: dep_mid
+    - include_role:
+        name: dep_app
+      loop: [1, 2]
+
+- name: completion is per host
+  hosts: all
+  gather_facts: false
+  roles:
+    - dep_onehost
+    - dep_onehost

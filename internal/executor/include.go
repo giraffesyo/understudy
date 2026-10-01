@@ -69,7 +69,7 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 	}
 
 	for _, host := range active {
-		base := r.newHostContext(host, pos, playHosts)
+		base := r.newHostContext(host, pos, playHosts).WithRoleScope(task.ScopeDefaults, task.ScopeVars)
 		if len(task.Vars) > 0 {
 			base = base.WithOverlay(task.Vars)
 		}
@@ -173,6 +173,7 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 		r.mu.Lock()
 		r.stats[host].OK += included
 		r.mu.Unlock()
+		r.markRoleRan(task, host)
 		if task.Register != "" {
 			// An include's result holds only the flags (its file and args
 			// are not result fields); a loop's, its items' too.
@@ -252,6 +253,10 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 				// Tasks included from a role belong to that role.
 				t.RoleName = task.RoleName
 			}
+			if !isRole && t.Role == nil {
+				t.Role = task.Role
+				t.ScopeDefaults, t.ScopeVars = task.ScopeDefaults, task.ScopeVars
+			}
 			if len(scope) > 0 {
 				merged := maps.Clone(scope)
 				maps.Copy(merged, t.Vars)
@@ -300,19 +305,41 @@ func (r *Runner) adoptBlocks(include *playbook.Task, tasks []*playbook.Task) {
 	}
 }
 
-// loadIncludedRole loads a role for include_role, layering its defaults and
-// vars and registering its handlers, and returns its tasks and handlers.
+// loadIncludedRole loads a role for include_role/import_role with its
+// dependencies, registering its handlers; a public role's (import_role's
+// by default) defaults and vars join the play's, a private one's are its
+// tasks' alone. It returns the tasks and handlers.
 func (r *Runner) loadIncludedRole(play *playbook.Play, task *playbook.Task, name string) ([]*playbook.Task, []*playbook.Task, error) {
 	tasksFrom, _ := task.Args["tasks_from"].(string)
-	ri, err := playbook.LoadRoleForInclude(name, r.Opts.BaseDir, r.Opts.RolesPath, tasksFrom)
+	allowDup := true
+	if v, ok := task.Args["allow_duplicates"]; ok {
+		if b, ok := playbook.ParseBool(v); ok {
+			allowDup = b
+		}
+	}
+	public := task.Module == "import_role"
+	if v, ok := task.Args["public"]; ok {
+		if b, ok := playbook.ParseBool(v); ok {
+			public = b
+		}
+	}
+	ri, err := playbook.LoadRoleForInclude(name, r.Opts.BaseDir, r.Opts.RolesPath, playbook.RoleIncludeOptions{
+		TasksFrom: tasksFrom, Vars: task.Vars, AllowDuplicates: allowDup, Src: task.Src})
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(ri.Defaults) > 0 {
-		r.Store.AddRoleDefaults(ri.Defaults)
-	}
-	if len(ri.Vars) > 0 {
-		r.Store.AddRoleVars(ri.Vars)
+	if public {
+		for _, d := range ri.Defaults {
+			r.Store.AddRoleDefaults(d)
+		}
+		for _, v := range ri.Vars {
+			r.Store.AddRoleVars(v)
+		}
+	} else {
+		for _, t := range ri.Tasks {
+			t.ScopeDefaults = append(append([]map[string]any{}, task.ScopeDefaults...), ri.Defaults...)
+			t.ScopeVars = append(append([]map[string]any{}, task.ScopeVars...), ri.Vars...)
+		}
 	}
 	r.warnReserved(append(append([]template.KeyOrigin{}, ri.DefaultOrigins...), ri.VarOrigins...))
 	r.mu.Lock() // include_role may run concurrently (parallel blocks)

@@ -167,24 +167,54 @@ func (s *Store) ClearFacts(host string) {
 
 // flatten merges all layers for one host in precedence order.
 func (s *Store) flatten(host string) map[string]any {
+	return s.flattenWith(host, nil, nil)
+}
+
+// flattenWith is flatten with a private role's defaults and vars at
+// their layers' precedence (after the play-wide ones).
+func (s *Store) flattenWith(host string, roleDefaults, roleVars []map[string]any) map[string]any {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := map[string]any{}
 	for layer := Layer(0); layer < layerCount; layer++ {
-		scopes := s.layers[layer]
-		if scopes == nil {
-			continue
+		if scopes := s.layers[layer]; scopes != nil {
+			for k, v := range scopes[""] {
+				out[k] = v
+			}
+			if host != "" {
+				for k, v := range scopes[host] {
+					out[k] = v
+				}
+			}
 		}
-		for k, v := range scopes[""] {
-			out[k] = v
+		var private []map[string]any
+		switch layer {
+		case LRoleDefaults:
+			private = roleDefaults
+		case LRoleVars:
+			private = roleVars
 		}
-		if host != "" {
-			for k, v := range scopes[host] {
+		for _, m := range private {
+			for k, v := range m {
 				out[k] = v
 			}
 		}
 	}
 	return out
+}
+
+// WithRoleScope is the context of a task of a role whose defaults and
+// vars are private to it (include_role without public): they join the
+// variables at their precedence.
+func (c *Context) WithRoleScope(defaults, roleVars []map[string]any) *Context {
+	if len(defaults) == 0 && len(roleVars) == 0 {
+		return c
+	}
+	child := *c
+	child.flat = c.store.flattenWith(c.host, defaults, roleVars)
+	child.resolving = map[string]bool{}
+	child.cache = map[string]any{}
+	return &child
 }
 
 // Context is the per-(host, task) variable view handed to the template

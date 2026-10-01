@@ -47,7 +47,7 @@ func (r *Runner) runMeta(ctx context.Context, play *playbook.Play, task *playboo
 		if len(task.When) == 0 {
 			return true, nil
 		}
-		return r.newHostContext(host, pos, playHosts).EvalWhen(task.When)
+		return r.newHostContext(host, pos, playHosts).WithRoleScope(task.ScopeDefaults, task.ScopeVars).EvalWhen(task.When)
 	}
 
 	if perHostMetas[action] {

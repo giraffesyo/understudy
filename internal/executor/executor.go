@@ -134,6 +134,8 @@ type Runner struct {
 	order          []string
 	failed         map[string]bool
 	notified       map[*playbook.Task]map[string]bool // handler -> hosts to run on
+	roleRan        map[string]map[string]bool         // role load key -> hosts a task of it ran on
+	roleDone       map[string]map[string]bool         // role load key -> hosts it completed on
 	notifyOrder    map[string][]string                // host -> notifications saved, in order
 	handlerNames   map[*playbook.Task]*string         // templated handler names (nil: unusable)
 	fatalErr       error                              // an error raised processing results: ends the run
@@ -578,8 +580,10 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 	if depth > maxIncludeDepth {
 		return fmt.Errorf("include_tasks nesting exceeds %d levels (include loop?)", maxIncludeDepth)
 	}
+	listRestrict := restrict
 	for i := 0; i < len(tasks); i++ {
 		task := tasks[i]
+		restrict := listRestrict
 		if r.playEnded || r.batchEnded {
 			return nil
 		}
@@ -588,13 +592,25 @@ func (r *Runner) runTaskList(ctx context.Context, play *playbook.Play, tasks []*
 			for end < len(tasks) && hasBlockRef(tasks[end], ref.ID, level) {
 				end++
 			}
-			if err := r.runParallel(ctx, play, tasks[i:end], level, ref.ID, playHosts, restrict, depth); err != nil {
+			if err := r.runParallel(ctx, play, tasks[i:end], level, ref.ID, playHosts, listRestrict, depth); err != nil {
 				return err
 			}
 			i = end - 1
 			continue
 		}
 		if !r.tagsMatch(task, play) {
+			continue
+		}
+		if task.Role != nil && !task.Role.AllowDuplicates {
+			// A role that already completed on a host does not run
+			// there again (get_next_task_for_host skips its tasks).
+			restrict = r.roleNotDone(task, playHosts, restrict)
+			if len(restrict) == 0 {
+				continue
+			}
+		}
+		if task.Implicit && task.Module == "meta" && task.FreeForm == playbook.RoleCompleteAction {
+			r.roleComplete(task, playHosts, restrict)
 			continue
 		}
 		if r.Opts.StartAtTask != "" && !r.startedAt {
@@ -935,6 +951,9 @@ func (r *Runner) resetNotified() {
 	r.notified = map[*playbook.Task]map[string]bool{}
 	r.notifyOrder = map[string][]string{}
 	r.handlerNames = nil
+	// The play's role cache: what ran and completed where.
+	r.roleRan = map[string]map[string]bool{}
+	r.roleDone = map[string]map[string]bool{}
 }
 
 // notifyHandlers saves one host's notifications (called on change): each
@@ -1348,7 +1367,7 @@ func (r *Runner) runTaskOnHost(ctx context.Context, play *playbook.Play, task *p
 			override = map[string]any{}
 		}
 		pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
-		vctx := r.newHostContext(host, pos, playHosts)
+		vctx := r.newHostContext(host, pos, playHosts).WithRoleScope(task.ScopeDefaults, task.ScopeVars)
 		if len(task.Vars) > 0 {
 			vctx = vctx.WithOverlay(task.Vars)
 		}
@@ -1382,7 +1401,7 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 	ctx = context.WithValue(ctx, discoveredCtxKey{}, new(string))
 	pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
 	r.warnReservedFor(host, task)
-	base := r.newHostContext(host, pos, playHosts)
+	base := r.newHostContext(host, pos, playHosts).WithRoleScope(task.ScopeDefaults, task.ScopeVars)
 	if len(task.Vars) > 0 {
 		base = base.WithOverlay(task.Vars)
 	}
@@ -1433,7 +1452,7 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 		// Rebuild the per-item context from the store each iteration so a
 		// set_fact from an earlier item is visible to later ones (Ansible's
 		// accumulate-in-a-loop pattern).
-		itemCtx := r.newHostContext(host, pos, playHosts)
+		itemCtx := r.newHostContext(host, pos, playHosts).WithRoleScope(task.ScopeDefaults, task.ScopeVars)
 		if len(task.Vars) > 0 {
 			itemCtx = itemCtx.WithOverlay(task.Vars)
 		}
@@ -2364,6 +2383,9 @@ func (r *Runner) dispatch(ctx context.Context, task *playbook.Task, actx *action
 // record finalizes a task result for one host (non-loop path emits the
 // callback here; loops emitted per item already).
 func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result, loopItems []any) {
+	if !res.Skipped && (res.Extra == nil || res.Extra["unreachable"] != true) {
+		r.markRoleRan(task, host)
+	}
 	if res.Extra != nil && res.Extra["unreachable"] == true {
 		r.Callback.HostUnreachable(host, task, res.Msg)
 		r.mu.Lock()
@@ -2774,6 +2796,59 @@ func (r *Runner) applyFacts(host, delegatedTo string, task *playbook.Task, facts
 		}
 		r.Store.SetFacts(h, map[string]any{"ansible_facts": merged})
 	}
+}
+
+// markRoleRan records that a task of a role ran on host (its result was
+// ok or failed, not skipped or unreachable).
+func (r *Runner) markRoleRan(task *playbook.Task, host string) {
+	if task.Role == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.roleRan[task.Role.Key] == nil {
+		r.roleRan[task.Role.Key] = map[string]bool{}
+	}
+	r.roleRan[task.Role.Key][host] = true
+}
+
+// roleComplete is the implicit role_complete meta: the role completed on
+// each host one of its tasks ran on.
+func (r *Runner) roleComplete(task *playbook.Task, playHosts, restrict []string) {
+	active := r.activeOf(playHosts)
+	if restrict != nil {
+		active = intersect(active, restrict)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, h := range active {
+		if !r.roleRan[task.Role.Key][h] {
+			continue
+		}
+		if r.roleDone[task.Role.Key] == nil {
+			r.roleDone[task.Role.Key] = map[string]bool{}
+		}
+		r.roleDone[task.Role.Key][h] = true
+	}
+}
+
+// roleNotDone narrows the hosts a role task may run on (restrict, else
+// the play's) to those its role has not completed on.
+func (r *Runner) roleNotDone(task *playbook.Task, playHosts, restrict []string) []string {
+	hosts := restrict
+	if hosts == nil {
+		hosts = playHosts
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	done := r.roleDone[task.Role.Key]
+	out := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		if !done[h] {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // warnReserved shows warn_if_reserved's warning for each variable named

@@ -870,7 +870,11 @@ func playbookCmd(args []string) int {
 
 // playHeader is the list modes' "play #N (pattern): name\tTAGS: [...]".
 func playHeader(i int, play *playbook.Play) string {
-	return fmt.Sprintf("play #%d (%s): %s\tTAGS: [%s]", i+1, play.HostPattern, play.Name, strings.Join(play.Tags, ", "))
+	name := play.Name
+	if strings.TrimSpace(name) == "" {
+		name = play.HostPattern // Play.get_name: the hosts, unnamed
+	}
+	return fmt.Sprintf("play #%d (%s): %s\tTAGS: [%s]", i+1, play.HostPattern, name, strings.Join(play.Tags, ", "))
 }
 
 // listTasks prints --list-tasks / --list-tags output. Tasks are filtered by
@@ -886,6 +890,9 @@ func listTasks(path string, plays []*playbook.Play, showTasks, showTags bool, wa
 		union := map[string]bool{}
 		for _, section := range [][]*playbook.Task{play.PreTasks, play.Tasks, play.PostTasks} {
 			for _, t := range expandImports(play, section) {
+				if t.Implicit {
+					continue // a role's role_complete marker
+				}
 				tags := effectiveTags(play, t)
 				for _, tg := range tags {
 					union[tg] = true
@@ -1094,7 +1101,7 @@ func expandImports(play *playbook.Play, tasks []*playbook.Task) []*playbook.Task
 		if cfg, err := config.Load(); err == nil {
 			rolesPath = cfg.RolesPath
 		}
-		ri, err := playbook.LoadRoleForInclude(name, play.Dir, rolesPath, from)
+		ri, err := playbook.LoadRoleForInclude(name, play.Dir, rolesPath, playbook.RoleIncludeOptions{TasksFrom: from})
 		if err != nil {
 			out = append(out, t)
 			continue
