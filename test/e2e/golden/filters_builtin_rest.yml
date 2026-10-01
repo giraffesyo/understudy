@@ -1,0 +1,244 @@
+---
+# The rest of Jinja2's and ansible-core's builtin filters: items, attr,
+# escape and markup, tojson, pprint, urlencode/urldecode, filesizeformat,
+# wordcount, striptags, xmlattr, urlize, itertools (product, combinations,
+# permutations, zip_longest), paths, subelements, rekey_on_member,
+# to_uuid, to_datetime and datetimes, vault/unvault; values and the errors
+# the plugins raise.
+- name: builtin filters, the rest
+  hosts: all
+  gather_facts: false
+  vars:
+    d: {b: 1, a: 2}
+    users:
+      - name: alice
+        groups: [wheel, adm]
+        info: {keys: [k1]}
+      - name: bob
+        groups: []
+        info: {keys: [k2, k3]}
+    byname: {x: {id: 1, n: a}, y: {id: 2, n: b}}
+    long: "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt"
+    winpath: 'C:\Users\me\file.txt'
+    uncpath: '\\server\share\dir\f'
+  tasks:
+    - name: items and attr
+      debug:
+        msg:
+          - "{{ d | items }}"
+          - "x{{ d | items | list }}"
+          - "{{ {'a': 1} | items | map('first') | list }}"
+          - "{{ d | attr('nope') is undefined }}"
+
+    - name: items of something that is not a mapping
+      debug: {msg: "{{ 'abc' | items }}"}
+      ignore_errors: true
+
+    - name: escape, forceescape, safe
+      debug:
+        msg:
+          - "{{ '<a href=\"x\">&</a>' | e }}"
+          - "{{ ('<a>' | escape) | e }}"
+          - "{{ ('<a>' | e) | forceescape }}"
+          - "{{ '<b>' | safe }}"
+          - "{{ 'x' ~ ('<' | e) }}"
+          - "{{ ('<' | e) + '<' }}"
+          - "{{ ('<a>' | e) | upper }}"
+          - "{{ ('<a>' | e) | type_debug }} {{ (('<a>' | e) ~ '') | type_debug }}"
+          - "{{ 'x' is escaped }} {{ 'x' | e is escaped }} {{ 'x' | forceescape | safe is escaped }}"
+
+    - name: markup converted to str for storage
+      set_fact:
+        escaped: "{{ '<a>' | e }}"
+
+    - name: the stored value
+      debug: {msg: "{{ escaped }} {{ escaped | type_debug }}"}
+
+    - name: tojson and pprint
+      debug:
+        msg:
+          - "{{ d | tojson }}"
+          - "{{ {'k': \"<it's & that>\"} | tojson }}"
+          - "{{ [1, {'b': 2, 'a': [none, true]}] | tojson(indent=2) }}"
+          - "{{ d | pprint }}"
+          - "{{ long | pprint }}"
+          - "{{ range(30) | list | pprint }}"
+          - "{{ ('<a>' | e) | pprint }}"
+
+    - name: urlencode, urldecode
+      debug:
+        msg:
+          - "{{ 'a b&c/d?e=f' | urlencode }}"
+          - "{{ d | urlencode }}"
+          - "{{ [['a', 'b c'], ['d/e', 1]] | urlencode }}"
+          - "{{ {'a b': 'c/d', 'x': none} | urlencode }}"
+          - "{{ 'a%20b+c%zz%41' | urldecode }}"
+
+    - name: urlencode of a list that is not of pairs
+      debug: {msg: "{{ ['abc'] | urlencode }}"}
+      ignore_errors: true
+
+    - name: filesizeformat, wordcount, striptags, xmlattr
+      debug:
+        msg:
+          - "{{ 1 | filesizeformat }} / {{ 999 | filesizeformat }} / {{ 12345678 | filesizeformat }} / {{ '1048576' | filesizeformat(true) }}"
+          - "{{ 'Hello world, foo_bar 12' | wordcount }}"
+          - "{{ 'a <b>bold</b>  &amp; <!-- c <d> --> e &lt;f&gt;' | striptags }}"
+          - "{{ {'class': 'x y', 'id': 3, 'n': none, 'v': '<\"&>'} | xmlattr }}"
+          - "{{ {'a': 1} | xmlattr(false) }}"
+
+    - name: xmlattr with an invalid attribute name
+      debug: {msg: "{{ {'a b': 1} | xmlattr }}"}
+      ignore_errors: true
+
+    - name: urlize
+      debug:
+        msg:
+          - "{{ 'go to www.example.com, or (https://x.org/a). mail me@x.com' | urlize }}"
+          - "{{ 'http://averyveryverylongurl.com/path' | urlize(10, true, '_blank') }}"
+          - "{{ 'ftp://x tel:123' | urlize(extra_schemes=['ftp://', 'tel:']) }}"
+
+    - name: urlize with an invalid scheme
+      debug: {msg: "{{ 'x' | urlize(extra_schemes=['bad']) }}"}
+      ignore_errors: true
+
+    - name: product, combinations, permutations, zip_longest
+      debug:
+        msg:
+          - "{{ [1, 2] | product([3, 4]) }}"
+          - "{{ [1, 2] | product('ab', repeat=2) | map('join') | list }}"
+          - "{{ [1, 2, 3, 4] | combinations(2) | list }}"
+          - "{{ [1, 2, 3] | permutations | list }}"
+          - "{{ [1, 2, 3] | permutations(2) | map('join', '-') | list }}"
+          - "{{ 'ab' | zip_longest('xyz', [1]) | list }}"
+          - "{{ [1] | zip_longest([2, 3], fillvalue='-') | list }}"
+
+    - name: combinations with a negative length
+      debug: {msg: "{{ [1, 2] | combinations(-1) }}"}
+      ignore_errors: true
+
+    - name: product of something that is not iterable
+      debug: {msg: "{{ [1, 2] | product(3) }}"}
+      ignore_errors: true
+
+    - name: paths
+      debug:
+        msg:
+          - "{{ '/a/./b/../c//d/' | normpath }} {{ '//a' | normpath }} {{ '' | normpath }} {{ '../x/..' | normpath }}"
+          - "{{ '/etc/ssh/sshd_config' | relpath('/etc/pki') }}"
+          - "{{ ['/usr/lib', '/usr/local/lib', '/usr/lib/x'] | commonpath }}"
+          - "{{ '$NOPE_UNDERSTUDY_X/y ${NOPE_UNDERSTUDY_X}' | expandvars }}"
+          - "{{ winpath | win_basename }} {{ winpath | win_dirname }} {{ winpath | win_splitdrive }}"
+          - "{{ uncpath | win_splitdrive }}"
+          - "{{ '\\\\server\\share' | win_splitdrive }}"
+
+    - name: commonpath of absolute and relative paths
+      debug: {msg: "{{ ['/usr/lib', 'usr'] | commonpath }}"}
+      ignore_errors: true
+
+    - name: normpath of something that is not a path
+      debug: {msg: "{{ 3 | normpath }}"}
+      ignore_errors: true
+
+    - name: fileglob
+      block:
+        - file: {path: "{{ workdir }}/glob", state: directory}
+        - copy: {dest: "{{ workdir }}/glob/a.txt", content: "a"}
+        - copy: {dest: "{{ workdir }}/glob/.hidden.txt", content: "h"}
+        - file: {path: "{{ workdir }}/glob/sub.txt", state: directory}
+        - debug:
+            msg:
+              - "{{ (workdir ~ '/glob/*.txt') | fileglob | map('basename') | list }}"
+              - "{{ (workdir ~ '/glob/.*') | fileglob | map('basename') | list }}"
+              - "{{ (workdir ~ '/nope/*') | fileglob }}"
+
+    - name: subelements
+      debug:
+        msg:
+          - "{{ users | subelements('groups') | map('last') | list }}"
+          - "{{ users | subelements('info.keys') | map('last') | list }}"
+          - "{{ users | subelements('nope', skip_missing=true) }}"
+
+    - name: subelements of a missing key
+      debug: {msg: "{{ users | subelements('nope') }}"}
+      ignore_errors: true
+
+    - name: subelements through a string
+      debug: {msg: "{{ users | subelements('name.x') }}"}
+      ignore_errors: true
+
+    - name: rekey_on_member
+      debug:
+        msg:
+          - "{{ byname | rekey_on_member('n') }}"
+          - "{{ [{'n': 'a'}, {'n': 'a', 'z': 1}] | rekey_on_member('n', duplicates='overwrite') }}"
+
+    - name: rekey_on_member of a duplicate
+      debug: {msg: "{{ [{'n': 'a'}, {'n': 'a', 'z': 1}] | rekey_on_member('n') }}"}
+      ignore_errors: true
+
+    - name: rekey_on_member of a missing key
+      debug: {msg: "{{ [{'n': 'a'}] | rekey_on_member('q') }}"}
+      ignore_errors: true
+
+    - name: to_uuid
+      debug:
+        msg:
+          - "{{ 'abc' | to_uuid }}"
+          - "{{ 'abc' | to_uuid(namespace='6ba7b810-9dad-11d1-80b4-00c04fd430c8') }}"
+
+    - name: to_uuid with an invalid namespace
+      debug: {msg: "{{ 'abc' | to_uuid(namespace='zz') }}"}
+      ignore_errors: true
+
+    - name: to_datetime
+      debug:
+        msg:
+          - "{{ '2020-01-02 03:04:05' | to_datetime }}"
+          - "x{{ '2020-01-02 03:04:05' | to_datetime }}"
+          - "{{ ['2020-01-02' | to_datetime('%Y-%m-%d')] | string }}"
+          - "{{ ('2020-01-02 03:04:05' | to_datetime).year }}"
+          - "{{ (('2020-01-02 03:04:05' | to_datetime) - ('2019-12-31 00:00:00' | to_datetime)).days }}"
+          - "{{ (('2020-01-02 03:04:05' | to_datetime) - ('2019-12-31 00:00:00' | to_datetime)).total_seconds() }}"
+          - "{{ (('2019-12-31 00:00:00' | to_datetime) - ('2020-01-02 03:04:05' | to_datetime)) | string }}"
+          - "{{ ('2020-01-02' | to_datetime('%Y-%m-%d')) < ('2020-01-03' | to_datetime('%Y-%m-%d')) }}"
+          - "{{ ('2020-01-02' | to_datetime('%Y-%m-%d')).strftime('%d/%m/%y %a %b %j %p') }}"
+          - "{{ '2021-06-01T12:30:00.25+0200' | to_datetime('%Y-%m-%dT%H:%M:%S.%f%z') }}"
+          - "{{ 'Jun 1 2021 1:05PM' | to_datetime('%b %d %Y %I:%M%p') }}"
+          - "{{ ('2020-01-02 03:04:05' | to_datetime) | to_json }}"
+          - "{{ ('2020-01-02 03:04:05' | to_datetime) | to_yaml }}"
+
+    - name: a datetime in a variable
+      set_fact:
+        when_dt: "{{ '2021-06-01 12:30:00' | to_datetime }}"
+
+    - name: the variable's datetime
+      debug: {msg: "{{ when_dt.month }} {{ when_dt | type_debug }} {{ when_dt.isoformat() }} {{ when_dt.weekday() }}"}
+
+    - name: to_datetime of a date that does not match
+      debug: {msg: "{{ '2020-01-02 03:04:05x' | to_datetime }}"}
+      ignore_errors: true
+
+    - name: to_datetime of a day out of range
+      debug: {msg: "{{ '2020-02-30' | to_datetime('%Y-%m-%d') }}"}
+      ignore_errors: true
+
+    - name: a timedelta is not storable
+      debug: {msg: "{{ ('2020-01-02' | to_datetime('%Y-%m-%d')) - ('2020-01-01' | to_datetime('%Y-%m-%d')) }}"}
+      ignore_errors: true
+
+    - name: vault and unvault
+      debug:
+        msg:
+          - "{{ 'secret' | vault('pw', salt='saltsaltsaltsalt') }}"
+          - "{{ 'secret' | vault('pw', salt='s', vault_id='myid') }}"
+          - "{{ 'secret' | vault('pw') | unvault('pw') }}"
+          - "{{ 'plain' | unvault('pw') }}"
+
+    - name: unvault with the wrong secret
+      debug: {msg: "{{ 'secret' | vault('pw', salt='s') | unvault('bad') }}"}
+      ignore_errors: true
+
+    - name: vault with an empty salt
+      debug: {msg: "{{ 'x' | vault('pw', salt='') }}"}
+      ignore_errors: true
