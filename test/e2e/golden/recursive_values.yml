@@ -1,0 +1,26 @@
+# Values that contain themselves (a YAML alias inside its anchor): reads
+# work, walkers fail with Python's recursion error. to_json of one fails
+# with CPython's C stack overflow text, which depends on the platform, so
+# it is left out.
+- hosts: localhost
+  gather_facts: false
+  vars:
+    rl: &rl [1, *rl]
+    rd: &rd {a: 1, self: *rd}
+  tasks:
+    - {debug: {msg: "{{ rl | length }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ rd | to_yaml }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ rl | flatten }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ rd | combine({'b': 2}) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ rd | combine({'b': 2}, recursive=true) }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ rl | unique }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ rl | string }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ rd | dict2items | length }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ rl == rl }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ rl | first }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ rd.self.self.a }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ rl | hash('sha1') }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ rd | items2dict }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ rl | sort }}"}, ignore_errors: true}
+    - {debug: {msg: "{{ rl }}"}, ignore_errors: true}
+    - {debug: {var: rd}, ignore_errors: true}

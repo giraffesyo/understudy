@@ -7,13 +7,16 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"hash/fnv"
 	"math"
+	"math/big"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,8 +33,8 @@ func registerAnsibleFilters(e *Engine) {
 	f := e.Filters
 
 	// ---- sequences ----
-	f["min"] = seqReduce(func(a, b any) (bool, error) { c, err := compare(a, b); return c < 0, err })
-	f["max"] = seqReduce(func(a, b any) (bool, error) { c, err := compare(a, b); return c > 0, err })
+	f["min"] = seqReduce("<")
+	f["max"] = seqReduce(">")
 
 	f["sum"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		items, err := iterate(in)
@@ -93,11 +96,11 @@ func registerAnsibleFilters(e *Engine) {
 			a, b := out[i], out[j]
 			if byAttr {
 				var err error
-				if a, err = extractAttr(a, attr); err != nil {
+				if a, err = extractStrict(a, attr); err != nil {
 					sortErr = err
 					return false
 				}
-				if b, err = extractAttr(b, attr); err != nil {
+				if b, err = extractStrict(b, attr); err != nil {
 					sortErr = err
 					return false
 				}
@@ -111,7 +114,11 @@ func registerAnsibleFilters(e *Engine) {
 			}
 			c, err := compare(a, b)
 			if err != nil {
-				sortErr = err
+				if sortErr == nil {
+					// Items of a variable's list are its lazy and tagged values.
+					v := ec.fromVar(-1) && !byAttr
+					sortErr = fmt.Errorf("'<' not supported between instances of '%s' and '%s'", pyClassName(a, v), pyClassName(b, v))
+				}
 				return false
 			}
 			if reverse {
@@ -156,9 +163,13 @@ func registerAnsibleFilters(e *Engine) {
 				levels = n
 			}
 		}
-		list, ok := in.([]any)
+		list, ok := Undeprecate(in).([]any)
 		if !ok {
-			return nil, fmt.Errorf("expected a list, got %s", typeName(in))
+			items, err := iterate(in) // for element in mylist
+			if err != nil {
+				return nil, errNotIterable(in, ec.fromVar(-1))
+			}
+			list = items
 		}
 		return flattenList(list, levels), nil
 	}
@@ -206,47 +217,55 @@ func registerAnsibleFilters(e *Engine) {
 	f["symmetric_difference"] = setOp(func(inA, inB bool) bool { return inA != inB })
 
 	// ---- dicts ----
+	// key_name and value_name, positional or by keyword.
+	kvNames := func(args []any, kwargs map[string]any) (any, any) {
+		var keyName, valName any = "key", "value"
+		if len(args) > 0 {
+			keyName = args[0]
+		} else if v, ok := kwargs["key_name"]; ok {
+			keyName = v
+		}
+		if len(args) > 1 {
+			valName = args[1]
+		} else if v, ok := kwargs["value_name"]; ok {
+			valName = v
+		}
+		return keyName, valName
+	}
 	f["dict2items"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		keys, m, ok := orderedMap(in)
 		if !ok {
-			return nil, fmt.Errorf("dict2items requires a dictionary, got %s", typeName(in))
+			return nil, fmt.Errorf("dict2items requires a dictionary, got %s instead.", pyTypeRepr(in, ec.fromVar(-1)))
 		}
-		keyName, valName := "key", "value"
-		if v, ok := kwargs["key_name"]; ok {
-			keyName, _ = asString(v)
-		}
-		if v, ok := kwargs["value_name"]; ok {
-			valName, _ = asString(v)
-		}
+		keyName, valName := kvNames(args, kwargs)
 		out := make([]any, 0, len(m))
 		for _, k := range keys {
-			out = append(out, map[string]any{keyName: k, valName: m[k]})
+			item := yaml.NewOMap()
+			item.Set(toStr(keyName), k)
+			item.Set(toStr(valName), m[k])
+			out = append(out, item)
 		}
 		return out, nil
 	}
 
 	f["items2dict"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		items, ok := in.([]any)
+		items, ok := Undeprecate(in).([]any)
 		if !ok {
-			return nil, fmt.Errorf("items2dict requires a list, got %s", typeName(in))
+			return nil, fmt.Errorf("items2dict requires a list, got %s instead.", pyTypeRepr(in, ec.fromVar(-1)))
 		}
-		keyName, valName := "key", "value"
-		if v, ok := kwargs["key_name"]; ok {
-			keyName, _ = asString(v)
-		}
-		if v, ok := kwargs["value_name"]; ok {
-			valName, _ = asString(v)
-		}
+		keyName, valName := kvNames(args, kwargs)
 		out := yaml.NewOMap()
 		for _, item := range items {
 			m, ok := anyToMap(item)
 			if !ok {
-				return nil, fmt.Errorf("items2dict entries must be dictionaries")
+				// item[key_name] on a non-mapping: TypeError.
+				return nil, whileHandling("items2dict requires a list of dictionaries, got %s instead.", toStr(in))
 			}
-			k, kOK := m[keyName]
-			v, vOK := m[valName]
+			k, kOK := m[toStr(keyName)]
+			v, vOK := m[toStr(valName)]
 			if !kOK || !vOK {
-				return nil, fmt.Errorf("items2dict entry missing %q or %q", keyName, valName)
+				return nil, whileHandling("items2dict requires each dictionary in the list to contain the keys '%s' and '%s', got %s instead.",
+					toStr(keyName), toStr(valName), toStr(in))
 			}
 			ks, ok := asString(k)
 			if !ok {
@@ -258,30 +277,69 @@ func registerAnsibleFilters(e *Engine) {
 	}
 
 	f["combine"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		for k := range kwargs {
+			if k != "recursive" && k != "list_merge" {
+				return nil, fmt.Errorf("'recursive' and 'list_merge' are the only valid keyword arguments")
+			}
+		}
 		recursive := truthy(kwargs["recursive"])
 		listMerge := "replace"
 		if lm, ok := kwargs["list_merge"]; ok {
-			s, _ := asString(lm)
-			switch s {
-			case "", "replace", "keep", "append", "prepend", "append_rp", "prepend_rp":
-				if s != "" {
-					listMerge = s
+			listMerge, _ = asString(lm)
+		}
+		// dictionaries = flatten(terms, levels=1): a list of dicts
+		// combines its items; nulls are skipped.
+		type term struct {
+			v       any
+			fromVar bool
+		}
+		var dicts []term
+		for i, t := range append([]any{in}, args...) {
+			fromVar := ec.fromVar(i - 1)
+			if isFlattenNull(t) {
+				continue
+			}
+			if list, ok := Undeprecate(t).([]any); ok {
+				for _, item := range list {
+					if !isFlattenNull(item) {
+						dicts = append(dicts, term{item, fromVar})
+					}
 				}
+				continue
+			}
+			dicts = append(dicts, term{t, fromVar})
+		}
+		switch len(dicts) {
+		case 0:
+			return yaml.NewOMap(), nil
+		case 1:
+			return dicts[0].v, nil
+		}
+		// merge_hash runs from the highest priority (last) down, checking
+		// list_merge and then that both sides are dicts.
+		for i := len(dicts) - 2; i >= 0; i-- {
+			switch listMerge {
+			case "replace", "keep", "append", "prepend", "append_rp", "prepend_rp":
 			default:
-				return nil, fmt.Errorf("combine: unsupported list_merge %q", s)
+				return nil, fmt.Errorf("merge_hash: 'list_merge' argument can only be equal to 'replace', 'keep', 'append', 'prepend', 'append_rp' or 'prepend_rp'")
+			}
+			x, y := dicts[i], dicts[i+1]
+			_, xok := asOMap(x.v)
+			_, yok := asOMap(y.v)
+			if i < len(dicts)-2 {
+				yok = true // the merged result so far
+				y.v, y.fromVar = map[string]any{}, false
+			}
+			if !xok || !yok {
+				return nil, fmt.Errorf("failed to combine variables, expected dicts but got a '%s' and a '%s'.",
+					pyClassName(x.v, x.fromVar), pyClassName(y.v, y.fromVar))
 			}
 		}
 		// Build the result as an ordered map so merged keys keep base-then-new
 		// insertion order (Ansible's combine preserves it).
-		out, ok := asOMap(in)
-		if !ok {
-			return nil, fmt.Errorf("combine requires dictionaries, got %s", typeName(in))
-		}
-		for _, a := range args {
-			m, ok := asOMap(a)
-			if !ok {
-				return nil, fmt.Errorf("combine arguments must be dictionaries, got %s", typeName(a))
-			}
+		out, _ := asOMap(dicts[0].v)
+		for _, d := range dicts[1:] {
+			m, _ := asOMap(d.v)
 			mergeOMap(out, m, recursive, listMerge)
 		}
 		return out, nil
@@ -316,7 +374,10 @@ func registerAnsibleFilters(e *Engine) {
 			if err != nil {
 				return nil, err
 			}
-			if _, und := k.(Undefined); und && hasDef {
+			if u, und := k.(Undefined); und {
+				if !hasDef {
+					return nil, u.useError(ec.pos)
+				}
 				k = def
 			}
 			ck := groupKey(k, caseSensitive)
@@ -352,49 +413,138 @@ func registerAnsibleFilters(e *Engine) {
 	}
 
 	f["dictsort"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		m, ok := anyToMap(in)
+		// Jinja's do_dictsort(value, case_sensitive=False, by='key',
+		// reverse=False).
+		opt := func(i int, name string, def any) any {
+			if i < len(args) {
+				return args[i]
+			}
+			if v, ok := kwargs[name]; ok {
+				return v
+			}
+			return def
+		}
+		caseSensitive := truthy(opt(0, "case_sensitive", false))
+		pos := 0
+		switch by := opt(1, "by", "key"); toStr(by) {
+		case "key":
+		case "value":
+			pos = 1
+		default:
+			return nil, fmt.Errorf("You can only sort by either \"key\" or \"value\"")
+		}
+		reverse := truthy(opt(2, "reverse", false))
+		keys, m, ok := orderedMap(in)
 		if !ok {
-			return nil, fmt.Errorf("dictsort requires a dictionary")
+			return nil, fmt.Errorf("'%s' object has no attribute 'items'", pyClassName(in, ec.fromVar(-1)))
 		}
 		out := make([]any, 0, len(m))
-		for _, k := range sortedKeys(m) {
+		for _, k := range keys {
 			out = append(out, []any{k, m[k]})
+		}
+		var sortErr error
+		sort.SliceStable(out, func(i, j int) bool {
+			a, b := out[i].([]any)[pos], out[j].([]any)[pos]
+			if !caseSensitive {
+				if as, ok := asString(a); ok {
+					a = strings.ToLower(as)
+				}
+				if bs, ok := asString(b); ok {
+					b = strings.ToLower(bs)
+				}
+			}
+			if reverse {
+				a, b = b, a
+			}
+			c, err := compare(a, b)
+			if err != nil && sortErr == nil {
+				sortErr = err
+			}
+			return c < 0
+		})
+		if sortErr != nil {
+			return nil, sortErr
 		}
 		return out, nil
 	}
 
 	// Math filters (all return floats, matching ansible).
-	f["pow"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		base, ok := asFloat(in)
-		exp, ok2 := asFloatArg(args, 0)
-		if !ok || !ok2 {
-			return nil, fmt.Errorf("pow requires numbers")
+	// pow, root and log are Python's math functions, their TypeErrors
+	// (and root's ValueErrors) raised as the filter's own error.
+	mathArg := func(ec *EvalCtx, i int, args []any, kwargs map[string]any, name string, def any) any {
+		if i < len(args) {
+			return args[i]
 		}
-		return math.Pow(base, exp), nil
+		if v, ok := kwargs[name]; ok {
+			return v
+		}
+		return def
+	}
+	f["pow"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		x, err := pyReal(in, ec.fromVar(-1))
+		if err == nil {
+			var y float64
+			if y, err = pyReal(mathArg(ec, 0, args, kwargs, "y", nil), ec.fromVar(0)); err == nil {
+				return pyMathPow(x, y)
+			}
+		}
+		if _, isType := err.(*pyTypeError); isType {
+			return nil, fmt.Errorf("pow() can only be used on numbers: %s", err)
+		}
+		return nil, err
 	}
 	f["root"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		x, ok := asFloat(in)
-		if !ok {
-			return nil, fmt.Errorf("root requires a number")
+		base := mathArg(ec, 0, args, kwargs, "base", int64(2))
+		v, err := func() (any, error) {
+			x, err := pyReal(in, ec.fromVar(-1))
+			if err != nil {
+				return nil, err
+			}
+			if equal(base, int64(2)) {
+				if x < 0 {
+					return nil, fmt.Errorf("expected a nonnegative input, got %s", pyFloatRepr(x))
+				}
+				return math.Sqrt(x), nil
+			}
+			b, err := pyFloat(base)
+			if err != nil {
+				return nil, err
+			}
+			return pyMathPow(x, 1/b)
+		}()
+		if err != nil {
+			return nil, fmt.Errorf("root() can only be used on numbers: %s", err)
 		}
-		n := 2.0
-		if v, ok := asFloatArg(args, 0); ok {
-			n = v
-		}
-		if n == 2 {
-			return math.Sqrt(x), nil // exact for the common square-root case
-		}
-		return math.Pow(x, 1/n), nil
+		return v, nil
 	}
 	f["log"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		x, ok := asFloat(in)
-		if !ok {
-			return nil, fmt.Errorf("log requires a number")
+		base := mathArg(ec, 0, args, kwargs, "base", nil)
+		x, err := pyReal(in, ec.fromVar(-1))
+		if err != nil {
+			return nil, fmt.Errorf("log() can only be used on numbers: %s", err)
 		}
-		if base, ok := asFloatArg(args, 0); ok {
-			return math.Log(x) / math.Log(base), nil
+		if x <= 0 || math.IsNaN(x) {
+			if !math.IsNaN(x) {
+				return nil, fmt.Errorf("expected a positive input")
+			}
 		}
-		return math.Log(x), nil
+		if base == nil {
+			return math.Log(x), nil
+		}
+		if equal(base, int64(10)) {
+			return math.Log10(x), nil
+		}
+		b, err := pyReal(base, ec.fromVar(0))
+		if err != nil {
+			return nil, fmt.Errorf("log() can only be used on numbers: %s", err)
+		}
+		if b <= 0 {
+			return nil, fmt.Errorf("expected a positive input")
+		}
+		if b == 1 {
+			return nil, fmt.Errorf("division by zero")
+		}
+		return math.Log(x) / math.Log(b), nil
 	}
 
 	// random: choose a random element of a list, or a random int in [0, N).
@@ -478,39 +628,47 @@ func registerAnsibleFilters(e *Engine) {
 	f["strftime"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		format, ok := asString(in)
 		if !ok {
-			return nil, fmt.Errorf("strftime requires a format string")
+			return nil, fmt.Errorf("strftime() argument 1 must be str, not %s", pyClassName(in, ec.fromVar(-1)))
 		}
-		ts, ok := asFloatArg(args, 0)
-		if !ok {
-			return nil, fmt.Errorf("strftime requires an epoch-seconds argument")
+		// second=None is now; anything else must convert with float().
+		var second any
+		if len(args) > 0 {
+			second = args[0]
+		} else if s, ok := kwargs["second"]; ok {
+			second = s
+		}
+		ts := float64(time.Now().Unix())
+		if second != nil {
+			f, ok := asFloat(second)
+			if s, isStr := asString(second); isStr {
+				f, ok = pyParseFloat(s)
+			}
+			if !ok {
+				return nil, whileHandling("Invalid value for epoch value (%s)", toStr(second))
+			}
+			ts = f
 		}
 		return strftime(format, int64(ts)), nil
 	}
 
 	f["human_readable"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		n, ok := asFloat(in)
-		if !ok {
-			if s, sok := asString(in); sok {
-				parsed, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
-				if err != nil {
-					return nil, fmt.Errorf("human_readable requires a number, got %q", s)
-				}
-				n = parsed
-			} else {
-				return nil, fmt.Errorf("human_readable requires a number, got %s", typeName(in))
-			}
+		// human_readable(size, isbits=False, unit=None)
+		isbits := truthy(mathArg(ec, 0, args, kwargs, "isbits", false))
+		unit := mathArg(ec, 1, args, kwargs, "unit", nil)
+		out, err := bytesToHuman(Undeprecate(in), isbits, unit)
+		if err != nil {
+			msg := strings.ReplaceAll(err.Error(), "'str'", "'"+pyClassName(in, ec.fromVar(-1))+"'")
+			return nil, fmt.Errorf("human_readable() failed on bad input: %s", msg)
 		}
-		return humanReadable(n, truthy(kwargs["isbits"])), nil
+		return out, nil
 	}
 	f["human_to_bytes"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		if n, ok := asInt(in); ok {
-			return n, nil
+		// human_to_bytes(size, default_unit=None, isbits=False)
+		out, err := humanToBytes(in, mathArg(ec, 0, args, kwargs, "default_unit", nil), truthy(mathArg(ec, 1, args, kwargs, "isbits", false)))
+		if err != nil {
+			return nil, fmt.Errorf("human_to_bytes() can't interpret the input: %s", err)
 		}
-		s, ok := asString(in)
-		if !ok {
-			s = toStr(in)
-		}
-		return humanToBytes(s)
+		return out, nil
 	}
 
 	// ---- serialization ----
@@ -528,12 +686,31 @@ func registerAnsibleFilters(e *Engine) {
 		}
 		return indent, sortKeys
 	}
+	// The keyword arguments json.dumps (and the filters themselves)
+	// accept; any other reaches JSONEncoder and fails there.
+	jsonKwargs := func(kwargs map[string]any) error {
+		for _, k := range sortedKeys(kwargs) {
+			switch k {
+			case "skipkeys", "ensure_ascii", "check_circular", "allow_nan", "cls", "indent", "separators",
+				"default", "sort_keys", "profile", "vault_to_text", "preprocess_unsafe":
+			default:
+				return fmt.Errorf("JSONEncoder.__init__() got an unexpected keyword argument '%s'", k)
+			}
+		}
+		return nil
+	}
 	f["to_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		if err := jsonKwargs(kwargs); err != nil {
+			return nil, err
+		}
 		// json.dumps default sort_keys=False: preserve dict insertion order.
 		indent, sortKeys := jsonOpts(kwargs, 0, false)
 		return pyJSON(in, indent, sortKeys), nil
 	}
 	f["to_nice_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
+		if err := jsonKwargs(kwargs); err != nil {
+			return nil, err
+		}
 		// Ansible's to_nice_json passes sort_keys=True.
 		indent, sortKeys := jsonOpts(kwargs, 4, true)
 		return pyJSON(in, indent, sortKeys), nil
@@ -541,7 +718,7 @@ func registerAnsibleFilters(e *Engine) {
 	f["from_json"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
 		if !ok {
-			return nil, fmt.Errorf("from_json requires a string")
+			return nil, fmt.Errorf("the JSON object must be str, bytes or bytearray, not %s", pyClassName(in, false))
 		}
 		// Objects keep their key order and numbers their type, as
 		// Python's json.loads builds them.
@@ -552,9 +729,14 @@ func registerAnsibleFilters(e *Engine) {
 	f["from_yaml"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
 		if !ok {
-			return nil, fmt.Errorf("from_yaml requires a string")
+			return in, nil // anything but a str is returned as is
 		}
-		return yaml.Unmarshal([]byte(s), "<from_yaml>")
+		v, err := yaml.Unmarshal([]byte(s), "<from_yaml>")
+		var ye *yaml.Error
+		if errors.As(err, &ye) {
+			return nil, errors.New(ye.PyYAMLString("<unicode string>"))
+		}
+		return v, err
 	}
 	f["from_yaml_all"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
@@ -577,18 +759,12 @@ func registerAnsibleFilters(e *Engine) {
 	}
 
 	f["b64encode"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, ok := asString(in)
-		if !ok {
-			return nil, fmt.Errorf("b64encode requires a string")
-		}
+		s, _ := softStr(in) // to_bytes(nonstring='simplerepr')
 		return base64.StdEncoding.EncodeToString([]byte(s)), nil
 	}
 	f["b64decode"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, ok := asString(in)
-		if !ok {
-			return nil, fmt.Errorf("b64decode requires a string")
-		}
-		data, err := base64.StdEncoding.DecodeString(s)
+		s, _ := softStr(in)
+		data, err := pyB64Decode(s)
 		if err != nil {
 			return nil, err
 		}
@@ -619,7 +795,7 @@ func registerAnsibleFilters(e *Engine) {
 		case "sha512":
 			h = sha512.New()
 		default:
-			return nil, fmt.Errorf("unsupported hash algorithm %q", algo)
+			return nil, whileHandling("unsupported hash type %s", algo)
 		}
 		h.Write([]byte(s))
 		return hex.EncodeToString(h.Sum(nil)), nil
@@ -629,13 +805,15 @@ func registerAnsibleFilters(e *Engine) {
 	}
 
 	f["format"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		s, ok := asString(in)
-		if !ok {
-			return nil, fmt.Errorf("format requires a string, got %s", typeName(in))
+		// Jinja's do_format: soft_str(value) % (kwargs or args).
+		if len(args) > 0 && len(kwargs) > 0 {
+			return nil, fmt.Errorf("can't handle positional and keyword arguments at the same time")
 		}
-		// Jinja2's format filter is Python's % operator; Go's fmt verbs
-		// cover the common specifiers (%s %d %f %x %o %e %g, width/precision).
-		return fmt.Sprintf(s, args...), nil
+		s, _ := softStr(in)
+		if len(kwargs) > 0 {
+			return pyPercentFormat(s, nil, kwargs)
+		}
+		return pyPercentFormat(s, args, nil)
 	}
 
 	f["quote"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
@@ -674,8 +852,8 @@ func registerAnsibleFilters(e *Engine) {
 	}
 
 	// ---- paths (control-node semantics) ----
-	f["basename"] = pathFilter(filepath.Base)
-	f["dirname"] = pathFilter(filepath.Dir)
+	f["basename"] = pathFilter(pyBasename)
+	f["dirname"] = pathFilter(pyDirname)
 	f["expanduser"] = pathFilter(func(p string) string {
 		if strings.HasPrefix(p, "~") {
 			if home, err := os.UserHomeDir(); err == nil {
@@ -705,25 +883,18 @@ func registerAnsibleFilters(e *Engine) {
 	}
 	f["path_join"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		var parts []string
-		if list, ok := in.([]any); ok {
+		if list, ok := Undeprecate(in).([]any); ok {
 			for _, p := range list {
 				s, ok := asString(p)
 				if !ok {
-					return nil, fmt.Errorf("path_join elements must be strings")
+					return nil, fmt.Errorf("join() argument must be str, bytes, or os.PathLike object, not '%s'", pyClassName(p, ec.fromVar(-1)))
 				}
 				parts = append(parts, s)
 			}
 		} else if s, ok := asString(in); ok {
 			parts = append(parts, s)
-			for _, a := range args {
-				as, ok := asString(a)
-				if !ok {
-					return nil, fmt.Errorf("path_join elements must be strings")
-				}
-				parts = append(parts, as)
-			}
 		} else {
-			return nil, fmt.Errorf("path_join requires a string or list")
+			return nil, fmt.Errorf("|path_join expects string or sequence, got %s instead.", pyTypeRepr(in, ec.fromVar(-1)))
 		}
 		// Python os.path.join semantics: an absolute component resets.
 		out := ""
@@ -739,16 +910,36 @@ func registerAnsibleFilters(e *Engine) {
 
 	// ---- misc ----
 	f["ternary"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		if len(args) < 2 {
-			return nil, fmt.Errorf("ternary requires true and false values")
+		// ternary(value, true_val, false_val, none_val=None)
+		params := []string{"true_val", "false_val", "none_val"}
+		vals := make([]any, 3)
+		set := make([]bool, 3)
+		for i := range params {
+			if i < len(args) {
+				vals[i], set[i] = args[i], true
+			} else if v, ok := kwargs[params[i]]; ok {
+				vals[i], set[i] = v, true
+			}
 		}
-		if in == nil && len(args) > 2 {
-			return args[2], nil
+		var missing []string
+		for i := range 2 {
+			if !set[i] {
+				missing = append(missing, "'"+params[i]+"'")
+			}
+		}
+		switch len(missing) {
+		case 1:
+			return nil, fmt.Errorf("ternary() missing 1 required positional argument: %s", missing[0])
+		case 2:
+			return nil, fmt.Errorf("ternary() missing 2 required positional arguments: %s and %s", missing[0], missing[1])
+		}
+		if Undeprecate(in) == nil && vals[2] != nil {
+			return vals[2], nil
 		}
 		if truthy(in) {
-			return args[0], nil
+			return vals[0], nil
 		}
-		return args[1], nil
+		return vals[1], nil
 	}
 
 	f["extract"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
@@ -778,28 +969,22 @@ func registerAnsibleFilters(e *Engine) {
 	}
 
 	f["abs"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		if n, ok := asInt(in); ok {
-			if _, isBool := in.(bool); !isBool {
-				if n < 0 {
-					return -n, nil
-				}
-				return n, nil
+		if n, ok := asInt(in); ok && n != math.MinInt64 {
+			if n < 0 {
+				return -n, nil
 			}
+			return n, nil
 		}
-		if fv, ok := in.(float64); ok {
-			if fv < 0 {
-				return -fv, nil
-			}
-			return fv, nil
+		if b, ok := asBigInt(in); ok {
+			return normInt(new(big.Int).Abs(b)), nil
 		}
-		return nil, fmt.Errorf("abs requires a number, got %s", typeName(in))
+		if fv, ok := Undeprecate(in).(float64); ok {
+			return math.Abs(fv), nil
+		}
+		return nil, fmt.Errorf("bad operand type for abs(): '%s'", pyClassName(in, ec.fromVar(-1)))
 	}
 
 	f["round"] = func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
-		fv, ok := asFloat(in)
-		if !ok {
-			return nil, fmt.Errorf("round requires a number")
-		}
 		precision := int64(0)
 		if len(args) > 0 {
 			if n, ok := asInt(args[0]); ok {
@@ -809,6 +994,18 @@ func registerAnsibleFilters(e *Engine) {
 		method := "common"
 		if len(args) > 1 {
 			method, _ = asString(args[1])
+		}
+		if method != "common" && method != "ceil" && method != "floor" {
+			return nil, fmt.Errorf("method must be common, ceil or floor")
+		}
+		fv, ok := asFloat(in)
+		if !ok {
+			return nil, fmt.Errorf("type %s doesn't define __round__ method", pyClassName(in, ec.fromVar(-1)))
+		}
+		if _, isInt := asBigInt(in); isInt && method == "common" && precision >= 0 {
+			if _, isBool := Undeprecate(in).(bool); !isBool {
+				return Undeprecate(in), nil // round(int, n) is the int
+			}
 		}
 		mult := math.Pow(10, float64(precision))
 		v := fv * mult
@@ -830,11 +1027,17 @@ func registerAnsibleFilters(e *Engine) {
 
 // ---- helpers ----
 
-func seqReduce(better func(a, b any) (bool, error)) FilterFunc {
+// seqReduce is Jinja's do_min/do_max (op "<" or ">"): Python's min/max
+// over the items, keyed by attribute= and compared case-insensitively
+// unless case_sensitive.
+func seqReduce(op string) FilterFunc {
 	return func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		items, err := iterate(in)
 		if err != nil {
 			return nil, err
+		}
+		if len(items) == 0 {
+			return Undefined{Name: "aggregated item", Err: &UndefinedError{Hint: "No aggregated item, sequence was empty."}}, nil
 		}
 		// With attribute=, items compare by it, and the item wins (Jinja's
 		// key function).
@@ -845,16 +1048,20 @@ func seqReduce(better func(a, b any) (bool, error)) FilterFunc {
 				return nil, err
 			}
 		}
-		if len(items) == 0 {
-			return nil, fmt.Errorf("sequence is empty")
+		caseSensitive := len(args) > 0 && truthy(args[0]) || truthy(kwargs["case_sensitive"])
+		key := func(v any) any {
+			if s, ok := asString(v); ok && !caseSensitive {
+				return strings.ToLower(s)
+			}
+			return v
 		}
 		best := 0
 		for i := 1; i < len(items); i++ {
-			b, err := better(keys[i], keys[best])
+			c, err := compareOp(key(keys[i]), key(keys[best]), op)
 			if err != nil {
 				return nil, err
 			}
-			if b {
+			if (op == "<" && c < 0) || (op == ">" && c > 0) {
 				best = i
 			}
 		}
@@ -897,12 +1104,16 @@ func extractAttr(item, attr any) (any, error) {
 		return nil, fmt.Errorf("attribute name must be a string")
 	}
 	cur := item
+	// Jinja's make_attrgetter: a part missing from its container is an
+	// undefined naming that container ("object of type 'dict' has no
+	// attribute 'x'"), and stays so whatever follows.
 	for _, seg := range strings.Split(path, ".") {
 		if m, ok := anyToMap(cur); ok {
-			cur, ok = m[seg]
+			next, ok := m[seg]
 			if !ok {
-				return Undefined{Name: path}, nil
+				return Undefined{Name: describeOwner(cur) + "." + seg}, nil
 			}
+			cur = next
 			continue
 		}
 		// A numeric segment indexes a list (Jinja's getitem), so
@@ -913,13 +1124,13 @@ func extractAttr(item, attr any) (any, error) {
 					idx += len(lst)
 				}
 				if idx < 0 || idx >= len(lst) {
-					return Undefined{Name: path}, nil
+					return Undefined{Name: describeOwner(cur) + "[" + seg + "]"}, nil
 				}
 				cur = lst[idx]
 				continue
 			}
 		}
-		return nil, fmt.Errorf("cannot access attribute %q on %s", seg, typeName(cur))
+		return Undefined{Name: describeOwner(cur) + "." + seg}, nil
 	}
 	return cur, nil
 }
@@ -927,13 +1138,23 @@ func extractAttr(item, attr any) (any, error) {
 func extractAll(items []any, attr any) ([]any, error) {
 	out := make([]any, len(items))
 	for i, item := range items {
-		v, err := extractAttr(item, attr)
+		v, err := extractStrict(item, attr)
 		if err != nil {
 			return nil, err
 		}
 		out[i] = v
 	}
 	return out, nil
+}
+
+// extractStrict is extractAttr for a filter that uses the value: an
+// undefined one raises.
+func extractStrict(item, attr any) (any, error) {
+	v, err := extractAttr(item, attr)
+	if u, ok := v.(Undefined); ok && err == nil {
+		return nil, u.useError(Position{})
+	}
+	return v, err
 }
 
 // filterMap implements map('filtername', args...) and map(attribute=...).
@@ -967,9 +1188,9 @@ func filterMap(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, err
 	if !ok {
 		return nil, fmt.Errorf("map requires a filter name")
 	}
-	fn, ok := ec.engine.Filters[name]
+	fn, ok := ec.engine.Filters[pluginShortName(name)]
 	if !ok {
-		return nil, fmt.Errorf("no filter named %q", name)
+		return nil, fmt.Errorf("No filter named %s.", pyStrRepr(name))
 	}
 	out := make([]any, len(items))
 	for i, item := range items {
@@ -1004,9 +1225,9 @@ func mkSelect(negate, byAttr bool) FilterFunc {
 			if !ok {
 				return nil, fmt.Errorf("test name must be a string")
 			}
-			test, ok = ec.engine.Tests[name]
+			test, ok = ec.engine.Tests[pluginShortName(name)]
 			if !ok {
-				return nil, fmt.Errorf("no test named %q", name)
+				return nil, fmt.Errorf("No test named %s.", pyStrRepr(name))
 			}
 			testArgs = args[1:]
 		}
@@ -1019,6 +1240,10 @@ func mkSelect(negate, byAttr bool) FilterFunc {
 					return nil, err
 				}
 			}
+			// An undefined subject raises unless the test takes one.
+			if u, und := subject.(Undefined); und && (test == nil || !undefinedTolerantTests[pluginShortName(toStr(args[0]))]) {
+				return nil, u.useError(ec.pos)
+			}
 			var keep bool
 			if test != nil {
 				keep, err = test(ec, subject, testArgs)
@@ -1026,11 +1251,7 @@ func mkSelect(negate, byAttr bool) FilterFunc {
 					return nil, err
 				}
 			} else {
-				if isUndefined(subject) {
-					keep = false
-				} else {
-					keep = truthy(subject)
-				}
+				keep = truthy(subject)
 			}
 			if keep != negate {
 				out = append(out, item)
@@ -1174,59 +1395,95 @@ func strftime(format string, ts int64) string {
 	return b.String()
 }
 
-// humanReadable formats a byte (or bit) count with base-1024 units and two
-// decimals, matching ansible's human_readable filter ("1.00 MB").
-func humanReadable(size float64, isbits bool) string {
-	units := []string{"Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"}
-	if isbits {
-		units = []string{"bit", "Kb", "Mb", "Gb", "Tb", "Pb", "Eb", "Zb", "Yb"}
-	}
-	n, i := size, 0
-	for n >= 1024 && i < len(units)-1 {
-		n /= 1024
-		i++
-	}
-	return fmt.Sprintf("%.2f %s", n, units[i])
+// sizeRanges is ansible's formatters.SIZE_RANGES, largest first.
+var sizeRanges = []struct {
+	suffix string
+	limit  *big.Int
+}{
+	{"Y", new(big.Int).Lsh(big.NewInt(1), 80)}, {"Z", new(big.Int).Lsh(big.NewInt(1), 70)},
+	{"E", big.NewInt(1 << 60)}, {"P", big.NewInt(1 << 50)}, {"T", big.NewInt(1 << 40)},
+	{"G", big.NewInt(1 << 30)}, {"M", big.NewInt(1 << 20)}, {"K", big.NewInt(1 << 10)}, {"B", big.NewInt(1)},
 }
 
-// humanToBytes parses a size like "1 MB", "2MB", "1.5 GB", or "1024" into a
-// byte count (base 1024), matching ansible's human_to_bytes filter.
-func humanToBytes(s string) (any, error) {
-	s = strings.TrimSpace(s)
-	i := 0
-	for i < len(s) && (s[i] == '.' || s[i] == '+' || s[i] == '-' || (s[i] >= '0' && s[i] <= '9')) {
-		i++
+// bytesToHuman is formatters.bytes_to_human: "%.2f <unit>" of size over
+// the largest range it reaches (or the given unit's).
+func bytesToHuman(size any, isbits bool, unit any) (string, error) {
+	base := "Bytes"
+	if isbits {
+		base = "bits"
 	}
-	num, err := strconv.ParseFloat(strings.TrimSpace(s[:i]), 64)
-	if err != nil {
-		return nil, fmt.Errorf("human_to_bytes: cannot parse number in %q", s)
-	}
-	exp := 0
-	if unit := strings.TrimSpace(s[i:]); unit != "" {
-		switch unit[0] {
-		case 'B', 'b':
-			exp = 0
-		case 'K', 'k':
-			exp = 1
-		case 'M', 'm':
-			exp = 2
-		case 'G', 'g':
-			exp = 3
-		case 'T', 't':
-			exp = 4
-		case 'P', 'p':
-			exp = 5
-		case 'E', 'e':
-			exp = 6
-		case 'Z', 'z':
-			exp = 7
-		case 'Y', 'y':
-			exp = 8
-		default:
-			return nil, fmt.Errorf("human_to_bytes: unknown unit %q", unit)
+	var suffix string
+	var limit *big.Int
+	for _, r := range sizeRanges {
+		suffix, limit = r.suffix, r.limit
+		if unit == nil {
+			c, err := compareOp(size, normInt(limit), ">=")
+			if err != nil {
+				return "", err
+			}
+			if c >= 0 {
+				break
+			}
+		} else if strings.ToUpper(toStr(unit)) == suffix[:1] {
+			break
 		}
 	}
-	return int64(num * math.Pow(1024, float64(exp))), nil
+	if limit.Cmp(big.NewInt(1)) != 0 {
+		suffix += base[:1]
+	} else {
+		suffix = base
+	}
+	q, err := numArith(tokDiv, size, normInt(limit))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%.2f %s", q, suffix), nil
+}
+
+var humanBytesRe = regexp.MustCompile(`^([0-9]*\.?[0-9]+)(?:\s*([A-Za-z]+))?\s*$`)
+
+// humanToBytes is formatters.human_to_bytes.
+func humanToBytes(number any, defaultUnit any, isbits bool) (any, error) {
+	s := toStr(number)
+	m := humanBytesRe.FindStringSubmatch(s)
+	if m == nil {
+		return nil, fmt.Errorf("human_to_bytes() can't interpret following string: %s", s)
+	}
+	num, _ := strconv.ParseFloat(m[1], 64)
+	unit := m[2]
+	if unit == "" && defaultUnit != nil {
+		unit = toStr(defaultUnit)
+	}
+	if unit == "" {
+		v, _ := floatToInt(math.RoundToEven(num))
+		return v, nil
+	}
+	rangeKey := strings.ToUpper(unit[:1])
+	var limit *big.Int
+	for _, r := range sizeRanges {
+		if r.suffix == rangeKey {
+			limit = r.limit
+		}
+	}
+	if limit == nil {
+		return nil, fmt.Errorf("human_to_bytes() failed to convert %s (unit = %s). The suffix must be one of Y, Z, E, P, T, G, M, K, B", s, unit)
+	}
+	unitClass, unitClassName := "B", "byte"
+	if isbits {
+		unitClass, unitClassName = "b", "bit"
+	}
+	if len(unit) > 1 {
+		expect := fmt.Sprintf("expect %s%s or %s", rangeKey, unitClass, rangeKey)
+		if rangeKey == "B" {
+			expect = fmt.Sprintf("expect %s or %s", unitClass, unitClassName)
+		}
+		if !strings.Contains(strings.ToLower(unit), unitClassName) && unit[1:2] != unitClass {
+			return nil, fmt.Errorf("human_to_bytes() failed to convert %s. Value is not a valid string (%s)", s, expect)
+		}
+	}
+	f, _ := new(big.Float).SetInt(limit).Float64()
+	v, _ := floatToInt(math.RoundToEven(num * f))
+	return v, nil
 }
 
 // asOMap returns an ordered-map copy of a dict value: *OMap/Mapping keep their
@@ -1453,10 +1710,24 @@ func pathFilter(fn func(string) string) FilterFunc {
 	return func(ec *EvalCtx, in any, args []any, kwargs map[string]any) (any, error) {
 		s, ok := asString(in)
 		if !ok {
-			return nil, fmt.Errorf("expected a string path, got %s", typeName(in))
+			return nil, fmt.Errorf("expected str, bytes or os.PathLike object, not %s", pyClassName(in, ec.fromVar(-1)))
 		}
 		return fn(s), nil
 	}
+}
+
+// pyBasename is os.path.basename.
+func pyBasename(p string) string {
+	return p[strings.LastIndexByte(p, '/')+1:]
+}
+
+// pyDirname is os.path.dirname.
+func pyDirname(p string) string {
+	head := p[:strings.LastIndexByte(p, '/')+1]
+	if head != "" && strings.Trim(head, "/") != "" {
+		head = strings.TrimRight(head, "/")
+	}
+	return head
 }
 
 // pyJSON serializes a value the way Python's json.dumps does — the format
@@ -1513,6 +1784,8 @@ func (e *pyJSONEncoder) write(v any, depth int) {
 		b.WriteString(pyJSONQuote(t, e.ensureASCII))
 	case yaml.UnsafeString:
 		b.WriteString(pyJSONQuote(string(t), e.ensureASCII))
+	case *big.Int:
+		b.WriteString(t.String())
 	case int64:
 		b.WriteString(strconv.FormatInt(t, 10))
 	case int:

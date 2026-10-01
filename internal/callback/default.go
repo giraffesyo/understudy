@@ -239,11 +239,10 @@ func (d *Default) LoopResult(host string, task *playbook.Task, res *agentproto.R
 	defer d.mu.Unlock()
 	switch {
 	case res.Failed:
-		if task.Module == "debug" {
-			// _clean_results keeps only a debug result's msg, dropping
-			// the loop's results: the summary prints as a task failure.
-			d.display(cRed, fmt.Sprintf("fatal: [%s]: FAILED! => %s", host,
-				template.PyJSON(map[string]any{"msg": res.Msg}, d.indent(false), true, false)))
+		if isDebug(task.Module) && res.Msg != "" {
+			// _clean_results keeps only debug's msg, so the loop's
+			// results are gone and the summary prints as a failure.
+			d.display(cRed, fmt.Sprintf("fatal: [%s]: FAILED! => %s", host, d.dump(task, res)))
 		}
 		if ignored {
 			d.display(cCyan, "...ignoring")
@@ -496,10 +495,22 @@ func (d *Default) taskError(task *playbook.Task, res *agentproto.Result) {
 // source context, then "<<< caused by >>>" and the cause with its help.
 func (d *Default) taskErrorChain(task *playbook.Task, ec *agentproto.ErrorChain) {
 	var b strings.Builder
+	if ec.Outer == "" {
+		// An error raised on its own (no "Task failed" around it), at
+		// its origin.
+		b.WriteString("[ERROR]: " + ec.Inner + "\n")
+		if ec.InnerFile != "" && ec.InnerLine > 0 {
+			b.WriteString(d.origin(ec.InnerFile, ec.InnerLine, ec.InnerCol))
+		}
+		d.errorBlock(b.String())
+		return
+	}
 	brief := ec.Outer
-	for _, cause := range []string{ec.Mid, ec.Inner} {
-		if cause != "" && !strings.HasSuffix(brief, cause) {
-			brief = strings.TrimRight(brief, ". ") + ": " + cause
+	for c := ec; c != nil; c = c.Root {
+		for _, cause := range []string{c.Mid, c.Inner} {
+			if cause != "" && !strings.HasSuffix(brief, cause) {
+				brief = strings.TrimRight(brief, ". ") + ": " + cause
+			}
 		}
 	}
 	b.WriteString("[ERROR]: " + brief + "\n\n" + ec.Outer + "\n")
@@ -517,27 +528,48 @@ func (d *Default) taskErrorChain(task *playbook.Task, ec *agentproto.ErrorChain)
 	if ec.Mid != "" {
 		b.WriteString("\n<<< caused by >>>\n\n" + ec.Mid + "\n")
 		if ec.MidFile != "" && ec.MidLine > 0 {
-			fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n", ec.MidFile, ec.MidLine, ec.MidCol)
-			b.WriteString(strings.TrimRight(d.excerpt(ec.MidFile, ec.MidLine, ec.MidCol), "\n") + "\n")
+			b.WriteString(strings.TrimRight(d.origin(ec.MidFile, ec.MidLine, ec.MidCol), "\n") + "\n")
 		}
 	}
-	b.WriteString("\n<<< caused by >>>\n\n")
-	switch {
-	case ec.InnerFile != "" && ec.InnerLine > 0:
-		fmt.Fprintf(&b, "%s\nOrigin: %s:%d:%d\n\n", ec.Inner, ec.InnerFile, ec.InnerLine, ec.InnerCol)
-		b.WriteString(d.excerpt(ec.InnerFile, ec.InnerLine, ec.InnerCol))
-		if ec.Help != "" {
-			b.WriteString("\n" + ec.Help)
+	for c := ec; c != nil; c = c.Root {
+		b.WriteString("\n<<< caused by >>>\n\n")
+		switch {
+		case c.InnerFile != "" && c.InnerPathOnly:
+			b.WriteString(c.Inner + "\nOrigin: " + c.InnerFile + "\n")
+		case c.InnerFile != "" && c.InnerLine > 0:
+			b.WriteString(c.Inner + "\n" + d.origin(c.InnerFile, c.InnerLine, c.InnerCol))
+			if c.Help != "" {
+				b.WriteString("\n" + c.Help)
+			}
+		case c.Help != "" && !strings.Contains(c.Inner, "\n") && !strings.Contains(c.Help, "\n"):
+			b.WriteString(c.Inner + " " + c.Help)
+		case c.Help != "":
+			b.WriteString(c.Inner + "\n\n" + c.Help)
+		default:
+			b.WriteString(c.Inner)
 		}
-	case ec.Help != "" && !strings.Contains(ec.Inner, "\n") && !strings.Contains(ec.Help, "\n"):
-		b.WriteString(ec.Inner + " " + ec.Help)
-	case ec.Help != "":
-		b.WriteString(ec.Inner + "\n\n" + ec.Help)
-	default:
-		b.WriteString(ec.Inner)
+		if c.Root != nil {
+			s := strings.TrimRight(b.String(), "\n")
+			b.Reset()
+			b.WriteString(s + "\n")
+		}
 	}
+	d.errorBlock(b.String())
+}
+
+// origin is an error's "Origin:" line and annotated source context; a
+// line-only origin (template.NoColumn) underlines the whole line.
+func (d *Default) origin(file string, line, col int) string {
+	if col == template.NoColumn {
+		return fmt.Sprintf("Origin: %s:%d\n\n", file, line) + d.excerpt(file, line, col)
+	}
+	return fmt.Sprintf("Origin: %s:%d:%d\n\n", file, line, col) + d.excerpt(file, line, col)
+}
+
+// errorBlock prints an error block once, as Display dedupes.
+func (d *Default) errorBlock(s string) {
 	// Display.display turns Windows newlines into Unix ones.
-	block := strings.ReplaceAll(b.String(), "\r\n", "\n")
+	block := strings.ReplaceAll(s, "\r\n", "\n")
 	if d.errors == nil {
 		d.errors = map[string]bool{}
 	}

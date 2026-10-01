@@ -75,7 +75,7 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 		}
 		items, isLoop, err := r.resolveLoop(task, base)
 		if err != nil {
-			r.recordFailure(host, task, agentproto.Fail("error templating loop: %v", err))
+			r.recordFailure(host, task, loopFailure(err))
 			continue
 		}
 		var lc *loopControl
@@ -101,9 +101,9 @@ func (r *Runner) runDynamicInclude(ctx context.Context, play *playbook.Play, tas
 				loopVars = lc.vars(i)
 				ictx = base.WithOverlay(loopVars)
 			}
-			skip, err := whenSkip(ictx, task.When, task.WhenPos)
-			if err != nil {
-				r.record(host, task, whenFailure(err), nil)
+			skip, cerr := whenSkip(ictx, task.When, task.WhenPos)
+			if cerr != nil {
+				r.record(host, task, cerr.result(), nil)
 				continue
 			}
 			if skip != nil {

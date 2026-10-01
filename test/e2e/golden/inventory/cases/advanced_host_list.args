@@ -1,0 +1,3 @@
+-i
+web[1:3],db[a:c]:2222,bad[x:1],plain
+@INV@/playbook.yml

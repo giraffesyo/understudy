@@ -112,16 +112,24 @@ func runAssert(_ context.Context, actx *Context, args map[string]any, _ string) 
 			ok = t
 		case string:
 			var err error
-			vctx := actx.Vars
+			var pos template.Position
 			if !isList {
-				vctx = vctx.At(actx.ArgPos["that"])
+				pos = actx.ArgPos["that"]
 			} else if file, line, col, ok := yaml.Origin(t); ok {
 				// Each listed conditional reports from its own entry.
-				vctx = vctx.At(template.Position{File: file, Line: line, Col: col})
+				pos = template.Position{File: file, Line: line, Col: col}
+			}
+			vctx := actx.Vars
+			if pos.File != "" {
+				vctx = vctx.At(pos)
 			}
 			ok, err = vctx.EvalWhen([]string{t})
 			if err != nil {
-				return agentproto.Fail("assert: error evaluating %q: %v", t, err)
+				cause := template.ConditionalCause(err)
+				res := agentproto.Fail("Task failed: %s", cause)
+				res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: cause,
+					InnerFile: pos.File, InnerLine: pos.Line, InnerCol: pos.Col}
+				return res
 			}
 		default:
 			res := agentproto.Fail("Task failed: Conditional expressions must be strings.")

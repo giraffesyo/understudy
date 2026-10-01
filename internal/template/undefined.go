@@ -48,6 +48,9 @@ type Omit struct{}
 type UndefinedError struct {
 	Pos  Position
 	Name string
+	// Hint, when set, is the undefined value's own message ("No first
+	// item, sequence was empty.").
+	Hint string
 }
 
 func (e *UndefinedError) Error() string {

@@ -404,8 +404,11 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		BaseDir:         baseDir,
 		RolesPath:       cfg.RolesPath,
 		Inventory:       p.inventory,
-		Tags:            splitCSV(p.tags),
-		SkipTags:        splitCSV(p.skipTags),
+		RefreshInventory: func() {
+			loadInventory(p, baseDir)
+		},
+		Tags:     splitCSV(p.tags),
+		SkipTags: splitCSV(p.skipTags),
 
 		NoColor:               callback.NoColor(),
 		NoDeprecationWarnings: !cfg.DeprecationWarnings,
@@ -617,6 +620,12 @@ func loadInventory(p *parsedArgs, playbookDir string) (*inventory.Inventory, err
 		AnyUnparsedIsFailed: cfg.InventoryAnyUnparsedIsFailed,
 		ExtraVarsErr:        p.extraVarsErr,
 		Warn:                warnOnce,
+		Verbose: func(level int, msg string) {
+			if p.verbosity >= level {
+				displayVerbose(msg)
+			}
+		},
+		ExtraVars: p.extraVars,
 	})
 	if err != nil {
 		return nil, err

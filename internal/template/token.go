@@ -15,6 +15,11 @@ type Position struct {
 	// still holds are reported for the container, whose origin is
 	// unknown, rather than at File:Line:Col.
 	InContainer bool
+
+	// WholeFile marks a template that is a file's entire content (the
+	// template module, the template lookup): its errors originate in the
+	// file, at the line of a syntax error, else naming only the file.
+	WholeFile bool
 }
 
 // ContainerOrigin is the origin a deprecated value found while finishing

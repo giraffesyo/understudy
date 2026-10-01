@@ -22,7 +22,9 @@ import (
 // as the only -i source of golden/inventory/playbook.yml. Each
 // golden/inventory/cases/<name>.args holds a full argument list, one per
 // line, with @INV@ standing for golden/inventory; <name>.env adds
-// environment variables (KEY=VALUE lines).
+// environment variables (KEY=VALUE lines). A case run with -v/-vvv also
+// compares which plugins each source was offered to and why they declined
+// it (the version banner masked, as in TestGoldenOutputVV).
 func TestGoldenInventory(t *testing.T) {
 	ansible := ansiblePlaybookBin(t)
 	understudy := understudyBin(t)
@@ -75,7 +77,7 @@ func TestGoldenInventory(t *testing.T) {
 				var stdout, stderr bytes.Buffer
 				cmd.Stdout, cmd.Stderr = &stdout, &stderr
 				cmd.Run()
-				return stdout.String(), stderr.String(), cmd.ProcessState.ExitCode()
+				return versionBannerRe.ReplaceAllString(stdout.String(), "VERSION\n"), stderr.String(), cmd.ProcessState.ExitCode()
 			}
 			aOut, aErr, aRC := run(ansible)
 			uOut, uErr, uRC := run(understudy, "playbook")

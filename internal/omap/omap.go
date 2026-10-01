@@ -6,11 +6,8 @@ package omap
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-	"io"
 	"maps"
 	"sort"
-	"strings"
 )
 
 // OMap is an insertion-ordered string-keyed map. YAML mappings decode to
@@ -155,72 +152,4 @@ func PlainMap(v any) (map[string]any, bool) {
 		return t.AsMap(), true
 	}
 	return nil, false
-}
-
-// UnmarshalJSON decodes JSON as Python's json.loads does: objects become
-// *OMap in document order (a repeated key keeps its first position and
-// last value), integer literals int64 and other numbers float64.
-func UnmarshalJSON(data []byte) (any, error) {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	v, err := decodeValue(dec)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := dec.Token(); err != io.EOF {
-		return nil, fmt.Errorf("invalid character after top-level value")
-	}
-	return v, nil
-}
-
-func decodeValue(dec *json.Decoder) (any, error) {
-	tok, err := dec.Token()
-	if err != nil {
-		return nil, err
-	}
-	switch tok {
-	case json.Delim('{'):
-		m := NewOMap()
-		for dec.More() {
-			key, err := dec.Token()
-			if err != nil {
-				return nil, err
-			}
-			v, err := decodeValue(dec)
-			if err != nil {
-				return nil, err
-			}
-			m.Set(key.(string), v)
-		}
-		_, err := dec.Token() // '}'
-		return m, err
-	case json.Delim('['):
-		out := []any{}
-		for dec.More() {
-			v, err := decodeValue(dec)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, v)
-		}
-		_, err := dec.Token() // ']'
-		return out, err
-	}
-	if n, ok := tok.(json.Number); ok {
-		return pyNumber(n), nil
-	}
-	return tok, nil
-}
-
-// pyNumber is a JSON number as Python reads it: an integer literal is an
-// int (float64 beyond int64), anything with a fraction or exponent a
-// float.
-func pyNumber(n json.Number) any {
-	if !strings.ContainsAny(string(n), ".eE") {
-		if i, err := n.Int64(); err == nil {
-			return i
-		}
-	}
-	f, _ := n.Float64()
-	return f
 }

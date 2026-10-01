@@ -1,0 +1,24 @@
+# generator: a host per combination of the layers, with templated
+# parent groups and group vars.
+plugin: generator
+hosts:
+  name: "{{ operation }}-{{ application }}-{{ env }}"
+  parents:
+    - name: "{{ operation }}_{{ application }}"
+      vars:
+        app: "{{ application }}"
+        fixed: 7
+    - name: "{{ env }}"
+      vars:
+        env_name: "{{ env | upper }}"
+    - name: runners
+layers:
+  operation:
+    - build
+    - launch
+  env:
+    - dev
+    - prod
+  application:
+    - web
+    - api

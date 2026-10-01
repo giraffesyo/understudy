@@ -292,13 +292,13 @@ func (r *Runner) breakWhen(task *playbook.Task, itemCtx *vars.Context, res *agen
 		pos := task.BreakWhenPos[cond]
 		ok, err := ctx.At(template.Position{File: pos.File, Line: pos.Line, Col: pos.Col}).EvalWhen([]string{cond})
 		if err != nil {
-			msg := conditionalMessage(err)
-			setExtra(res, "break_when_result", msg)
+			ce := &conditionalError{keyword: "break_when", pos: template.Position{File: pos.File, Line: pos.Line, Col: pos.Col}, err: err}
+			setExtra(res, "break_when_result", template.ConditionalCause(err))
 			if res.Failed {
 				setExtra(res, "break_when_suppressed_exception", "(traceback unavailable)")
 			}
 			res.Failed = true
-			res.ErrorText = "A 'break_when' expression failed: " + msg
+			res.ErrorText = ce.message()
 			res.ErrorFile, res.ErrorLine, res.ErrorCol = pos.File, pos.Line, pos.Col
 			setExtra(res, "exception", "(traceback unavailable)")
 			return true

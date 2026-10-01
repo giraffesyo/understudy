@@ -1,0 +1,5 @@
+plugin: constructed
+strict: true
+compose:
+  ok: x + 1
+  missing: nope.attr

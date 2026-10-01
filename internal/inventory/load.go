@@ -8,8 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -48,6 +51,12 @@ type Options struct {
 	// (without the "[WARNING]: " prefix; ending in a newline, two after a
 	// multi-line message).
 	Warn func(string)
+	// Verbose receives the messages ansible-core's Display shows at a
+	// verbosity (-v is 1): the plugins tried on each source, and why.
+	Verbose func(level int, msg string)
+	// ExtraVars are the run's extra vars (-e), which the constructed and
+	// generator plugins can template with (use_extra_vars).
+	ExtraVars map[string]any
 }
 
 // DefaultEnabled is ansible-core's INVENTORY_ENABLED default.
@@ -162,6 +171,9 @@ type loader struct {
 	inv     *Inventory
 	o       Options
 	ignored *regexp.Regexp
+	// processed are the sources parsed so far (InventoryData's
+	// processed_sources).
+	processed []string
 }
 
 type pluginFailure struct {
@@ -197,15 +209,15 @@ func (l *loader) parseSource(src string) (bool, error) {
 
 	l.inv.currentSource = src
 	defer func() { l.inv.currentSource = "" }()
+	enabled, err := l.fetchPlugins()
+	if err != nil {
+		return false, err
+	}
 	var failures []pluginFailure
 	parsed := false
-	for _, name := range l.o.Enabled {
-		p, ok := plugins[name]
-		if !ok {
-			l.inv.warning("Failed to load inventory plugin, skipping " + name)
-			continue
-		}
-		if !p.verify(src) {
+	for _, p := range enabled {
+		if !p.plugin.verify(l, src) {
+			l.verbose(3, fmt.Sprintf("%s declined parsing %s as it did not pass its verify_file() method", p.loadName, src))
 			continue
 		}
 		var err error
@@ -213,19 +225,22 @@ func (l *loader) parseSource(src string) (bool, error) {
 			c := *ce // each failure gets its own origin
 			err = &c
 		} else if err = l.o.ExtraVarsErr; err == nil {
-			err = p.parse(l.inv, src)
+			err = p.plugin.parse(l, src, p.name, p.loadName)
 		}
 		if err == nil {
 			parsed = true
+			l.verbose(3, fmt.Sprintf("Parsed %s inventory source with %s plugin", src, p.loadName))
 			break
 		}
 		ce := asChain(err)
 		if ce.ctx == "" {
-			ce.ctx = fmt.Sprintf("Origin: <inventory plugin %s with source %s>", pyQuote(name), pyQuote(src))
+			ce.ctx = fmt.Sprintf("Origin: <inventory plugin %s with source %s>", pyQuote(p.loadName), pyQuote(src))
 		}
-		failures = append(failures, pluginFailure{name, ce})
+		failures = append(failures, pluginFailure{p.loadName, ce})
 	}
-	if !parsed && (src != DefaultSource || exists(src)) {
+	if parsed {
+		l.processed = append(l.processed, src)
+	} else if src != DefaultSource || exists(src) {
 		for _, f := range failures {
 			l.inv.warnEvent(&chainError{msg: fmt.Sprintf("Failed to parse inventory with %s plugin.", pyQuote(f.plugin)), cause: f.err})
 		}
@@ -237,20 +252,70 @@ func (l *loader) parseSource(src string) (bool, error) {
 	return parsed, nil
 }
 
+// loadedPlugin is an inventory plugin as the plugin loader returns it:
+// the name it was requested by and its _load_name (which messages show).
+type loadedPlugin struct {
+	plugin         *invPlugin
+	name, loadName string
+}
+
+// loadPlugin is inventory_loader.get for ansible-core's own plugins: a
+// short name, its ansible.builtin FQCN (loaded as the collection's
+// Python module) or ansible.legacy name.
+func loadPlugin(name string) (loadedPlugin, bool) {
+	short, loadName := name, name
+	switch {
+	case strings.HasPrefix(name, "ansible.builtin."):
+		short = strings.TrimPrefix(name, "ansible.builtin.")
+		loadName = "ansible_collections.ansible.builtin.plugins.inventory." + short
+	case strings.HasPrefix(name, "ansible.legacy."):
+		short = strings.TrimPrefix(name, "ansible.legacy.")
+		loadName = short
+	}
+	p, ok := plugins[short]
+	if !ok || strings.Contains(short, ".") {
+		return loadedPlugin{}, false
+	}
+	return loadedPlugin{plugin: p, name: name, loadName: loadName}, true
+}
+
+// fetchPlugins is InventoryManager._fetch_inventory_plugins.
+func (l *loader) fetchPlugins() ([]loadedPlugin, error) {
+	var out []loadedPlugin
+	for _, name := range l.o.Enabled {
+		p, ok := loadPlugin(name)
+		if !ok {
+			l.inv.warning("Failed to load inventory plugin, skipping " + name)
+			continue
+		}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("No inventory plugins available to generate inventory, make sure you have at least one enabled.")
+	}
+	return out, nil
+}
+
+// verbose is Display.verbose at a verbosity.
+func (l *loader) verbose(level int, msg string) {
+	if l.o.Verbose != nil {
+		l.o.Verbose(level, msg)
+	}
+}
+
 func exists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
 }
 
 // readable is BaseInventoryPlugin.verify_file: the path exists and can
-// be read.
-func readable(p string) bool {
-	f, err := os.Open(p)
-	if err != nil {
-		return false
+// be read (said at -vvv when not).
+func (l *loader) readable(p string) bool {
+	if exists(p) && unix.Access(p, unix.R_OK) == nil {
+		return true
 	}
-	f.Close()
-	return true
+	l.verbose(3, "Skipping due to inventory source not existing or not being readable by the current user")
+	return false
 }
 
 // pySplitExt is Python's os.path.splitext extension (leading dots of the
@@ -265,71 +330,86 @@ func pySplitExt(p string) string {
 	return trimmed[i:]
 }
 
+// yamlExtensions is C.YAML_FILENAME_EXTENSIONS.
+var yamlExtensions = []string{".yml", ".yaml", ".json"}
+
 type invPlugin struct {
-	verify func(src string) bool
-	parse  func(inv *Inventory, src string) error
+	// verify is the plugin's verify_file.
+	verify func(l *loader, src string) bool
+	// parse parses src; name is what the plugin was loaded by (a plugin
+	// config must name it so) and loadName its _load_name.
+	parse func(l *loader, src, name, loadName string) error
 }
 
-var plugins = map[string]invPlugin{
-	"host_list": {
-		verify: func(src string) bool { return !exists(src) && strings.Contains(src, ",") },
-		parse:  parseHostList,
-	},
-	"script": {
-		verify: func(src string) bool {
-			info, err := os.Stat(src)
-			return err == nil && readable(src) && info.Mode()&0o111 != 0 && !info.IsDir()
-		},
-		parse: parseScript,
-	},
-	"auto": {
-		verify: func(src string) bool {
-			return (strings.HasSuffix(src, ".yml") || strings.HasSuffix(src, ".yaml")) && readable(src)
-		},
-		// parse is set in init (it dispatches through plugins).
-	},
-	"yaml": {
-		verify: func(src string) bool {
-			switch pySplitExt(src) {
-			case "", ".yaml", ".yml", ".json":
-				return readable(src)
-			}
-			return false
-		},
-		parse: func(inv *Inventory, src string) error {
-			data, err := os.ReadFile(src)
-			if err != nil {
-				return err
-			}
-			return loadYAMLInventory(inv, data, src)
-		},
-	},
-	"ini": {
-		verify: func(src string) bool { return readable(src) && pySplitExt(src) != ".toml" },
-		parse: func(inv *Inventory, src string) error {
-			data, err := os.ReadFile(src)
-			if err != nil {
-				return err
-			}
-			return LoadINI(inv, data, src)
-		},
-	},
-	"toml": {
-		verify: func(src string) bool { return readable(src) && pySplitExt(src) == ".toml" },
-		parse: func(inv *Inventory, src string) error {
-			return errors.New("TOML inventory sources are not supported by understudy")
-		},
-	},
+// isHostList is host_list's and advanced_host_list's verify_file: not a
+// path, with a comma.
+func isHostList(_ *loader, src string) bool { return !exists(src) && strings.Contains(src, ",") }
+
+// configVerify is the verify_file of the plugins configured by a YAML
+// file (constructed, generator).
+func configVerify(l *loader, src string) bool {
+	if !l.readable(src) {
+		return false
+	}
+	ext := pySplitExt(src)
+	return ext == "" || ext == ".config" || slices.Contains(yamlExtensions, ext)
 }
+
+var plugins map[string]*invPlugin
 
 func init() {
-	auto := plugins["auto"]
-	auto.parse = parseAuto
-	plugins["auto"] = auto
+	plugins = map[string]*invPlugin{
+		"host_list":          {verify: isHostList, parse: parseHostList},
+		"advanced_host_list": {verify: isHostList, parse: parseAdvancedHostList},
+		"script": {
+			verify: func(l *loader, src string) bool {
+				return l.readable(src) && unix.Access(src, unix.X_OK) == nil
+			},
+			parse: func(l *loader, src, _, _ string) error { return parseScript(l.inv, src) },
+		},
+		"auto": {
+			verify: func(l *loader, src string) bool {
+				return (strings.HasSuffix(src, ".yml") || strings.HasSuffix(src, ".yaml")) && l.readable(src)
+			},
+			parse: parseAuto,
+		},
+		"yaml": {
+			verify: func(l *loader, src string) bool {
+				if !l.readable(src) {
+					return false
+				}
+				ext := pySplitExt(src)
+				return ext == "" || slices.Contains(yamlExtensions, ext)
+			},
+			parse: func(l *loader, src, _, _ string) error {
+				data, err := os.ReadFile(src)
+				if err != nil {
+					return err
+				}
+				return loadYAMLInventory(l.inv, data, src)
+			},
+		},
+		"ini": {
+			verify: func(l *loader, src string) bool { return l.readable(src) && pySplitExt(src) != ".toml" },
+			parse: func(l *loader, src, _, _ string) error {
+				data, err := os.ReadFile(src)
+				if err != nil {
+					return err
+				}
+				return LoadINI(l.inv, data, src)
+			},
+		},
+		"toml": {
+			verify: func(l *loader, src string) bool { return l.readable(src) && pySplitExt(src) == ".toml" },
+			parse:  parseTOMLInventory,
+		},
+		"constructed": {verify: configVerify, parse: parseConstructed},
+		"generator":   {verify: configVerify, parse: parseGenerator},
+	}
 }
 
 // parseHostList is the host_list plugin: "h1,h2:2222,".
-func parseHostList(inv *Inventory, src string) error {
+func parseHostList(l *loader, src, _, _ string) error {
 	for _, h := range strings.Split(src, ",") {
 		h = strings.TrimSpace(h)
 		if h == "" {
@@ -337,23 +417,45 @@ func parseHostList(inv *Inventory, src string) error {
 		}
 		host, port, err := parseAddress(h, false)
 		if err != nil {
+			l.verbose(3, "Unable to parse address from hostname, leaving unchanged: "+err.Error())
 			host, port = h, -1
 		}
-		if _, ok := inv.Hosts[host]; !ok {
-			inv.addHost(host, inv.Groups["ungrouped"], port)
+		if _, ok := l.inv.Hosts[host]; !ok {
+			l.inv.addHost(host, l.inv.Groups["ungrouped"], port)
 		}
 	}
 	return nil
 }
 
-// builtinPlugins are ansible-core's own inventory plugins; the auto
-// plugin hands a config naming one of these to it.
-var builtinPlugins = map[string]bool{"advanced_host_list": true, "auto": true, "constructed": true,
-	"generator": true, "host_list": true, "ini": true, "script": true, "toml": true, "yaml": true}
+// parseAdvancedHostList is the advanced_host_list plugin: host_list
+// with host ranges ("web[1:3],db").
+func parseAdvancedHostList(l *loader, src, _, _ string) error {
+	for _, h := range strings.Split(src, ",") {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			continue
+		}
+		names, port, err := expandHostPattern(h)
+		if err != nil {
+			if !strings.HasPrefix(err.Error(), "host range must") {
+				// A Python error (not an AnsibleError) ends the parse.
+				return fmt.Errorf("Invalid data from string, could not parse: %s", err)
+			}
+			l.verbose(3, "Unable to parse address from hostname, leaving unchanged: "+err.Error())
+			names, port = []string{h}, -1
+		}
+		for _, name := range names {
+			if _, ok := l.inv.Hosts[name]; !ok {
+				l.inv.addHost(name, l.inv.Groups["ungrouped"], port)
+			}
+		}
+	}
+	return nil
+}
 
 // parseAuto is the auto plugin: a YAML file naming the inventory plugin
 // to run ("plugin: ...").
-func parseAuto(inv *Inventory, src string) error {
+func parseAuto(l *loader, src, _, _ string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
@@ -362,28 +464,30 @@ func parseAuto(inv *Inventory, src string) error {
 	if err != nil {
 		return err
 	}
-	name := ""
+	var name any
 	if m, ok := asMapping(v); ok {
-		if s, ok := m["plugin"].(string); ok {
-			name = s
-		} else if m["plugin"] != nil && m["plugin"] != false {
-			name = fmt.Sprint(m["plugin"])
-		}
+		name = m["plugin"]
 	}
-	if name == "" {
+	if !truthy(name) {
 		return fmt.Errorf("no root 'plugin' key found, '%s' is not a valid YAML inventory plugin config file", src)
 	}
-	short := strings.TrimPrefix(strings.TrimPrefix(name, "ansible.builtin."), "ansible.legacy.")
-	if p, ok := plugins[short]; ok && short != "auto" {
-		if !p.verify(src) {
-			return fmt.Errorf("inventory source '%s' could not be verified by inventory plugin '%s'", src, name)
-		}
-		return p.parse(inv, src)
+	s, isStr := name.(string)
+	if !isStr {
+		return fmt.Errorf("unsupported type %s", typeRepr(name))
 	}
-	if builtinPlugins[short] {
-		return fmt.Errorf("inventory config '%s' specifies the '%s' plugin, which understudy does not implement", src, name)
+	p, ok := loadPlugin(s)
+	if !ok {
+		return fmt.Errorf("inventory config '%s' specifies unknown plugin '%s'", src, s)
 	}
-	return fmt.Errorf("inventory config '%s' specifies unknown plugin '%s'", src, name)
+	if p.plugin == plugins["auto"] {
+		// auto runs itself until Python's recursion limit.
+		return &chainError{msg: "YAML parsing failed: maximum recursion depth exceeded", ctx: "Origin: " + src}
+	}
+	if !p.plugin.verify(l, src) {
+		return fmt.Errorf("inventory source '%s' could not be verified by inventory plugin '%s'", src, s)
+	}
+	l.verbose(1, fmt.Sprintf("Using inventory plugin '%s' to process inventory source '%s'", p.loadName, src))
+	return p.plugin.parse(l, src, p.name, p.loadName)
 }
 
 // parseScript is the script plugin: an executable printing the inventory

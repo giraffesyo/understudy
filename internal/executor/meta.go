@@ -101,6 +101,11 @@ func (r *Runner) runMeta(ctx context.Context, play *playbook.Play, task *playboo
 		r.Callback.HostResult(active[0], task, metaSkip(action, active[0]), false, nil)
 		return nil
 	}
+	if action == "refresh_inventory" && r.Opts.RefreshInventory != nil {
+		// The sources are re-parsed for what parsing shows; inventories
+		// understudy loads are static, so the hosts and groups stay.
+		r.Opts.RefreshInventory()
+	}
 	r.displayVerbose(2, "META: "+metaMsg(action, active[0]))
 	switch action {
 	case "end_play":
@@ -125,8 +130,6 @@ func (r *Runner) runMeta(ctx context.Context, play *playbook.Play, task *playboo
 		for _, h := range active {
 			r.Store.ClearFacts(h)
 		}
-	case "refresh_inventory":
-		// Inventories are static sources; there is nothing to re-read.
 	}
 	return nil
 }
