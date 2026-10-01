@@ -298,8 +298,17 @@ func (r *Runner) breakWhen(task *playbook.Task, itemCtx *vars.Context, res *agen
 				setExtra(res, "break_when_suppressed_exception", "(traceback unavailable)")
 			}
 			res.Failed = true
-			res.ErrorText = ce.message()
-			res.ErrorFile, res.ErrorLine, res.ErrorCol = pos.File, pos.Line, pos.Col
+			if be, broken := template.IsBrokenConditional(err); broken {
+				// The broken conditional shows as its own event.
+				res.ErrorChain = &agentproto.ErrorChain{Outer: "A 'break_when' expression failed.",
+					OuterFile: pos.File, OuterLine: pos.Line, OuterCol: pos.Col}
+				root := brokenConditionalChain(be)
+				res.ErrorChain.Inner, res.ErrorChain.Help = root.Inner, root.Help
+				res.ErrorChain.InnerFile, res.ErrorChain.InnerLine, res.ErrorChain.InnerCol = root.InnerFile, root.InnerLine, root.InnerCol
+			} else {
+				res.ErrorText = ce.message()
+				res.ErrorFile, res.ErrorLine, res.ErrorCol = pos.File, pos.Line, pos.Col
+			}
 			setExtra(res, "exception", "(traceback unavailable)")
 			return true
 		}

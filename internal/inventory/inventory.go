@@ -456,17 +456,24 @@ func (inv *Inventory) EffectiveVars(h *Host) map[string]any {
 	inv.mu.Lock()
 	defer inv.mu.Unlock()
 	out := map[string]any{}
+	origins := map[string]yaml.ChildPos{}
 	for _, g := range inv.orderedGroups(h) {
 		for k, v := range g.Vars {
 			out[k] = v
+			yaml.MergeChildOrigin(origins, k, g.Vars)
 		}
 	}
 	for k, v := range h.Vars {
 		out[k] = v
+		yaml.MergeChildOrigin(origins, k, h.Vars)
 	}
 	for k, v := range h.fileVars {
 		out[k] = v
+		yaml.MergeChildOrigin(origins, k, h.fileVars)
 	}
+	// Where each value came from rides along (a broken conditional
+	// names it).
+	yaml.SetChildOrigins(out, origins)
 	return out
 }
 

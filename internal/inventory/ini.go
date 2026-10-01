@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/giraffesyo/understudy/internal/template"
+	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
 // LoadINI parses INI-format inventory text into inv, as ansible-core's
@@ -106,6 +107,7 @@ func parseINI(inv *Inventory, data []byte) error {
 			for _, name := range hosts {
 				h := inv.addHost(name, inv.Groups[groupName], port)
 				vars.apply(h.Vars)
+				setINIOrigins(h.Vars, vars.keys, source, lineNo)
 				for _, t := range tokens[1:] {
 					if k, _, _ := strings.Cut(t, "="); template.IsReservedName(k) {
 						h.VarOrigins = append(h.VarOrigins, template.KeyOrigin{Name: k, File: source, Line: lineNo})
@@ -120,6 +122,7 @@ func parseINI(inv *Inventory, data []byte) error {
 			k = strings.TrimFunc(k, unicode.IsSpace)
 			g := inv.Groups[groupName]
 			g.Vars[k] = parseINIValue(strings.TrimFunc(v, unicode.IsSpace))
+			setINIOrigins(g.Vars, []string{k}, source, lineNo)
 			if template.IsReservedName(k) {
 				g.VarOrigins = append(g.VarOrigins, template.KeyOrigin{Name: k, File: source, Line: lineNo})
 			}
@@ -241,4 +244,17 @@ func (v *yamlOrderedVars) apply(into map[string]any) {
 	for _, k := range v.keys {
 		into[k] = v.vals[k]
 	}
+}
+
+// setINIOrigins records that m's keys were set on line lineNo of source
+// (an INI line has no column).
+func setINIOrigins(m map[string]any, keys []string, source string, lineNo int) {
+	origins := yaml.ChildOrigins(m)
+	if origins == nil {
+		origins = map[string]yaml.ChildPos{}
+	}
+	for _, k := range keys {
+		origins[k] = yaml.ChildPos{File: source, Line: lineNo}
+	}
+	yaml.SetChildOrigins(m, origins)
 }

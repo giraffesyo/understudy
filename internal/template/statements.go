@@ -400,8 +400,8 @@ func (ec *EvalCtx) execNodes(nodes []tmplNode, out *renderOutput) error {
 			if err != nil {
 				return err
 			}
-			if u, ok := v.(Undefined); ok {
-				return u.useError(ec.pos)
+			if err := tripMarkers(v, ec.pos); err != nil {
+				return err
 			}
 			if _, ok := v.(Omit); ok {
 				return &TemplateError{Pos: out.pos, Src: out.src,

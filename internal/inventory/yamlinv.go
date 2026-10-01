@@ -155,9 +155,15 @@ func loadYAMLGroup(inv *Inventory, name string, body any, node *yaml.Node, file 
 		}
 		switch key {
 		case "vars":
+			origins := yaml.ChildOrigins(group.Vars)
+			if origins == nil {
+				origins = map[string]yaml.ChildPos{}
+			}
 			for _, k := range mappingKeys(val) {
 				group.Vars[k] = sub[k]
+				yaml.MergeChildOrigin(origins, k, val)
 			}
+			yaml.SetChildOrigins(group.Vars, origins)
 			for _, o := range varOrigins(mapValue(node, "vars"), val, file) {
 				group.VarOrigins = addOrigin(group.VarOrigins, o)
 			}
@@ -196,9 +202,15 @@ func loadYAMLGroup(inv *Inventory, name string, body any, node *yaml.Node, file 
 				origins := varOrigins(mapValue(mapValue(node, "hosts"), pattern), hostVars, file)
 				for _, n := range names {
 					h := inv.addHost(n, group, port)
+					childOrigins := yaml.ChildOrigins(h.Vars)
+					if childOrigins == nil {
+						childOrigins = map[string]yaml.ChildPos{}
+					}
 					for _, k := range keys {
 						h.Vars[k] = vars[k]
+						yaml.MergeChildOrigin(childOrigins, k, hostVars)
 					}
+					yaml.SetChildOrigins(h.Vars, childOrigins)
 					for _, o := range origins {
 						h.VarOrigins = addOrigin(h.VarOrigins, o)
 					}

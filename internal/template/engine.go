@@ -85,6 +85,9 @@ type Engine struct {
 	// Verbose receives Display.verbose messages plugins print at a given
 	// verbosity (nil: none).
 	Verbose func(verbosity int, msg string)
+	// AllowBrokenConditionals is ALLOW_BROKEN_CONDITIONALS: a conditional
+	// that is not a boolean warns (deprecated) rather than failing.
+	AllowBrokenConditionals bool
 }
 
 // New returns an Engine with the built-in filters, tests, and globals.
@@ -275,6 +278,12 @@ type EvalCtx struct {
 	filterVars []bool
 	// testKwargs are the running test's keyword arguments.
 	testKwargs map[string]any
+	// callKwargs names the running filter's keyword arguments, in call
+	// order.
+	callKwargs []string
+	// replaceMarkers keeps undefined items of literals as markers (see
+	// EvalExpressionReplacing).
+	replaceMarkers bool
 }
 
 func (ec *EvalCtx) Engine() *Engine    { return ec.engine }
@@ -355,8 +364,8 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 		if err != nil {
 			return nil, err
 		}
-		if u, ok := v.(Undefined); ok {
-			return nil, u.useError(pos)
+		if err := tripMarkers(v, pos); err != nil {
+			return nil, err
 		}
 		v = ec.own.settle(v)
 		if HasCycle(v) {
@@ -481,8 +490,8 @@ func (e *Engine) evalExpression(src string, vars VarGetter, pos Position) (any, 
 	if err != nil {
 		return nil, nil, err
 	}
-	if u, ok := v.(Undefined); ok {
-		return nil, nil, u.useError(pos)
+	if err := tripMarkers(v, pos); err != nil {
+		return nil, nil, err
 	}
 	return v, ec, nil
 }

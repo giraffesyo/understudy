@@ -814,9 +814,15 @@ func mergeVarsFile(path string, into map[string]any) ([]template.KeyOrigin, erro
 	if len(m) == 0 {
 		return nil, nil // an empty file is ignored
 	}
+	childOrigins := yaml.ChildOrigins(into)
+	if childOrigins == nil {
+		childOrigins = map[string]yaml.ChildPos{}
+	}
 	for k, val := range m {
 		into[k] = val
+		yaml.MergeChildOrigin(childOrigins, k, m)
 	}
+	yaml.SetChildOrigins(into, childOrigins)
 	var origins []template.KeyOrigin
 	if _, jsonErr := omap.UnmarshalJSON(data); jsonErr == nil {
 		for _, k := range orderedKeys(v) {

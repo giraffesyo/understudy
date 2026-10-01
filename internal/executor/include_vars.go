@@ -131,9 +131,7 @@ func (r *Runner) runIncludeVars(task *playbook.Task, actx *actions.Context, args
 				if failed {
 					break
 				}
-				for k, v := range loaded {
-					results[k] = v
-				}
+				mergeVars(results, loaded)
 			}
 		}
 	} else {
@@ -144,9 +142,7 @@ func (r *Runner) runIncludeVars(task *playbook.Task, actx *actions.Context, args
 			var loaded map[string]any
 			failed, errMsg, loaded = iv.loadFile(found, false)
 			if !failed {
-				for k, v := range loaded {
-					results[k] = v
-				}
+				mergeVars(results, loaded)
 			}
 		}
 	}
@@ -302,11 +298,22 @@ func (iv *includeVarsRun) loadDir(root string, names []string) (bool, string, ma
 		if failed {
 			return true, msg, nil
 		}
-		for k, v := range loaded {
-			results[k] = v
-		}
+		mergeVars(results, loaded)
 	}
 	return false, "", results
+}
+
+// mergeVars merges loaded into results, with where each value came from.
+func mergeVars(results, loaded map[string]any) {
+	origins := yaml.ChildOrigins(results)
+	if origins == nil {
+		origins = map[string]yaml.ChildPos{}
+	}
+	for k, v := range loaded {
+		results[k] = v
+		yaml.MergeChildOrigin(origins, k, loaded)
+	}
+	yaml.SetChildOrigins(results, origins)
 }
 
 type walkedDir struct {

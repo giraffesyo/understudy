@@ -20,6 +20,31 @@ func parseKV(s string) (map[string]any, error) {
 	return out, nil
 }
 
+// parseKVRaw is parse_kv: key=value words are arguments, the others are
+// joined as the raw params.
+func parseKVRaw(s string) (map[string]any, string) {
+	out := map[string]any{}
+	var raw []string
+	for _, word := range pySplitArgs(s) {
+		if pos := kvSplitPos(word); pos > 0 {
+			out[strings.TrimSpace(word[:pos])] = unquote(strings.TrimSpace(word[pos+1:]))
+			continue
+		}
+		raw = append(raw, word)
+	}
+	return out, pyJoinArgs(raw)
+}
+
+// isAllTemplate reports whether s starts and ends with template
+// delimiters (is_possibly_all_template).
+func isAllTemplate(s string) bool {
+	return (strings.HasPrefix(s, "{{") || strings.HasPrefix(s, "{%") || strings.HasPrefix(s, "{#")) &&
+		(strings.HasSuffix(s, "}}") || strings.HasSuffix(s, "%}") || strings.HasSuffix(s, "#}"))
+}
+
+// IsAllTemplate is isAllTemplate for the executor.
+func IsAllTemplate(s string) bool { return isAllTemplate(s) }
+
 // splitFreeForm separates trailing k=v pairs (chdir=, creates=, removes=,
 // executable=, warn=) from a free-form command line, matching how Ansible
 // treats command/shell arguments.

@@ -18,6 +18,12 @@ type Undefined struct {
 
 // useError is the error using an undefined value raises.
 func (u Undefined) useError(pos Position) error {
+	if ue, ok := u.Err.(*UndefinedError); ok && ue.Pos.File == "" {
+		// A message of its own, raised where it is used.
+		c := *ue
+		c.Pos = pos
+		return &c
+	}
 	if u.Err != nil {
 		return u.Err
 	}

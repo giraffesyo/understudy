@@ -56,6 +56,10 @@ type Config struct {
 	// ANSIBLE_DUPLICATE_YAML_DICT_KEY).
 	DuplicateDictKey string
 	TaskTimeout      int // task_timeout / ANSIBLE_TASK_TIMEOUT: the timeout keyword's default (0 = none)
+	// AllowBrokenConditionals is allow_broken_conditionals /
+	// ANSIBLE_ALLOW_BROKEN_CONDITIONALS: a conditional that is not a
+	// boolean warns rather than failing.
+	AllowBrokenConditionals bool
 	// InjectFactsSet: inject_facts_as_vars is configured (ini or
 	// ANSIBLE_INJECT_FACT_VARS) rather than left at its default.
 	InjectFactsSet bool
@@ -270,6 +274,7 @@ func applyINI(cfg *Config, f *iniFile) {
 	if _, ok := f.get("defaults", "inject_facts_as_vars"); ok {
 		cfg.InjectFactsSet = true
 	}
+	boolean("defaults", "allow_broken_conditionals", &cfg.AllowBrokenConditionals)
 	integer("defaults", "task_timeout", func(n int) { cfg.TaskTimeout = n })
 	boolean("defaults", "localhost_warning", &cfg.LocalhostWarning)
 	str("defaults", "transport", func(v string) { cfg.Transport = v })
@@ -401,6 +406,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if os.Getenv("ANSIBLE_INJECT_FACT_VARS") != "" {
 		cfg.InjectFactsSet = true
+	}
+	if v := os.Getenv("ANSIBLE_ALLOW_BROKEN_CONDITIONALS"); v != "" {
+		cfg.AllowBrokenConditionals = pyBoolean(v)
 	}
 	if v := os.Getenv("ANSIBLE_TASK_TIMEOUT"); v != "" {
 		if n, ok := pyDecimalInt(v); ok {

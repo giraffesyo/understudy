@@ -718,10 +718,12 @@ func lookupVars(_ *Runner, ec *template.EvalCtx, terms []any, kw map[string]any)
 	for _, name := range termStrings(terms) {
 		if v, ok := get(name); ok {
 			out = append(out, v)
-		} else if d, ok := kw["default"]; ok {
+		} else if d := kw["default"]; d != nil {
 			out = append(out, d)
 		} else {
-			return nil, fmt.Errorf("No variable found with this name: %s", name)
+			// An undefined value, an error only where it is used.
+			msg := fmt.Sprintf("No variable named %s was found.", template.PyRepr(name))
+			out = append(out, template.Undefined{Name: name, Err: &template.UndefinedError{Hint: msg}})
 		}
 	}
 	return out, nil
