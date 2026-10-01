@@ -2,8 +2,10 @@
 ---
 # The apt modules on a Debian host whose Python has no python3-apt (the
 # image installs python3 alone): check mode cannot install the bindings
-# the modules need, and apt_repository will not without
-# install_python_apt.
+# the modules need, apt_repository will not without install_python_apt,
+# and apt without auto_install_module_deps fails quoting the Python's
+# sys.version. Otherwise each installs python3-apt with apt-get first
+# (the warning apt gives goes with the process it respawns from).
 - hosts: target
   gather_facts: false
   become: true
@@ -23,3 +25,19 @@
     - name: apt_repository without install_python_apt
       apt_repository: {repo: "deb http://example.invalid/ubuntu noble main", install_python_apt: false}
       ignore_errors: true
+
+    - name: apt not allowed to install python3-apt
+      apt: {name: tree, auto_install_module_deps: false}
+      ignore_errors: true
+    - name: apt installs python3-apt first
+      apt: {name: sudo}
+    - name: python3-apt is installed
+      command: dpkg-query -W -f '${Status}' python3-apt
+      changed_when: false
+    - name: remove python3-apt again
+      apt: {name: python3-apt, state: absent}
+    - name: apt_repository installs python3-apt first
+      apt_repository: {repo: "deb http://example.invalid/ubuntu noble main", update_cache: false}
+    - name: python3-apt is installed again
+      command: dpkg-query -W -f '${Status}' python3-apt
+      changed_when: false

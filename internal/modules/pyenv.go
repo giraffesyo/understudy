@@ -36,6 +36,9 @@ type pyTarget struct {
 
 	buildOnce sync.Once
 	build     string // "3.12.3" (see targetPythonBuild)
+
+	sysVersionOnce sync.Once
+	sysVersion     string // see targetPythonSysVersion
 }
 
 var pyTargets sync.Map // interpreter setting + discovery inputs -> *pyTarget

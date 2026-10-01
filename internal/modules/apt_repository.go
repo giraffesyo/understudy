@@ -174,6 +174,18 @@ func aptRepositoryModule(env *RunEnv, raw map[string]any) *agentproto.Result {
 		case !p.Bool("install_python_apt"):
 			return agentproto.Fail("python3-apt is not installed, and install_python_apt is False")
 		}
+		// install_python_apt: apt-get update and install, then carry on
+		// under the Python that can import the bindings.
+		if aptGet, err := getBinPath("apt-get"); err == nil {
+			for _, argv := range [][]string{{aptGet, "update"}, {aptGet, "install", "python3-apt", "-y", "-q"}} {
+				if rc, _, errOut := runCommand(env, argv, cmdOpts{}); rc != 0 {
+					return agentproto.Fail("Failed to auto-install python3-apt. Error was: '%s'", strings.TrimSpace(errOut))
+				}
+			}
+		}
+		if aptBindingsMissing(env) {
+			return agentproto.Fail("python3-apt must be installed and visible from %s.", targetPythonExecutable(env))
+		}
 	}
 	repo := p.Str("repo")
 	state := p.Str("state")

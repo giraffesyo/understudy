@@ -24,6 +24,9 @@
     - name: the dnf5 backend installs its bindings first
       dnf: {name: tree, use_backend: dnf5}
       ignore_errors: true
+    - name: the dnf5 backend not allowed to install its bindings
+      dnf: {name: tree, use_backend: dnf5, auto_install_module_deps: false}
+      ignore_errors: true
     - name: the dnf5 backend in check mode
       dnf: {name: tree, use_backend: dnf5}
       check_mode: true
