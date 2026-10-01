@@ -91,25 +91,36 @@ func dockerRun(t *testing.T, base string, args ...string) string {
 
 // dockerPort returns the host port a container's port is published on.
 // Docker Desktop can report a running container before its port mapping
-// is published, so a failed lookup is retried while the container runs.
+// is published, so the lookup is retried (falling back to the container's
+// inspected bindings) while the container runs. A final failure reports
+// docker's own error and the bindings, to tell a slow mapping from none.
 func dockerPort(t *testing.T, name, port string) string {
 	t.Helper()
-	var out []byte
-	var err error
-	for i := 0; i < 20; i++ {
-		if out, err = exec.Command("docker", "port", name, port).Output(); err == nil {
-			break
+	var lastErr string
+	for i := 0; i < 60; i++ {
+		cmd := exec.Command("docker", "port", name, port)
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		if out, err := cmd.Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+			line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+			return line[strings.LastIndexByte(line, ':')+1:]
+		} else {
+			lastErr = strings.TrimSpace(fmt.Sprintf("%v %s", err, stderr.String()))
 		}
-		state, _ := exec.Command("docker", "inspect", "-f", "{{.State.Status}}", name).Output()
-		if strings.TrimSpace(string(state)) != "running" {
-			break
+		tmpl := fmt.Sprintf(`{{.State.Status}} {{range (index .NetworkSettings.Ports "%s/tcp")}}{{.HostPort}} {{end}}`, port)
+		if insp, err := exec.Command("docker", "inspect", "-f", tmpl, name).Output(); err == nil {
+			f := strings.Fields(string(insp))
+			if len(f) > 1 && f[1] != "0" {
+				return f[1]
+			}
+			if len(f) == 0 || f[0] != "running" {
+				break
+			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	if err != nil {
-		state, _ := exec.Command("docker", "inspect", "-f", "{{.State.Status}} {{.State.ExitCode}} {{.State.Error}}", name).CombinedOutput()
-		t.Fatalf("docker port %s %s: %v (container: %s)", name, port, err, strings.TrimSpace(string(state)))
-	}
-	line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
-	return line[strings.LastIndexByte(line, ':')+1:]
+	state, _ := exec.Command("docker", "inspect", "-f",
+		"{{.State.Status}} exit={{.State.ExitCode}} err={{.State.Error}} ports={{json .NetworkSettings.Ports}} bindings={{json .HostConfig.PortBindings}}", name).CombinedOutput()
+	t.Fatalf("docker port %s %s: %s (container: %s)", name, port, lastErr, strings.TrimSpace(string(state)))
+	return ""
 }
