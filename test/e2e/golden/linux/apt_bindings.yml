@@ -26,6 +26,15 @@
       apt_repository: {repo: "deb http://example.invalid/ubuntu noble main", install_python_apt: false}
       ignore_errors: true
 
+    - name: package_facts' apt backend needs python3-apt
+      package_facts: {manager: apt}
+      register: r
+      ignore_errors: true
+    - debug: {msg: "{{ r.warnings | default([]) }}"}
+    - name: package_facts detecting a manager
+      package_facts:
+      ignore_errors: true
+
     - name: apt not allowed to install python3-apt
       apt: {name: tree, auto_install_module_deps: false}
       ignore_errors: true
