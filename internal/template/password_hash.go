@@ -44,7 +44,7 @@ func filterPasswordHash(ec *EvalCtx, in any, args []any, kwargs map[string]any) 
 		return def
 	}
 	hashtypeV := arg(0, "hashtype", "sha512")
-	salt, saltSize, rounds := arg(1, "salt", nil), arg(2, "salt_size", nil), arg(3, "rounds", nil)
+	salt, saltSize, rounds, ident := arg(1, "salt", nil), arg(2, "salt_size", nil), arg(3, "rounds", nil), arg(4, "ident", nil)
 	hashtype := toStr(hashtypeV)
 	known := false
 	for _, m := range passlibMapping {
@@ -72,14 +72,14 @@ func filterPasswordHash(ec *EvalCtx, in any, args []any, kwargs map[string]any) 
 		ec.engine.Verbose(2, fmt.Sprintf("Using %s to hash input with '%s'", backend, hashtype))
 	}
 	if usePasslib {
-		return passlibHash(hashtype, algo, Undeprecate(in), salt, saltSize, rounds, ec.fromVar(-1))
+		return passlibHash(hashtype, algo, Undeprecate(in), salt, saltSize, rounds, ident, ec.fromVar(-1))
 	}
-	return libxcryptHash(hashtype, algo, Undeprecate(in), salt, saltSize, rounds)
+	return libxcryptHash(hashtype, algo, Undeprecate(in), salt, saltSize, rounds, ident)
 }
 
 // passlibHash is PasslibHash.hash: passlib's CryptContext handler
 // .using(salt=, salt_size=, rounds=).hash(secret).
-func passlibHash(name string, algo hashAlgo, secret, salt, saltSize, rounds any, secretFromVar bool) (any, error) {
+func passlibHash(name string, algo hashAlgo, secret, salt, saltSize, rounds, ident any, secretFromVar bool) (any, error) {
 	var saltStr string
 	hasSalt := truthy(salt)
 	if hasSalt {
@@ -101,10 +101,7 @@ func passlibHash(name string, algo hashAlgo, secret, salt, saltSize, rounds any,
 		return fmt.Errorf("Could not hash the secret: "+format, a...)
 	}
 	if name == "bcrypt" {
-		if hasSalt && len(saltStr) != 22 {
-			return nil, could("salt too small (bcrypt requires exactly 22 chars)")
-		}
-		return nil, fmt.Errorf("password_hash: the 'blowfish' (bcrypt) algorithm is not supported")
+		return passlibBcrypt(secret, salt, saltSize, rounds, ident, secretFromVar)
 	}
 	// HasSalt.using: the salt size, then the salt.
 	size := algo.saltSize
@@ -178,7 +175,10 @@ func passlibTypeName(v any, fromVar bool) string {
 
 // libxcryptHash is CryptHash.hash with crypt_gensalt: a given salt is
 // checked and becomes the random bytes gensalt encodes.
-func libxcryptHash(name string, algo hashAlgo, secret, salt, saltSize, rounds any) (any, error) {
+func libxcryptHash(name string, algo hashAlgo, secret, salt, saltSize, rounds, ident any) (any, error) {
+	if name == "bcrypt" {
+		return libxcryptBcrypt(secret, salt, saltSize, rounds, ident)
+	}
 	size := algo.saltSize
 	if saltSize != nil {
 		n, ok := asInt(saltSize)
@@ -212,9 +212,6 @@ func libxcryptHash(name string, algo hashAlgo, secret, salt, saltSize, rounds an
 		}
 	} else {
 		saltStr = randomSalt(size)
-	}
-	if name == "bcrypt" {
-		return nil, fmt.Errorf("password_hash: the 'blowfish' (bcrypt) algorithm is not supported")
 	}
 	pw := toStr(secret)
 	if name == "md5_crypt" {
@@ -300,4 +297,204 @@ func md5Crypt(password, salt string) string {
 	}
 	to64(uint32(final[11]), 2)
 	return b.String()
+}
+
+// passlibBcrypt is PasslibHash.hash for bcrypt: ansible-core repairs a
+// salt's unused bits and defaults the cost (12) and ident ("2b"); then
+// passlib's bcrypt.using(salt_size=, salt=, rounds=, ident=) validates
+// each in that order, and .hash(secret) the secret.
+func passlibBcrypt(secret, salt, saltSize, rounds, ident any, secretFromVar bool) (any, error) {
+	could := func(format string, a ...any) error {
+		return fmt.Errorf("Could not hash the secret: "+format, a...)
+	}
+	var saltStr string
+	hasSalt := truthy(salt)
+	if hasSalt {
+		var err error
+		if saltStr, err = bcryptRepairUnused(toStr(salt)); err != nil {
+			return nil, err
+		}
+	}
+	if !truthy(rounds) {
+		rounds = int64(12)
+	}
+	identStr := "2b"
+	if truthy(ident) {
+		identStr = toStr(ident)
+		if _, isStr := asString(ident); !isStr {
+			identStr = "\x00" + pyRepr(ident)
+		}
+	}
+	if saltSize != nil {
+		if _, ok := asInt(saltSize); !ok {
+			return nil, fmt.Errorf("salt_size must be an integer")
+		}
+		if n, _ := asInt(saltSize); truthy(saltSize) && n != 22 {
+			return nil, could("bcrypt: salt_size (%d) must be exactly 22", n)
+		}
+	}
+	if hasSalt {
+		for _, c := range saltStr {
+			if c > 0x7f || bcryptIndex(byte(c)) < 0 {
+				return nil, could("invalid characters in bcrypt salt")
+			}
+		}
+		switch n := len([]rune(saltStr)); {
+		case n < 22:
+			return nil, could("salt too small (bcrypt requires exactly 22 chars)")
+		case n > 22:
+			return nil, could("salt too large (bcrypt requires exactly 22 chars)")
+		}
+	} else {
+		saltStr = randomSalt(21) + string(".Oeu"[randomIndex(4)])
+	}
+	switch r := rounds.(type) {
+	case string, yaml.UnsafeString:
+		rs, _ := asString(r)
+		v, ok := pyParseInt(rs, 10)
+		if !ok {
+			return nil, could("invalid literal for int() with base 10: %s", pyStrRepr(rs))
+		}
+		rounds = v
+	case float64:
+		return nil, fmt.Errorf("min_desired_rounds must be integer, not float")
+	}
+	cost, ok := asInt(rounds)
+	if !ok {
+		return nil, fmt.Errorf("min_desired_rounds must be integer, not %s", pyClassName(rounds, false))
+	}
+	if cost < 4 {
+		return nil, could("bcrypt: min_desired_rounds (%d) is too low, must be at least 4", cost)
+	}
+	if cost > 31 {
+		return nil, could("bcrypt: min_desired_rounds (%d) is too large, cannot be more than 31", cost)
+	}
+	switch identStr {
+	case "2", "2a", "2y", "2b":
+	case "$2$", "$2a$", "$2y$", "$2b$":
+		identStr = identStr[1 : len(identStr)-1]
+	default:
+		if strings.HasPrefix(identStr, "\x00") {
+			return nil, could("invalid ident: %s", identStr[1:])
+		}
+		return nil, could("invalid ident: %s", pyStrRepr(identStr))
+	}
+	pw, ok := asString(secret)
+	if !ok {
+		return nil, fmt.Errorf("secret must be unicode or bytes, not %s", passlibTypeName(secret, secretFromVar))
+	}
+	b := []byte(pw)
+	if strings.IndexByte(pw, 0) >= 0 {
+		return nil, could("bcrypt does not allow NULL bytes in password")
+	}
+	if identStr == "2" && len(b) > 0 {
+		// The legacy $2$ hash, which the backend lacks: the password
+		// repeated to 72 bytes (ending on a UTF-8 boundary) hashed as $2b$.
+		for len(b) < 72 {
+			b = append(b, pw...)
+		}
+		end := 72
+		for end < len(b) && b[end]&0xc0 == 0x80 {
+			end++
+		}
+		b = b[:end]
+	}
+	return bcryptCrypt(b, identStr, saltStr, int(cost)), nil
+}
+
+// bcryptRepairUnused is passlib's bcrypt64.repair_unused: the unused low
+// bits of a salt's last character cleared.
+func bcryptRepairUnused(s string) (string, error) {
+	r := []rune(s)
+	var mask int
+	switch len(r) & 3 {
+	case 0:
+		return s, nil
+	case 1:
+		return "", fmt.Errorf("source length must != 1 mod 4")
+	case 2:
+		mask = 0x30
+	case 3:
+		mask = 0x3c
+	}
+	last := r[len(r)-1]
+	idx := -1
+	if last < 0x80 {
+		idx = bcryptIndex(byte(last))
+	}
+	if idx < 0 {
+		return "", fmt.Errorf("substring not found")
+	}
+	r[len(r)-1] = rune(bcryptAlphabet[idx&mask])
+	return string(r), nil
+}
+
+// libxcryptBcrypt is CryptHash.hash for bcrypt with crypt_gensalt: a
+// given salt (exactly 22 salt characters) is the random bytes gensalt
+// encodes, of which bcrypt uses 16.
+func libxcryptBcrypt(secret, salt, saltSize, rounds, ident any) (any, error) {
+	failed := fmt.Errorf("Failed to generate salt for 'bcrypt' algorithm")
+	cost := int64(12)
+	if truthy(rounds) {
+		n, ok := asInt(rounds)
+		if !ok {
+			return nil, failed
+		}
+		cost = n
+	}
+	identStr := "2b"
+	if truthy(ident) {
+		identStr = toStr(ident)
+	}
+	size := 22
+	if saltSize != nil {
+		n, ok := asInt(saltSize)
+		if _, isBool := saltSize.(bool); !ok || isBool {
+			return nil, fmt.Errorf("salt_size must be an integer")
+		}
+		if n != 0 {
+			size = int(n)
+		}
+	}
+	var raw []byte
+	if salt != nil {
+		if size != 22 {
+			return nil, fmt.Errorf("invalid salt size supplied (%d), expected 22", size)
+		}
+		s := toStr(salt)
+		if s == "" {
+			s = randomSalt(22)
+		}
+		for _, c := range s {
+			if !strings.ContainsRune(cryptAlphabet, c) {
+				return nil, fmt.Errorf("invalid characters in salt")
+			}
+		}
+		if len(s) != 22 {
+			return nil, fmt.Errorf("invalid salt size supplied (%d), expected 22", len(s))
+		}
+		raw = []byte(s)
+	} else {
+		if size != 22 {
+			return nil, fmt.Errorf("invalid salt size supplied (%d), expected 22", size)
+		}
+		raw = make([]byte, 22)
+		_, _ = rand.Read(raw)
+	}
+	switch identStr {
+	case "2a", "2b", "2y":
+	default:
+		return nil, failed
+	}
+	if cost < 4 || cost > 31 {
+		return nil, failed
+	}
+	salt22 := bcrypt64.EncodeToString(raw[:16])
+	return bcryptCrypt([]byte(toStr(secret)), identStr, salt22, int(cost)), nil
+}
+
+// randomIndex is a random int in [0, n).
+func randomIndex(n int) int {
+	v, _ := rand.Int(rand.Reader, big.NewInt(int64(n)))
+	return int(v.Int64())
 }

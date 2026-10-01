@@ -340,7 +340,7 @@ func (ec *EvalCtx) templateRef(ref OriginRef, depth int) (OriginRef, bool) {
 		return ref, true
 	}
 	own := OriginRef{Pos: ref.Pos}
-	nodes, err := ec.engine.parseTemplate(s, ref.Pos)
+	nodes, err := ec.engine.parseTemplateEscaping(s, ref.Pos, true)
 	if err != nil {
 		return own, true
 	}

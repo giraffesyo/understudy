@@ -47,6 +47,8 @@ func truthy(v any) bool {
 		return t != ""
 	case yaml.UnsafeString:
 		return t != ""
+	case Markup:
+		return t != ""
 	case []any:
 		return len(t) > 0
 	case map[string]any:
@@ -104,6 +106,8 @@ func toStrIn(v any, active map[cycleID]bool) string {
 	case *methodValue, *globalValue:
 		r, _ := callableRepr(t)
 		return r
+	case Markup:
+		return string(t)
 	case []any:
 		var b strings.Builder
 		b.WriteByte('[')
@@ -159,6 +163,10 @@ func pyReprIn(v any, active map[cycleID]bool) string {
 		return pyStrRepr(t)
 	case yaml.UnsafeString:
 		return pyStrRepr(string(t))
+	case Markup:
+		return "Markup(" + pyStrRepr(string(t)) + ")"
+	case interface{ PyRepr() string }:
+		return t.PyRepr()
 	default:
 		return toStrIn(v, active)
 	}
@@ -296,12 +304,22 @@ func asString(v any) (string, bool) {
 		return t, true
 	case yaml.UnsafeString:
 		return string(t), true
+	case Markup:
+		return string(t), true
 	}
 	return "", false
 }
 
 // arith implements Jinja's binary arithmetic and concatenation operators.
 func arith(op tokKind, a, b any) (any, error) {
+	if op == tokAdd {
+		if r, ok := markupConcat(Undeprecate(a), Undeprecate(b)); ok {
+			return r, nil
+		}
+	}
+	if r, ok, err := pyObjArith(op, Undeprecate(a), Undeprecate(b)); ok {
+		return r, err
+	}
 	// String/list operators first.
 	if s, ok := asString(a); ok {
 		switch op {
@@ -358,7 +376,11 @@ func numArith(op tokKind, a, b any) (any, error) {
 		if at := typeName(a); op == tokAdd && (at == "str" || at == "list") {
 			return nil, fmt.Errorf("can only concatenate %s (not \"%s\") to %s", at, typeName(b), at)
 		}
-		return nil, fmt.Errorf("unsupported operand type(s) for %s: '%s' and '%s'", opName(op), typeName(a), typeName(b))
+		name := opName(op)
+		if op == tokPow {
+			name = "** or pow()" // Python names the builtin too
+		}
+		return nil, fmt.Errorf("unsupported operand type(s) for %s: '%s' and '%s'", name, typeName(a), typeName(b))
 	}
 
 	if aInt && bInt {
@@ -536,6 +558,12 @@ func typeName(v any) string {
 		return "float"
 	case string, yaml.UnsafeString:
 		return "str"
+	case Markup:
+		return "Markup"
+	case pyDatetime:
+		return "datetime.datetime"
+	case pyTimedelta:
+		return "datetime.timedelta"
 	case []any:
 		return "list"
 	case map[string]any, Mapping:
@@ -589,6 +617,9 @@ func compareOp(a, b any, op string) (int, error) {
 			}
 			return 0, nil
 		}
+	}
+	if c, ok, err := pyObjCompare(a, b, op); ok {
+		return c, err
 	}
 	return 0, fmt.Errorf("'%s' not supported between instances of '%s' and '%s'", op, pyClassName(a, false), pyClassName(b, false))
 }
@@ -652,6 +683,9 @@ func equal(a, b any) bool {
 		}
 		return true
 	}
+	if eq, ok := pyObjEqual(a, b); ok {
+		return eq
+	}
 	// Uncomparable types (funcs, lazy ranges) must not panic under ==.
 	ta, tb := reflect.TypeOf(a), reflect.TypeOf(b)
 	if ta != tb || !ta.Comparable() {
@@ -697,6 +731,8 @@ func contains(needle, haystack any) (bool, error) {
 		return strings.Contains(h, s), nil
 	case yaml.UnsafeString:
 		return contains(needle, string(h))
+	case Markup:
+		return contains(needle, string(h))
 	case []any:
 		for _, item := range h {
 			if equal(item, needle) {
@@ -730,6 +766,8 @@ func length(v any) (int, error) {
 		return len([]rune(t)), nil
 	case yaml.UnsafeString:
 		return len([]rune(string(t))), nil
+	case Markup:
+		return len([]rune(string(t))), nil
 	case []any:
 		return len(t), nil
 	case map[string]any:
@@ -756,6 +794,8 @@ func iterate(v any) ([]any, error) {
 		}
 		return out, nil
 	case yaml.UnsafeString:
+		return iterate(string(t))
+	case Markup:
 		return iterate(string(t))
 	case map[string]any:
 		keys := sortedKeys(t)

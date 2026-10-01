@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 
 	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
@@ -342,13 +343,13 @@ func listContainsAll(container []any, needles any) (bool, error) {
 		return false, fmt.Errorf("subset requires one argument")
 	}
 	// set(a) <= set(b): the tested value's set is built first.
-	small, err := iterate(needles)
+	small, err := pySetItems(needles)
 	if err != nil {
-		return false, errNotIterable(needles, false)
+		return false, err
 	}
-	big, err := iterate(container[0])
+	big, err := pySetItems(container[0])
 	if err != nil {
-		return false, errNotIterable(container[0], false)
+		return false, err
 	}
 	for _, n := range small {
 		found := false
@@ -363,4 +364,29 @@ func listContainsAll(container []any, needles any) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// pySetItems are the items set(v) holds, or the TypeError building it
+// raises: v not iterable, or an item (lazy, as plugin arguments are)
+// unhashable.
+func pySetItems(v any) ([]any, error) {
+	items, err := iterate(v)
+	if err != nil {
+		return nil, errNotIterable(v, false)
+	}
+	for _, it := range items {
+		if !pyHashable(it) {
+			cls := pyOperandClass(it, true)
+			return nil, fmt.Errorf("cannot use '%s' as a set element (unhashable type: '%s')", lazyQualname(cls), cls)
+		}
+	}
+	return items, nil
+}
+
+// lazyQualname is a lazy container class's module-qualified name.
+func lazyQualname(cls string) string {
+	if strings.HasPrefix(cls, "_AnsibleLazy") {
+		return "ansible._internal._templating._lazy_containers." + cls
+	}
+	return cls
 }

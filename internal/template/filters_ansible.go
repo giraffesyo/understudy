@@ -1337,58 +1337,7 @@ func args1(args []any, i int) any {
 // (matching ansible's strftime filter). Unknown codes pass through literally.
 func strftime(format string, ts int64) string {
 	t := time.Unix(ts, 0)
-	var b strings.Builder
-	for i := 0; i < len(format); i++ {
-		if format[i] != '%' || i+1 >= len(format) {
-			b.WriteByte(format[i])
-			continue
-		}
-		i++
-		switch format[i] {
-		case 'Y':
-			b.WriteString(t.Format("2006"))
-		case 'y':
-			b.WriteString(t.Format("06"))
-		case 'm':
-			b.WriteString(t.Format("01"))
-		case 'd':
-			b.WriteString(t.Format("02"))
-		case 'e':
-			fmt.Fprintf(&b, "%2d", t.Day())
-		case 'H':
-			b.WriteString(t.Format("15"))
-		case 'I':
-			b.WriteString(t.Format("03"))
-		case 'M':
-			b.WriteString(t.Format("04"))
-		case 'S':
-			b.WriteString(t.Format("05"))
-		case 'p':
-			b.WriteString(t.Format("PM"))
-		case 'A':
-			b.WriteString(t.Format("Monday"))
-		case 'a':
-			b.WriteString(t.Format("Mon"))
-		case 'B':
-			b.WriteString(t.Format("January"))
-		case 'b', 'h':
-			b.WriteString(t.Format("Jan"))
-		case 'j':
-			fmt.Fprintf(&b, "%03d", t.YearDay())
-		case 'w':
-			b.WriteString(strconv.Itoa(int(t.Weekday())))
-		case 'Z':
-			b.WriteString(t.Format("MST"))
-		case 'z':
-			b.WriteString(t.Format("-0700"))
-		case '%':
-			b.WriteByte('%')
-		default:
-			b.WriteByte('%')
-			b.WriteByte(format[i])
-		}
-	}
-	return b.String()
+	return strftimeTime(format, t, t.Location(), false)
 }
 
 // sizeRanges is ansible's formatters.SIZE_RANGES, largest first.
@@ -1687,6 +1636,8 @@ func yamlDumpValue(v any) any {
 			m.Set(k, val)
 		}
 		return m
+	case pyDatetime:
+		return yaml.Timestamp(t.isoformat(" "))
 	case *rangeValue:
 		repr := fmt.Sprintf("range(%d, %d)", t.start, t.stop)
 		if t.step != 1 {
@@ -1761,6 +1712,22 @@ type pyJSONEncoder struct {
 	indent      int
 	sortKeys    bool
 	ensureASCII bool
+	// pretty is json.dumps given an indent, even 0 (newlines, no
+	// spaces); indentStr is a str indent.
+	pretty    bool
+	indentStr string
+}
+
+// newline starts a line at depth when the encoder pretty-prints.
+func (e *pyJSONEncoder) newline(depth int) {
+	if e.indent > 0 || e.pretty {
+		e.b.WriteByte('\n')
+		if e.indentStr != "" {
+			e.b.WriteString(strings.Repeat(e.indentStr, depth))
+		} else {
+			e.b.WriteString(strings.Repeat(" ", e.indent*depth))
+		}
+	}
 }
 
 func (e *pyJSONEncoder) write(v any, depth int) {
@@ -1790,6 +1757,8 @@ func (e *pyJSONEncoder) write(v any, depth int) {
 		b.WriteString(pyJSONFloat(t))
 	case *rangeValue:
 		e.write(t.materialize(), depth)
+	case pyDatetime:
+		b.WriteString(pyJSONQuote(t.Isoformat(), e.ensureASCII))
 	case []any:
 		if len(t) == 0 {
 			b.WriteString("[]")
@@ -1835,23 +1804,17 @@ func (e *pyJSONEncoder) object(keys []string, get func(string) any, n, depth int
 
 func (e *pyJSONEncoder) sep(i, depth int) {
 	if i > 0 {
-		if e.indent > 0 {
+		if e.indent > 0 || e.pretty {
 			e.b.WriteByte(',')
 		} else {
 			e.b.WriteString(", ")
 		}
 	}
-	if e.indent > 0 {
-		e.b.WriteByte('\n')
-		e.b.WriteString(strings.Repeat(" ", e.indent*depth))
-	}
+	e.newline(depth)
 }
 
 func (e *pyJSONEncoder) close(closer byte, depth int) {
-	if e.indent > 0 {
-		e.b.WriteByte('\n')
-		e.b.WriteString(strings.Repeat(" ", e.indent*depth))
-	}
+	e.newline(depth)
 	e.b.WriteByte(closer)
 }
 
@@ -1920,6 +1883,8 @@ func jsonSanitize(v any) any {
 	case Deprecated:
 		return jsonSanitize(t.Value)
 	case yaml.UnsafeString:
+		return string(t)
+	case Markup:
 		return string(t)
 	case Mapping:
 		return jsonSanitize(mappingToMap(t))

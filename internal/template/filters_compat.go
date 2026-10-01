@@ -168,42 +168,9 @@ const schemeChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456
 // pyURLSplit mirrors urllib.parse.urlsplit plus the SplitResult
 // properties (hostname, port, username, password).
 func pyURLSplit(url string) (map[string]any, error) {
-	// Python strips leading C0 controls/space and removes tab/CR/LF.
-	url = strings.TrimLeft(url, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f ")
-	url = strings.NewReplacer("\t", "", "\r", "", "\n", "").Replace(url)
-	scheme, netloc, query, fragment := "", "", "", ""
-	if i := strings.IndexByte(url, ':'); i > 0 && isASCIIAlpha(url[0]) {
-		ok := true
-		for _, c := range url[:i] {
-			if !strings.ContainsRune(schemeChars, c) {
-				ok = false
-				break
-			}
-		}
-		if ok {
-			scheme = strings.ToLower(url[:i])
-			url = url[i+1:]
-		}
-	}
-	if strings.HasPrefix(url, "//") {
-		rest := url[2:]
-		end := len(rest)
-		for _, d := range "/?#" {
-			if j := strings.IndexRune(rest, d); j >= 0 && j < end {
-				end = j
-			}
-		}
-		netloc, url = rest[:end], rest[end:]
-		if (strings.Contains(netloc, "[") && !strings.Contains(netloc, "]")) ||
-			(strings.Contains(netloc, "]") && !strings.Contains(netloc, "[")) {
-			return nil, fmt.Errorf("Invalid IPv6 URL")
-		}
-	}
-	if i := strings.IndexByte(url, '#'); i >= 0 {
-		url, fragment = url[:i], url[i+1:]
-	}
-	if i := strings.IndexByte(url, '?'); i >= 0 {
-		url, query = url[:i], url[i+1:]
+	scheme, netloc, url, query, fragment, err := pyURLSplitParts(url)
+	if err != nil {
+		return nil, err
 	}
 	out := map[string]any{
 		"scheme": scheme, "netloc": netloc, "path": url, "query": query, "fragment": fragment,
@@ -247,6 +214,48 @@ func pyURLSplit(url string) (map[string]any, error) {
 		out["port"] = int64(n)
 	}
 	return out, nil
+}
+
+// pyURLSplitParts is urllib.parse.urlsplit's five components.
+func pyURLSplitParts(url string) (scheme, netloc, path, query, fragment string, err error) {
+	// Python strips leading C0 controls/space and removes tab/CR/LF.
+	url = strings.TrimLeft(url, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f ")
+	url = strings.NewReplacer("\t", "", "\r", "", "\n", "").Replace(url)
+	scheme, netloc, query, fragment = "", "", "", ""
+	if i := strings.IndexByte(url, ':'); i > 0 && isASCIIAlpha(url[0]) {
+		ok := true
+		for _, c := range url[:i] {
+			if !strings.ContainsRune(schemeChars, c) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			scheme = strings.ToLower(url[:i])
+			url = url[i+1:]
+		}
+	}
+	if strings.HasPrefix(url, "//") {
+		rest := url[2:]
+		end := len(rest)
+		for _, d := range "/?#" {
+			if j := strings.IndexRune(rest, d); j >= 0 && j < end {
+				end = j
+			}
+		}
+		netloc, url = rest[:end], rest[end:]
+		if (strings.Contains(netloc, "[") && !strings.Contains(netloc, "]")) ||
+			(strings.Contains(netloc, "]") && !strings.Contains(netloc, "[")) {
+			return "", "", "", "", "", fmt.Errorf("Invalid IPv6 URL")
+		}
+	}
+	if i := strings.IndexByte(url, '#'); i >= 0 {
+		url, fragment = url[:i], url[i+1:]
+	}
+	if i := strings.IndexByte(url, '?'); i >= 0 {
+		url, query = url[:i], url[i+1:]
+	}
+	return scheme, netloc, url, query, fragment, nil
 }
 
 func isASCIIAlpha(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }

@@ -85,6 +85,9 @@ type Engine struct {
 	// Verbose receives Display.verbose messages plugins print at a given
 	// verbosity (nil: none).
 	Verbose func(verbosity int, msg string)
+	// Warning receives Display.warning messages raised rendering a
+	// template, with the template's position (nil: none).
+	Warning func(pos Position, msg string)
 	// AllowBrokenConditionals is ALLOW_BROKEN_CONDITIONALS: a conditional
 	// that is not a boolean warns (deprecated) rather than failing.
 	AllowBrokenConditionals bool
@@ -102,8 +105,12 @@ func New() *Engine {
 	registerAnsibleFilters(e)
 	registerRegexFilters(e)
 	registerCompatFilters(e)
+	registerJinjaExtraFilters(e)
+	registerMarkupFilters(e)
+	registerExtraFilters(e)
 	registerTests(e)
 	registerAnsibleTests(e)
+	registerExtraTests(e)
 	registerGlobals(e)
 	guardRecursion(e)
 	return e
@@ -134,7 +141,7 @@ type TemplateError struct {
 	Plugin bool
 	// pluginHead and pluginDetail split a plugin failure whose exception
 	// was raised while handling another (see SplitCause).
-	pluginHead, pluginDetail string
+	pluginHead, pluginDetail, pluginValue string
 }
 
 // Cause is the error as ansible-core words a template failure's cause:
@@ -343,7 +350,7 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 	if err := e.syntaxError(src, pos, false, true); err != nil {
 		return nil, err
 	}
-	nodes, err := e.parseTemplate(src, pos)
+	nodes, err := e.parseTemplateEscaping(src, pos, true)
 	if err != nil {
 		return nil, err
 	}
@@ -378,11 +385,11 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 		if HasCycle(v) {
 			return nil, &RecursionError{In: "template"}
 		}
-		if err := checkStorable(v, false, pos); err != nil {
+		v, err = ec.storable(ec.finalize(v))
+		if err != nil {
 			return nil, err
 		}
-		v = dropNestedOmit(v)
-		return ec.finalize(v), nil
+		return dropNestedOmit(v), nil
 	}
 
 	// Otherwise native Jinja concatenates the output chunks: none is
@@ -396,7 +403,7 @@ func (e *Engine) RenderTemplate(src string, vars VarGetter, pos Position) (any, 
 	case out.native.n == 0:
 		return nil, nil
 	case out.native.n == 1 && out.native.isValue:
-		return out.native.first, nil
+		return ec.storable(out.native.first)
 	}
 	return b.String(), nil
 }
@@ -560,7 +567,14 @@ func singleOutput(nodes []tmplNode) (*outputNode, []*setNode) {
 // parseTemplate lexes and parses a template into its node list, including
 // {% if %}, {% for %}, and {% set %} statements.
 func (e *Engine) parseTemplate(src string, pos Position) ([]tmplNode, error) {
-	toks, err := lex(src, e.Opts, pos)
+	return e.parseTemplateEscaping(src, pos, false)
+}
+
+// parseTemplateEscaping is parseTemplate with ansible-core's
+// escape_backslashes when set (a template string: a task argument, a
+// variable's value).
+func (e *Engine) parseTemplateEscaping(src string, pos Position, escapeBackslashes bool) ([]tmplNode, error) {
+	toks, err := lexEscaping(src, e.Opts, pos, escapeBackslashes)
 	if err != nil {
 		return nil, err
 	}

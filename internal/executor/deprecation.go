@@ -103,3 +103,14 @@ func DeprecationHint() string {
 	}
 	return ""
 }
+
+// templateWarning shows a warning raised rendering a template, at the
+// template's origin when it has one.
+func (r *Runner) templateWarning(pos template.Position, msg string) {
+	if pos.File == "" || pos.Line == 0 {
+		r.warnBlock("[WARNING]: " + msg + "\n")
+		return
+	}
+	r.warnBlock(fmt.Sprintf("[WARNING]: %s\nOrigin: %s:%d:%d\n\n%s\n", msg, pos.File, pos.Line, pos.Col,
+		template.SourceExcerpt(pos.File, pos.Line, pos.Col)))
+}

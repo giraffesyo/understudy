@@ -1,0 +1,1148 @@
+{
+ "vars": {
+  "d": {
+   "b": 1,
+   "a": 2
+  },
+  "users": [
+   {
+    "name": "alice",
+    "groups": [
+     "wheel",
+     "adm"
+    ],
+    "info": {
+     "keys": [
+      "k1"
+     ]
+    }
+   },
+   {
+    "name": "bob",
+    "groups": [],
+    "info": {
+     "keys": [
+      "k2",
+      "k3"
+     ]
+    }
+   }
+  ],
+  "byname": {
+   "x": {
+    "id": 1,
+    "n": "a"
+   },
+   "y": {
+    "id": 2,
+    "n": "b"
+   }
+  },
+  "long": "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt",
+  "res": {
+   "changed": false,
+   "failed": false
+  }
+ },
+ "cases": [
+  {
+   "template": "{{ d | items }}",
+   "value": [
+    [
+     "b",
+     1
+    ],
+    [
+     "a",
+     2
+    ]
+   ]
+  },
+  {
+   "template": "{{ d | items | list }}",
+   "value": [
+    [
+     "b",
+     1
+    ],
+    [
+     "a",
+     2
+    ]
+   ]
+  },
+  {
+   "template": "x{{ d | items | list }}",
+   "value": "x[['b', 1], ['a', 2]]"
+  },
+  {
+   "template": "{{ 'abc' | items }}",
+   "error": "The filter plugin 'ansible.builtin.items' failed: Can only get item pairs from a mapping."
+  },
+  {
+   "template": "{{ [] | items }}",
+   "error": "The filter plugin 'ansible.builtin.items' failed: Can only get item pairs from a mapping."
+  },
+  {
+   "template": "{{ d | attr('nope') is undefined }}",
+   "value": true
+  },
+  {
+   "template": "{{ 'abc' | attr('nope') is defined }}",
+   "value": false
+  },
+  {
+   "template": "{{ '<a href=\"x\">&\\'</a>' | e }}",
+   "value": "&lt;a href=&#34;x&#34;&gt;&amp;\\&#39;&lt;/a&gt;"
+  },
+  {
+   "template": "{{ '<a>' | escape | e }}",
+   "value": "&lt;a&gt;"
+  },
+  {
+   "template": "{{ ('<a>' | e) | forceescape }}",
+   "value": "&amp;lt;a&amp;gt;"
+  },
+  {
+   "template": "{{ '<b>' | safe }}",
+   "value": "<b>"
+  },
+  {
+   "template": "{{ 'x' ~ ('<' | e) }}",
+   "value": "x&lt;"
+  },
+  {
+   "template": "{{ ('<' | e) + '<' }}",
+   "value": "&lt;&lt;"
+  },
+  {
+   "template": "{{ '<' + ('<' | e) }}",
+   "value": "&lt;&lt;"
+  },
+  {
+   "template": "{{ ('<a>' | e) | upper }}",
+   "value": "&LT;A&GT;"
+  },
+  {
+   "template": "{{ 3 | e }}",
+   "value": "3"
+  },
+  {
+   "template": "{{ none | e }}",
+   "value": "None"
+  },
+  {
+   "template": "{{ ['<', 1] | e }}",
+   "value": "[&#39;&lt;&#39;, 1]"
+  },
+  {
+   "template": "{{ d | tojson }}",
+   "value": "{\"a\": 2, \"b\": 1}"
+  },
+  {
+   "template": "{{ {'k': \"<it's & that>\"} | tojson }}",
+   "value": "{\"k\": \"\\u003cit\\u0027s \\u0026 that\\u003e\"}"
+  },
+  {
+   "template": "{{ [1, {'b': 2, 'a': [none, true]}] | tojson(indent=2) }}",
+   "value": "[\n  1,\n  {\n    \"a\": [\n      null,\n      true\n    ],\n    \"b\": 2\n  }\n]"
+  },
+  {
+   "template": "{{ 'x' | tojson(indent=0) }}",
+   "value": "\"x\""
+  },
+  {
+   "template": "{{ ['é'] | tojson }}",
+   "value": "[\"\\u00e9\"]"
+  },
+  {
+   "template": "{{ d | pprint }}",
+   "value": "{'b': 1, 'a': 2}"
+  },
+  {
+   "template": "{{ long | pprint }}",
+   "value": "('aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm nnnn oooo '\n 'pppp qqqq rrrr ssss tttt')"
+  },
+  {
+   "template": "{{ (long ~ ' ' ~ long) | pprint }}",
+   "value": "('aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm nnnn oooo '\n 'pppp qqqq rrrr ssss tttt aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj '\n 'kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt')"
+  },
+  {
+   "template": "{{ 'a\\nb' | pprint }}",
+   "value": "'a\\\\nb'"
+  },
+  {
+   "template": "{{ 3.0 | pprint }}",
+   "value": "3.0"
+  },
+  {
+   "template": "{{ none | pprint }}",
+   "value": "None"
+  },
+  {
+   "template": "{{ range(40) | list | pprint }}",
+   "value": "[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]"
+  },
+  {
+   "template": "{{ ('<a>' | e) | pprint }}",
+   "value": "Markup('&lt;a&gt;')"
+  },
+  {
+   "template": "{{ (long ~ '\\n' ~ long ~ '\\n') | pprint }}",
+   "value": "('aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm nnnn oooo '\n 'pppp qqqq rrrr ssss tttt\\\\naaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj '\n 'kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt\\\\n')"
+  },
+  {
+   "template": "{{ 'a b&c/d?e=f' | urlencode }}",
+   "value": "a%20b%26c/d%3Fe%3Df"
+  },
+  {
+   "template": "{{ d | urlencode }}",
+   "value": "b=1&a=2"
+  },
+  {
+   "template": "{{ [['a', 'b c'], ['d/e', 1]] | urlencode }}",
+   "value": "a=b+c&d%2Fe=1"
+  },
+  {
+   "template": "{{ 3 | urlencode }}",
+   "value": "3"
+  },
+  {
+   "template": "{{ {'a b': 'c/d', 'x': none} | urlencode }}",
+   "value": "a+b=c%2Fd&x=None"
+  },
+  {
+   "template": "{{ 'é~' | urlencode }}",
+   "value": "%C3%A9~"
+  },
+  {
+   "template": "{{ ['abc'] | urlencode }}",
+   "error": "The filter plugin 'ansible.builtin.urlencode' failed: too many values to unpack (expected 2)"
+  },
+  {
+   "template": "{{ [1] | urlencode }}",
+   "error": "The filter plugin 'ansible.builtin.urlencode' failed: cannot unpack non-iterable int object"
+  },
+  {
+   "template": "{{ 'a%20b+c%zz%41' | urldecode }}",
+   "value": "a b c%zzA"
+  },
+  {
+   "template": "{{ '%C3%A9%C3' | urldecode }}",
+   "value": "é�"
+  },
+  {
+   "template": "{{ 3 | urldecode }}",
+   "error": "The filter plugin 'ansible.builtin.urldecode' failed: 'int' object has no attribute 'replace'"
+  },
+  {
+   "template": "{{ 0 | filesizeformat }}",
+   "value": "0 Bytes"
+  },
+  {
+   "template": "{{ 1 | filesizeformat }}",
+   "value": "1 Byte"
+  },
+  {
+   "template": "{{ 999 | filesizeformat }}",
+   "value": "999 Bytes"
+  },
+  {
+   "template": "{{ 1000 | filesizeformat }}",
+   "value": "1.0 kB"
+  },
+  {
+   "template": "{{ 12345678 | filesizeformat }}",
+   "value": "12.3 MB"
+  },
+  {
+   "template": "{{ 1024 | filesizeformat(true) }}",
+   "value": "1.0 KiB"
+  },
+  {
+   "template": "{{ '1048576' | filesizeformat(binary=true) }}",
+   "value": "1.0 MiB"
+  },
+  {
+   "template": "{{ 1e30 | filesizeformat }}",
+   "value": "1000000.0 YB"
+  },
+  {
+   "template": "{{ -5 | filesizeformat }}",
+   "value": "-5 Bytes"
+  },
+  {
+   "template": "{{ 'x' | filesizeformat }}",
+   "error": "The filter plugin 'ansible.builtin.filesizeformat' failed: could not convert string to float: 'x'"
+  },
+  {
+   "template": "{{ 'Hello world, foo_bar 12 été' | wordcount }}",
+   "value": 5
+  },
+  {
+   "template": "{{ '' | wordcount }}",
+   "value": 0
+  },
+  {
+   "template": "{{ 123 | wordcount }}",
+   "value": 1
+  },
+  {
+   "template": "{{ 'a <b>bold</b>  &amp; <!-- c <d> --> e &lt;f&gt; &raquo;' | striptags }}",
+   "value": "a bold & e <f> »"
+  },
+  {
+   "template": "{{ '<a' | striptags }}",
+   "value": "<a"
+  },
+  {
+   "template": "{{ {'class': 'x y', 'id': 3, 'n': none, 'v': '<\"&>'} | xmlattr }}",
+   "value": " class=\"x y\" id=\"3\" v=\"&lt;&#34;&amp;&gt;\""
+  },
+  {
+   "template": "{{ {'a': 1} | xmlattr(false) }}",
+   "value": "a=\"1\""
+  },
+  {
+   "template": "{{ {} | xmlattr }}",
+   "value": ""
+  },
+  {
+   "template": "{{ {'a b': 1} | xmlattr }}",
+   "error": "The filter plugin 'ansible.builtin.xmlattr' failed: Invalid character in attribute name: 'a b'"
+  },
+  {
+   "template": "{{ {'a/b': 1} | xmlattr }}",
+   "error": "The filter plugin 'ansible.builtin.xmlattr' failed: Invalid character in attribute name: 'a/b'"
+  },
+  {
+   "template": "{{ 'see http://x.com now' | urlize }}",
+   "value": "see <a href=\"http://x.com\" rel=\"noopener\">http://x.com</a> now"
+  },
+  {
+   "template": "{{ 'go to www.example.com, or (https://x.org/a). mail me@x.com' | urlize }}",
+   "value": "go to <a href=\"https://www.example.com\" rel=\"noopener\">www.example.com</a>, or (<a href=\"https://x.org/a\" rel=\"noopener\">https://x.org/a</a>). mail <a href=\"mailto:me@x.com\">me@x.com</a>"
+  },
+  {
+   "template": "{{ 'http://averyveryverylongurl.com/path' | urlize(10, true, '_blank') }}",
+   "value": "<a href=\"http://averyveryverylongurl.com/path\" rel=\"nofollow noopener\" target=\"_blank\">http://ave...</a>"
+  },
+  {
+   "template": "{{ 'x <http://a.com> y' | urlize }}",
+   "value": "x &lt;<a href=\"http://a.com\" rel=\"noopener\">http://a.com</a>&gt; y"
+  },
+  {
+   "template": "{{ 'mailto:a@b.com mailto:bad @x a@b@c example.org' | urlize }}",
+   "value": "<a href=\"mailto:a@b.com\">a@b.com</a> mailto:bad @x a@b@c <a href=\"https://example.org\" rel=\"noopener\">example.org</a>"
+  },
+  {
+   "template": "{{ 'ftp://x tel:123' | urlize(extra_schemes=['ftp://', 'tel:']) }}",
+   "value": "<a href=\"ftp://x\" rel=\"noopener\">ftp://x</a> <a href=\"tel:123\" rel=\"noopener\">tel:123</a>"
+  },
+  {
+   "template": "{{ 'https://127.0.0.1:8080/x?y#z http://[::1]/' | urlize(rel='me') }}",
+   "value": "<a href=\"https://127.0.0.1:8080/x?y#z\" rel=\"me noopener\">https://127.0.0.1:8080/x?y#z</a> <a href=\"http://[::1]/\" rel=\"me noopener\">http://[::1]/</a>"
+  },
+  {
+   "template": "{{ 'x' | urlize(extra_schemes=['bad']) }}",
+   "error": "The filter plugin 'ansible.builtin.urlize' failed: 'bad' is not a valid URI scheme prefix."
+  },
+  {
+   "template": "{{ '(www.a.com)' | urlize }}",
+   "value": "(<a href=\"https://www.a.com\" rel=\"noopener\">www.a.com</a>)"
+  },
+  {
+   "template": "{{ 'a.b.c foo.com bar.net' | urlize }}",
+   "value": "a.b.c <a href=\"https://foo.com\" rel=\"noopener\">foo.com</a> <a href=\"https://bar.net\" rel=\"noopener\">bar.net</a>"
+  },
+  {
+   "template": "{{ [1, 2] | product([3, 4]) }}",
+   "value": [
+    [
+     1,
+     3
+    ],
+    [
+     1,
+     4
+    ],
+    [
+     2,
+     3
+    ],
+    [
+     2,
+     4
+    ]
+   ]
+  },
+  {
+   "template": "{{ [1, 2] | product('ab', repeat=2) | length }}",
+   "value": 16
+  },
+  {
+   "template": "{{ [1, 2] | product(repeat=-1) }}",
+   "error": "The filter plugin 'ansible.builtin.product' failed: repeat argument cannot be negative"
+  },
+  {
+   "template": "{{ [1, 2] | product(3) }}",
+   "error": "The filter plugin 'ansible.builtin.product' failed: 'int' object is not iterable"
+  },
+  {
+   "template": "{{ [] | product([1]) }}",
+   "value": []
+  },
+  {
+   "template": "{{ [1, 2] | product }}",
+   "value": [
+    [
+     1
+    ],
+    [
+     2
+    ]
+   ]
+  },
+  {
+   "template": "{{ [1, 2, 3, 4] | combinations(2) }}",
+   "value": [
+    [
+     1,
+     2
+    ],
+    [
+     1,
+     3
+    ],
+    [
+     1,
+     4
+    ],
+    [
+     2,
+     3
+    ],
+    [
+     2,
+     4
+    ],
+    [
+     3,
+     4
+    ]
+   ]
+  },
+  {
+   "template": "{{ 'abc' | combinations(3) }}",
+   "value": [
+    [
+     "a",
+     "b",
+     "c"
+    ]
+   ]
+  },
+  {
+   "template": "{{ [1, 2] | combinations(5) }}",
+   "value": []
+  },
+  {
+   "template": "{{ [1, 2] | combinations(-1) }}",
+   "error": "The filter plugin 'ansible.builtin.combinations' failed: r must be non-negative"
+  },
+  {
+   "template": "{{ [1, 2] | combinations('a') }}",
+   "error": "The filter plugin 'ansible.builtin.combinations' failed: 'str' object cannot be interpreted as an integer"
+  },
+  {
+   "template": "{{ [1, 2] | combinations(1.0) }}",
+   "error": "The filter plugin 'ansible.builtin.combinations' failed: 'float' object cannot be interpreted as an integer"
+  },
+  {
+   "template": "{{ [1, 2, 3] | permutations }}",
+   "value": [
+    [
+     1,
+     2,
+     3
+    ],
+    [
+     1,
+     3,
+     2
+    ],
+    [
+     2,
+     1,
+     3
+    ],
+    [
+     2,
+     3,
+     1
+    ],
+    [
+     3,
+     1,
+     2
+    ],
+    [
+     3,
+     2,
+     1
+    ]
+   ]
+  },
+  {
+   "template": "{{ [1, 2, 3] | permutations(2) }}",
+   "value": [
+    [
+     1,
+     2
+    ],
+    [
+     1,
+     3
+    ],
+    [
+     2,
+     1
+    ],
+    [
+     2,
+     3
+    ],
+    [
+     3,
+     1
+    ],
+    [
+     3,
+     2
+    ]
+   ]
+  },
+  {
+   "template": "{{ [1, 2] | permutations(0) }}",
+   "value": [
+    []
+   ]
+  },
+  {
+   "template": "{{ [1, 2] | permutations(-2) }}",
+   "error": "The filter plugin 'ansible.builtin.permutations' failed: r must be non-negative"
+  },
+  {
+   "template": "{{ 'ab' | zip_longest('xyz', [1]) }}",
+   "value": [
+    [
+     "a",
+     "x",
+     1
+    ],
+    [
+     "b",
+     "y",
+     null
+    ],
+    [
+     null,
+     "z",
+     null
+    ]
+   ]
+  },
+  {
+   "template": "{{ [1] | zip_longest([2, 3], fillvalue='-') }}",
+   "value": [
+    [
+     1,
+     2
+    ],
+    [
+     "-",
+     3
+    ]
+   ]
+  },
+  {
+   "template": "{{ [1] | zip_longest(1) }}",
+   "error": "The filter plugin 'ansible.builtin.zip_longest' failed: 'int' object is not iterable"
+  },
+  {
+   "template": "{{ '/a/./b/../c//d/' | normpath }}",
+   "value": "/a/c/d"
+  },
+  {
+   "template": "{{ '//a' | normpath }}",
+   "value": "//a"
+  },
+  {
+   "template": "{{ '///a/b' | normpath }}",
+   "value": "/a/b"
+  },
+  {
+   "template": "{{ '' | normpath }}",
+   "value": "."
+  },
+  {
+   "template": "{{ '../x/..' | normpath }}",
+   "value": ".."
+  },
+  {
+   "template": "{{ 'a/../../b' | normpath }}",
+   "value": "../b"
+  },
+  {
+   "template": "{{ 3 | normpath }}",
+   "error": "The filter plugin 'ansible.builtin.normpath' failed: _path_normpath: path should be string, bytes or os.PathLike, not int"
+  },
+  {
+   "template": "{{ '/etc/ssh/sshd_config' | relpath('/etc/pki') }}",
+   "value": "../ssh/sshd_config"
+  },
+  {
+   "template": "{{ '/a/b' | relpath('/a/b') }}",
+   "value": "."
+  },
+  {
+   "template": "{{ '/' | relpath('/a/b') }}",
+   "value": "../.."
+  },
+  {
+   "template": "{{ '' | relpath('/') }}",
+   "error": "The filter plugin 'ansible.builtin.relpath' failed: no path specified"
+  },
+  {
+   "template": "{{ 3 | relpath('/') }}",
+   "error": "The filter plugin 'ansible.builtin.relpath' failed: expected str, bytes or os.PathLike object, not int"
+  },
+  {
+   "template": "{{ ['/usr/lib', '/usr/local/lib', '/usr/lib/x'] | commonpath }}",
+   "value": "/usr"
+  },
+  {
+   "template": "{{ ['a/b/./c', 'a/b/d'] | commonpath }}",
+   "value": "a/b"
+  },
+  {
+   "template": "{{ ['/usr/lib', 'usr'] | commonpath }}",
+   "error": "The filter plugin 'ansible.builtin.commonpath' failed: Can't mix absolute and relative paths"
+  },
+  {
+   "template": "{{ [] | commonpath }}",
+   "error": "The filter plugin 'ansible.builtin.commonpath' failed: commonpath() arg is an empty sequence"
+  },
+  {
+   "template": "{{ '/usr' | commonpath }}",
+   "error": "The filter plugin 'ansible.builtin.commonpath' failed: |commonpath expects sequence, got <class 'str'> instead."
+  },
+  {
+   "template": "{{ ['/a', 3] | commonpath }}",
+   "error": "The filter plugin 'ansible.builtin.commonpath' failed: expected str, bytes or os.PathLike object, not int"
+  },
+  {
+   "template": "{{ 'C:\\\\Users\\\\me\\\\file.txt' | win_basename }}",
+   "value": "file.txt"
+  },
+  {
+   "template": "{{ 'C:\\\\Users\\\\me\\\\file.txt' | win_dirname }}",
+   "value": "C:\\\\Users\\\\me"
+  },
+  {
+   "template": "{{ 'C:/Users/me/' | win_dirname }}",
+   "value": "C:/Users/me"
+  },
+  {
+   "template": "{{ 'C:Users' | win_splitdrive }}",
+   "value": [
+    "C:",
+    "Users"
+   ]
+  },
+  {
+   "template": "{{ 'C:\\\\Users' | win_splitdrive }}",
+   "value": [
+    "C:",
+    "\\\\Users"
+   ]
+  },
+  {
+   "template": "{{ 'x/y\\\\z' | win_basename }}",
+   "value": "z"
+  },
+  {
+   "template": "{{ 3 | win_basename }}",
+   "error": "The filter plugin 'ansible.builtin.win_basename' failed: expected str, bytes or os.PathLike object, not int"
+  },
+  {
+   "template": "{{ 'abc' | to_uuid }}",
+   "value": "27dc713b-d72c-5825-88f3-9f240e739319"
+  },
+  {
+   "template": "{{ 'abc' | to_uuid(namespace='6ba7b810-9dad-11d1-80b4-00c04fd430c8') }}",
+   "value": "6cb8e707-0fc5-5f55-88d4-d4fed43e64a8"
+  },
+  {
+   "template": "{{ 'abc' | to_uuid(namespace='{6BA7B810-9DAD-11D1-80B4-00C04FD430C8}') }}",
+   "value": "6cb8e707-0fc5-5f55-88d4-d4fed43e64a8"
+  },
+  {
+   "template": "{{ 'abc' | to_uuid(namespace='zz') }}",
+   "error": "The filter plugin 'ansible.builtin.to_uuid' failed: Invalid value 'zz' for 'namespace': badly formed hexadecimal UUID string"
+  },
+  {
+   "template": "{{ 'abc' | to_uuid(namespace='zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz') }}",
+   "error": "The filter plugin 'ansible.builtin.to_uuid' failed: Invalid value 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz' for 'namespace': invalid literal for int() with base 16: 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'"
+  },
+  {
+   "template": "{{ 3 | to_uuid }}",
+   "value": "18b97bda-fcec-5328-a2c1-acfdc3a9a92e"
+  },
+  {
+   "template": "{{ [1] | to_uuid }}",
+   "value": "e25973d8-8f4f-54c3-a717-c97789ec482a"
+  },
+  {
+   "template": "{{ users | subelements('groups') }}",
+   "value": [
+    [
+     {
+      "name": "alice",
+      "groups": [
+       "wheel",
+       "adm"
+      ],
+      "info": {
+       "keys": [
+        "k1"
+       ]
+      }
+     },
+     "wheel"
+    ],
+    [
+     {
+      "name": "alice",
+      "groups": [
+       "wheel",
+       "adm"
+      ],
+      "info": {
+       "keys": [
+        "k1"
+       ]
+      }
+     },
+     "adm"
+    ]
+   ]
+  },
+  {
+   "template": "{{ users | subelements('info.keys') }}",
+   "value": [
+    [
+     {
+      "name": "alice",
+      "groups": [
+       "wheel",
+       "adm"
+      ],
+      "info": {
+       "keys": [
+        "k1"
+       ]
+      }
+     },
+     "k1"
+    ],
+    [
+     {
+      "name": "bob",
+      "groups": [],
+      "info": {
+       "keys": [
+        "k2",
+        "k3"
+       ]
+      }
+     },
+     "k2"
+    ],
+    [
+     {
+      "name": "bob",
+      "groups": [],
+      "info": {
+       "keys": [
+        "k2",
+        "k3"
+       ]
+      }
+     },
+     "k3"
+    ]
+   ]
+  },
+  {
+   "template": "{{ users | subelements(['info', 'keys']) }}",
+   "value": [
+    [
+     {
+      "name": "alice",
+      "groups": [
+       "wheel",
+       "adm"
+      ],
+      "info": {
+       "keys": [
+        "k1"
+       ]
+      }
+     },
+     "k1"
+    ],
+    [
+     {
+      "name": "bob",
+      "groups": [],
+      "info": {
+       "keys": [
+        "k2",
+        "k3"
+       ]
+      }
+     },
+     "k2"
+    ],
+    [
+     {
+      "name": "bob",
+      "groups": [],
+      "info": {
+       "keys": [
+        "k2",
+        "k3"
+       ]
+      }
+     },
+     "k3"
+    ]
+   ]
+  },
+  {
+   "template": "{{ users | subelements('nope', skip_missing=true) }}",
+   "value": []
+  },
+  {
+   "template": "{{ users | subelements('name') }}",
+   "error": "The filter plugin 'ansible.builtin.subelements' failed: the key 'name' should point to a list, got 'alice'"
+  },
+  {
+   "template": "{{ 'x' | subelements('name') }}",
+   "error": "The filter plugin 'ansible.builtin.subelements' failed: obj must be a list of dicts or a nested dict"
+  },
+  {
+   "template": "{{ users | subelements(3) }}",
+   "error": "The filter plugin 'ansible.builtin.subelements' failed: subelements must be a list or a string"
+  },
+  {
+   "template": "{{ byname | subelements('n') }}",
+   "error": "The filter plugin 'ansible.builtin.subelements' failed: the key 'n' should point to a list, got 'a'"
+  },
+  {
+   "template": "{{ byname | rekey_on_member('n') }}",
+   "value": {
+    "a": {
+     "id": 1,
+     "n": "a"
+    },
+    "b": {
+     "id": 2,
+     "n": "b"
+    }
+   }
+  },
+  {
+   "template": "{{ [{'n': 'a'}, {'n': 'a', 'z': 1}] | rekey_on_member('n') }}",
+   "error": "The filter plugin 'ansible.builtin.rekey_on_member' failed: Key 'a' is not unique, cannot convert to dict."
+  },
+  {
+   "template": "{{ [{'n': 'a'}, {'n': 'a', 'z': 1}] | rekey_on_member('n', duplicates='overwrite') }}",
+   "value": {
+    "a": {
+     "n": "a",
+     "z": 1
+    }
+   }
+  },
+  {
+   "template": "{{ [1] | rekey_on_member('q') }}",
+   "error": "The filter plugin 'ansible.builtin.rekey_on_member' failed: List item is not a valid dict"
+  },
+  {
+   "template": "{{ 'abc' | rekey_on_member('q') }}",
+   "error": "The filter plugin 'ansible.builtin.rekey_on_member' failed: Type is not a valid list, set, or dict"
+  },
+  {
+   "template": "{{ [] | rekey_on_member('q', duplicates='x') }}",
+   "error": "The filter plugin 'ansible.builtin.rekey_on_member' failed: duplicates parameter to rekey_on_member has unknown value 'x'"
+  },
+  {
+   "template": "{{ '2020-01-02 03:04:05' | to_datetime }}",
+   "value": "2020-01-02T03:04:05"
+  },
+  {
+   "template": "x{{ '2020-01-02 03:04:05' | to_datetime }}",
+   "value": "x2020-01-02 03:04:05"
+  },
+  {
+   "template": "{{ ['2020-01-02' | to_datetime('%Y-%m-%d')] | string }}",
+   "value": "[datetime.datetime(2020, 1, 2, 0, 0)]"
+  },
+  {
+   "template": "{{ ('2020-01-02 03:04:05' | to_datetime).year }}",
+   "value": 2020
+  },
+  {
+   "template": "{{ (('2020-01-02 03:04:05' | to_datetime) - ('2019-12-31 00:00:00' | to_datetime)).days }}",
+   "value": 2
+  },
+  {
+   "template": "{{ (('2020-01-02 03:04:05' | to_datetime) - ('2019-12-31 00:00:00' | to_datetime)).total_seconds() }}",
+   "value": 183845.0
+  },
+  {
+   "template": "{{ (('2019-12-31 00:00:00' | to_datetime) - ('2020-01-02 03:04:05' | to_datetime)) | string }}",
+   "value": "-3 days, 20:55:55"
+  },
+  {
+   "template": "{{ (('2019-12-31 00:00:00' | to_datetime) - ('2020-01-02 03:04:05' | to_datetime)).seconds }}",
+   "value": 75355
+  },
+  {
+   "template": "{{ ('2020-01-02' | to_datetime('%Y-%m-%d')) < ('2020-01-03' | to_datetime('%Y-%m-%d')) }}",
+   "value": true
+  },
+  {
+   "template": "{{ ('2020-01-02' | to_datetime('%Y-%m-%d')) == ('2020-01-02 00:00:00' | to_datetime) }}",
+   "value": true
+  },
+  {
+   "template": "{{ ('2020-01-02' | to_datetime('%Y-%m-%d')).strftime('%d/%m/%y %a %b %j %p') }}",
+   "value": "02/01/20 Thu Jan 002 AM"
+  },
+  {
+   "template": "{{ '2021-06-01T12:30:00.25+0200' | to_datetime('%Y-%m-%dT%H:%M:%S.%f%z') }}",
+   "value": "2021-06-01T12:30:00.250000+02:00"
+  },
+  {
+   "template": "{{ '2021-06-01T12:30:00Z' | to_datetime('%Y-%m-%dT%H:%M:%S%z') }}",
+   "value": "2021-06-01T12:30:00+00:00"
+  },
+  {
+   "template": "{{ '2021-06-01 -05:30' | to_datetime('%Y-%m-%d %z') | string }}",
+   "value": "2021-06-01 00:00:00-05:30"
+  },
+  {
+   "template": "{{ 'Jun 1 2021 1:05PM' | to_datetime('%b %d %Y %I:%M%p') }}",
+   "value": "2021-06-01T13:05:00"
+  },
+  {
+   "template": "{{ 'monday JUNE 07 21' | to_datetime('%A %B %d %y') }}",
+   "value": "2021-06-07T00:00:00"
+  },
+  {
+   "template": "{{ '12/31/99 23:59' | to_datetime('%D %R') }}",
+   "error": "The filter plugin 'ansible.builtin.to_datetime' failed: 'D' is a bad directive in format '%D %R'"
+  },
+  {
+   "template": "{{ '2021 100' | to_datetime('%Y %j') }}",
+   "value": "2021-04-10T00:00:00"
+  },
+  {
+   "template": "{{ '1  2   2021' | to_datetime('%m %d %Y') }}",
+   "value": "2021-01-02T00:00:00"
+  },
+  {
+   "template": "{{ 'bad' | to_datetime }}",
+   "error": "The filter plugin 'ansible.builtin.to_datetime' failed: time data 'bad' does not match format '%Y-%m-%d %H:%M:%S'"
+  },
+  {
+   "template": "{{ '2020-01-02 03:04:05x' | to_datetime }}",
+   "error": "The filter plugin 'ansible.builtin.to_datetime' failed: unconverted data remains: x"
+  },
+  {
+   "template": "{{ '2020-02-30' | to_datetime('%Y-%m-%d') }}",
+   "error": "The filter plugin 'ansible.builtin.to_datetime' failed: day 30 must be in range 1..29 for month 2 in year 2020"
+  },
+  {
+   "template": "{{ '2020' | to_datetime('%q') }}",
+   "error": "The filter plugin 'ansible.builtin.to_datetime' failed: 'q' is a bad directive in format '%q'"
+  },
+  {
+   "template": "{{ '2020' | to_datetime('%Y%') }}",
+   "error": "The filter plugin 'ansible.builtin.to_datetime' failed: stray % in format '%Y%'"
+  },
+  {
+   "template": "{{ 3 | to_datetime }}",
+   "error": "The filter plugin 'ansible.builtin.to_datetime' failed: strptime() argument 1 must be str, not int"
+  },
+  {
+   "template": "{{ 'x' | to_datetime(3) }}",
+   "error": "The filter plugin 'ansible.builtin.to_datetime' failed: strptime() argument 2 must be str, not int"
+  },
+  {
+   "template": "{{ ('2020-01-02 03:04:05' | to_datetime) | pprint }}",
+   "value": "datetime.datetime(2020, 1, 2, 3, 4, 5)"
+  },
+  {
+   "template": "{{ ('2020-01-02 03:04:05' | to_datetime) | to_json }}",
+   "value": "\"2020-01-02T03:04:05\""
+  },
+  {
+   "template": "{{ ('2020-01-02 03:04:05' | to_datetime) | type_debug }}",
+   "value": "datetime"
+  },
+  {
+   "template": "{{ (('2020-01-02' | to_datetime('%Y-%m-%d')) - ('2020-01-01' | to_datetime('%Y-%m-%d'))) | type_debug }}",
+   "value": "timedelta"
+  },
+  {
+   "template": "{{ ('2020-01-02 03:04:05.000001' | to_datetime('%Y-%m-%d %H:%M:%S.%f')).microsecond }}",
+   "value": 1
+  },
+  {
+   "template": "{{ 'abc' is lower }} {{ 'aBc' is lower }} {{ '123' is lower }} {{ 'ABC 1' is upper }} {{ 3 is upper }} {{ 'ǅ' is upper }}",
+   "value": "True False False True False False"
+  },
+  {
+   "template": "{{ '/etc' is abs }} {{ 'etc' is is_abs }} {{ '' is abs }}",
+   "value": "True False False"
+  },
+  {
+   "template": "{{ 3 is abs }}",
+   "error": "The test plugin 'ansible.builtin.abs' failed: expected str, bytes or os.PathLike object, not int"
+  },
+  {
+   "template": "{{ (0.0 / 1) is nan }} {{ 'nan' is nan }} {{ ('nan' | float) is isnan }} {{ 3 is nan }} {{ none is nan }}",
+   "value": "False False True False False"
+  },
+  {
+   "template": "{{ [1, 2] is issubset([1, 2, 3]) }} {{ [1, 2, 3] is issuperset([1]) }} {{ 'ab' is issubset('abc') }}",
+   "value": "True True True"
+  },
+  {
+   "template": "{{ [[1]] is issubset([[1]]) }}",
+   "error": "The test plugin 'ansible.builtin.issubset' failed: cannot use 'ansible._internal._templating._lazy_containers._AnsibleLazyTemplateList' as a set element (unhashable type: '_AnsibleLazyTemplateList')"
+  },
+  {
+   "template": "{{ [{}] is issuperset([1]) }}",
+   "error": "The test plugin 'ansible.builtin.issuperset' failed: cannot use 'ansible._internal._templating._lazy_containers._AnsibleLazyTemplateDict' as a set element (unhashable type: '_AnsibleLazyTemplateDict')"
+  },
+  {
+   "template": "{{ 3 is issubset([1]) }}",
+   "error": "The test plugin 'ansible.builtin.issubset' failed: 'int' object is not iterable"
+  },
+  {
+   "template": "{{ 'upper' is filter }} {{ 'ansible.builtin.upper' is filter }} {{ 'nope' is filter }} {{ 'url' is test }} {{ 3 is test }} {{ 'url' is filter }}",
+   "value": "True True False True True False"
+  },
+  {
+   "template": "{{ [1] is filter }}",
+   "error": "The test plugin 'ansible.builtin.filter' failed: cannot use 'ansible._internal._templating._lazy_containers._AnsibleLazyTemplateList' as a dict key (unhashable type: '_AnsibleLazyTemplateList')"
+  },
+  {
+   "template": "{{ {} is test }}",
+   "error": "The test plugin 'ansible.builtin.test' failed: cannot use 'ansible._internal._templating._lazy_containers._AnsibleLazyTemplateDict' as a dict key (unhashable type: '_AnsibleLazyTemplateDict')"
+  },
+  {
+   "template": "{{ 'x' is escaped }} {{ 'x' | e is escaped }} {{ 'x' | forceescape | safe is escaped }}",
+   "value": "False True True"
+  },
+  {
+   "template": "{{ res is successful }} {{ res is reachable }} {{ res is unreachable }} {{ res is timedout }} {{ res is change }}",
+   "value": "True True False False False"
+  },
+  {
+   "template": "{{ {'timedout': {'period': 3}} is timedout }} {{ {'timedout': {}} is timedout }} {{ {'unreachable': 1} is reachable }}",
+   "value": "True False False"
+  },
+  {
+   "template": "{{ {'timedout': 1} is timedout }}",
+   "error": "The test plugin 'ansible.builtin.timedout' failed: 'int' object has no attribute 'get'"
+  },
+  {
+   "template": "{{ 'x' is reachable }}",
+   "error": "The test plugin 'ansible.builtin.reachable' failed: The 'unreachable' test expects a dictionary"
+  },
+  {
+   "template": "{{ {'started': 0, 'finished': 1} is started }} {{ {'finished': 1} is finished }}",
+   "value": "False True"
+  },
+  {
+   "template": "{{ 'http://x.com/a' is url }} {{ 'x.com' is url }} {{ 'file:///etc' is url }} {{ 'mailto:me@x' is uri }} {{ 'urn:isbn:1' is urn }}",
+   "value": "True False True True True"
+  },
+  {
+   "template": "{{ 'foo' is uri }} {{ 3 is uri }} {{ '' is uri }} {{ 'HTTP://x' is url(['http']) }} {{ 'https://x' is uri(['http']) }}",
+   "value": "True False True True False"
+  },
+  {
+   "template": "{{ 'https://x' is url(schemes=['https']) }} {{ 'http://[x' is url }} {{ 'git+ssh://h/r' is url }} {{ 'urn:x' is urn }} {{ 'URN:x' is urn }}",
+   "value": "True False True True True"
+  },
+  {
+   "template": "{{ [1, 2, 3, 2] | select('==', 2) | list }} {{ [1, 2, 3] | select('>', 1) | list }} {{ [1, 2, 3] | reject('<=', 2) | list }}",
+   "value": "[2, 2] [2, 3] [3]"
+  },
+  {
+   "template": "{{ [1, 2, 3] | select('!=', 2) | list }} {{ [1, 2, 3] | select('>=', 2) | list }} {{ [1, 2, 3] | select('<', 2) | list }}",
+   "value": "[1, 3] [2, 3] [1]"
+  },
+  {
+   "template": "{{ 'x' is vault_encrypted }} {{ ('x' | vault('pw', salt='s')) is vault_encrypted }}",
+   "value": "False False"
+  },
+  {
+   "template": "{{ 'secret' | vault('pw', salt='saltsaltsaltsalt') }}",
+   "value": "$ANSIBLE_VAULT;1.2;AES256;filter_default\n37333631366337343733363136633734373336313663373437333631366337340a30656437313265\n38373933356165303439656635396266646237613934653138643961343063393931393565613636\n30626238613233376535633430323463360a36323963643737623038613264313438313264376261\n37623132373439626533\n"
+  },
+  {
+   "template": "{{ 'secret' | vault('pw', salt='s', vault_id='myid') }}",
+   "value": "$ANSIBLE_VAULT;1.2;AES256;myid\n37330a30643137333163393936613333316566393530353839613231343235363931346231633033\n3333333330623132353836613961643038643064383066616633300a323765613136393531616338\n6338663763356131643638346166373635333132\n"
+  },
+  {
+   "template": "{{ 'secret' | vault('pw', salt='s', vault_id='default') }}",
+   "value": "$ANSIBLE_VAULT;1.1;AES256\n37330a30643137333163393936613333316566393530353839613231343235363931346231633033\n3333333330623132353836613961643038643064383066616633300a323765613136393531616338\n6338663763356131643638346166373635333132\n"
+  },
+  {
+   "template": "{{ 'secret' | vault('pw') | unvault('pw') }}",
+   "value": "secret"
+  },
+  {
+   "template": "{{ 'plain' | unvault('pw') }}",
+   "value": "plain"
+  },
+  {
+   "template": "{{ 3 | vault('pw') }}",
+   "error": "The filter plugin 'ansible.builtin.vault' failed: Can only vault strings, instead we got <class 'int'>."
+  },
+  {
+   "template": "{{ 'x' | vault(3) }}",
+   "error": "The filter plugin 'ansible.builtin.vault' failed: Secret passed is required to be a string, instead we got <class 'int'>."
+  },
+  {
+   "template": "{{ 'x' | vault('pw', salt='') }}",
+   "error": "The filter plugin 'ansible.builtin.vault' failed: Unable to encrypt: Empty or invalid salt passed to encrypt()"
+  },
+  {
+   "template": "{{ 3 | unvault('pw') }}",
+   "error": "The filter plugin 'ansible.builtin.unvault' failed: Vault should be in the form of a string, instead we got <class 'int'>."
+  },
+  {
+   "template": "{{ 'x' | unvault(none) }}",
+   "error": "The filter plugin 'ansible.builtin.unvault' failed: Secret passed is required to be as string, instead we got <class 'NoneType'>."
+  }
+ ]
+}
