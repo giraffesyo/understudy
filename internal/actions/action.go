@@ -43,6 +43,9 @@ type Context struct {
 	Connecting func()
 	// SetFact persists a fact for this host (set_fact, setup).
 	SetFact func(name string, value any)
+	// CacheFacts saves set_fact's cacheable facts (named in order) to
+	// the fact cache too; nil = not cached.
+	CacheFacts func(names []string, values map[string]any)
 	// SetIncludeVars stores include_vars results at their precedence layer
 	// for this host (or its delegate / run_once batch).
 	SetIncludeVars func(vars map[string]any)

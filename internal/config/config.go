@@ -80,6 +80,45 @@ type Config struct {
 	// TransformInvalidGroupChars is TRANSFORM_INVALID_GROUP_CHARS:
 	// "never", "always", "ignore" or "silently".
 	TransformInvalidGroupChars string
+
+	// The fact cache: CACHE_PLUGIN (fact_caching / ANSIBLE_CACHE_PLUGIN),
+	// and the cache plugin's options _uri, _prefix and _timeout
+	// (fact_caching_connection, fact_caching_prefix,
+	// fact_caching_timeout and their ANSIBLE_CACHE_PLUGIN_* variables).
+	// FactCachingConnection is a path, resolved as ansible-core resolves
+	// one (against the file's directory, or the working directory for
+	// the environment); "" when not set.
+	FactCaching           string
+	FactCachingConnection string
+	FactCachingPrefix     string
+	FactCachingTimeout    int
+	// Gathering is DEFAULT_GATHERING (gathering / ANSIBLE_GATHERING):
+	// "implicit", "explicit" or "smart".
+	Gathering string
+
+	ini *iniFile // the file loaded, for plugin options read from it
+}
+
+// PluginOption is a plugin option's value from the environment or the
+// file (the env names first, then the "section.key" ini entries), as
+// ConfigManager reads one: the last entry set wins, the environment over
+// the file. origin is "env: NAME" or the file's path.
+func (c *Config) PluginOption(env []string, ini []string) (value, origin string, ok bool) {
+	for _, e := range env {
+		if v, set := os.LookupEnv(e); set {
+			value, origin, ok = v, "env: "+e, true
+		}
+	}
+	if ok {
+		return value, origin, ok
+	}
+	for _, entry := range ini {
+		section, key, _ := strings.Cut(entry, ".")
+		if v, set := c.ini.get(section, key); set {
+			value, origin, ok = v, c.Source, true
+		}
+	}
+	return value, origin, ok
 }
 
 // Defaults returns Ansible's defaults for the supported keys.
@@ -104,6 +143,10 @@ func Defaults() *Config {
 		HostPatternMismatch:      "warning",
 
 		TransformInvalidGroupChars: "never",
+
+		FactCaching:        "memory",
+		FactCachingTimeout: 86400,
+		Gathering:          "implicit",
 	}
 }
 
@@ -150,6 +193,7 @@ func Load() (*Config, error) {
 	if err := checkTypedSettings(ini, path); err != nil {
 		return nil, err
 	}
+	cfg.ini = ini
 	if ini != nil {
 		applyINI(cfg, ini)
 		// pathspec values in the file resolve against its directory.
@@ -297,6 +341,33 @@ func applyINI(cfg *Config, f *iniFile) {
 		str(sk[0], sk[1], func(v string) { cfg.HostPatternMismatch = strings.ToLower(v) })
 	}
 	str("defaults", "force_valid_group_names", func(v string) { cfg.TransformInvalidGroupChars = strings.ToLower(v) })
+	str("defaults", "fact_caching", func(v string) { cfg.FactCaching = v })
+	if v, ok := f.get("defaults", "fact_caching_connection"); ok {
+		cfg.FactCachingConnection = resolvePath(v, filepath.Dir(cfg.Source))
+	}
+	if v, ok := f.get("defaults", "fact_caching_prefix"); ok {
+		cfg.FactCachingPrefix = v
+	}
+	integer("defaults", "fact_caching_timeout", func(n int) { cfg.FactCachingTimeout = n })
+	str("defaults", "gathering", func(v string) { cfg.Gathering = v })
+}
+
+// resolvePath is ensure_type's "path" conversion (resolve_path): ~ and
+// $VARS expanded, relative to basedir ("" = the working directory),
+// normalized but not resolved through symlinks.
+func resolvePath(p, basedir string) string {
+	p = os.ExpandEnv(expandUser(p))
+	if !filepath.IsAbs(p) {
+		if basedir == "" {
+			cwd, err := syscall.Getwd()
+			if err != nil {
+				return filepath.Clean(p)
+			}
+			basedir = cwd
+		}
+		p = filepath.Join(basedir, p)
+	}
+	return filepath.Clean(p)
 }
 
 // DefaultRolesPath is ansible-core's DEFAULT_ROLES_PATH.
@@ -435,6 +506,19 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ANSIBLE_TRANSFORM_INVALID_GROUP_CHARS"); v != "" {
 		cfg.TransformInvalidGroupChars = strings.ToLower(strings.TrimSpace(v))
+	}
+	if v, ok := os.LookupEnv("ANSIBLE_CACHE_PLUGIN"); ok {
+		cfg.FactCaching = v
+	}
+	if v, ok := os.LookupEnv("ANSIBLE_CACHE_PLUGIN_CONNECTION"); ok {
+		cfg.FactCachingConnection = resolvePath(v, "")
+	}
+	if v, ok := os.LookupEnv("ANSIBLE_CACHE_PLUGIN_PREFIX"); ok {
+		cfg.FactCachingPrefix = v
+	}
+	envInt("ANSIBLE_CACHE_PLUGIN_TIMEOUT", func(n int) { cfg.FactCachingTimeout = n }, def.FactCachingTimeout)
+	if v := os.Getenv("ANSIBLE_GATHERING"); v != "" {
+		cfg.Gathering = v
 	}
 }
 

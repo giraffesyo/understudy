@@ -1,0 +1,5 @@
+- hosts: all
+  gather_subset: ['!all', '!min']
+  tasks:
+    - debug: var=group_names
+    - debug: var=ansible_facts

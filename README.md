@@ -241,6 +241,24 @@ rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 `end_play`, `end_host`, `end_batch`, `clear_host_errors`, `clear_facts`,
 `reset_connection`, `refresh_inventory`, `noop`).
 
+**Fact caching** — ansible-core's builtin cache plugins, `memory` and
+`jsonfile` (`fact_caching`, `fact_caching_connection`,
+`fact_caching_prefix`, `fact_caching_timeout` and their
+`ANSIBLE_CACHE_PLUGIN*` variables), with the `gathering` policy
+(`implicit`, `explicit`, `smart`), `set_fact`'s `cacheable`, `meta:
+clear_facts` and `constructed` reading the cache. `jsonfile` writes the
+files ansible-core does — the schema-qualified name (`<prefix>s1_<host>`),
+the payload with each value's tags (where a `set_fact` value or the
+template that made it came from), mode 0644 — so `ansible-playbook` and
+understudy can share a cache directory, and reads theirs back, origins
+included. Two orders cannot be ansible-core's: a gathered fact set's (its
+collectors resolve through Python sets of names, whose string hashes
+are randomized per process, so ansible-core's own order varies between
+runs; understudy writes them by name), and a mapping's keys within a
+module's facts (by name). A cache plugin from a collection (`redis`,
+`yaml`, ...) is Python and cannot load: it warns as ansible-core does
+and the memory cache stands in.
+
 **Task keywords** — `when`, `loop` / `with_*` (`items`, `nested`, `together`, `subelements`,
 `sequence`, `dict`, `indexed_items`, `flattened`, `lines`, `fileglob`, ...) with
 `loop_control` (`loop_var`, `index_var`, `label`, `extended`, `pause`,
@@ -389,9 +407,11 @@ than silently diverging. Known boundaries:
   takes them level by level in the order the groups were added, so such
   hosts can list in another order in `groups`. `constructed`'s
   `use_vars_plugins` reads `group_vars/` and `host_vars/` next to the
-  sources parsed before it; `use_extra_vars` is read from the config file
-  or the `ANSIBLE_INVENTORY_USE_EXTRA_VARS` environment variable (not
-  `ansible.cfg`), and the fact cache is not consulted. `meta:
+  sources parsed before it, its options are read from the plugin's
+  config, the environment and `ansible.cfg` (`[inventory_plugins]
+  use_extra_vars`) as ansible-core reads them, and hosts' cached facts
+  join their variables (a persistent cache's, as ansible-core opens a
+  new cache plugin for it). `meta:
   refresh_inventory` parses the sources again and replaces the hosts,
   groups and variables, then makes the run's `add_host` and `group_by`
   changes again (hosts first, then groups; a host the refresh dropped

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/giraffesyo/understudy/internal/factcache"
 	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
@@ -26,6 +27,7 @@ type optionDef struct {
 	choices  []string
 	def      any
 	env      []string
+	ini      []string // "section.key" entries in ansible.cfg
 }
 
 var constructedOptions = []optionDef{
@@ -35,7 +37,8 @@ var constructedOptions = []optionDef{
 	{name: "compose", typ: "dict", def: map[string]any{}},
 	{name: "groups", typ: "dict", def: map[string]any{}},
 	{name: "keyed_groups", typ: "list", def: []any{}},
-	{name: "use_extra_vars", typ: "bool", def: false, env: []string{"ANSIBLE_INVENTORY_USE_EXTRA_VARS"}},
+	{name: "use_extra_vars", typ: "bool", def: false, env: []string{"ANSIBLE_INVENTORY_USE_EXTRA_VARS"},
+		ini: []string{"inventory_plugins.use_extra_vars"}},
 	{name: "leading_separator", typ: "bool", def: true},
 }
 
@@ -43,7 +46,8 @@ var generatorOptions = []optionDef{
 	{name: "plugin", required: true, choices: []string{"ansible.builtin.generator", "generator"}},
 	{name: "hosts"},
 	{name: "layers"},
-	{name: "use_extra_vars", typ: "bool", def: false, env: []string{"ANSIBLE_INVENTORY_USE_EXTRA_VARS", "ANSIBLE_GENERATOR_USE_EXTRA_VARS"}},
+	{name: "use_extra_vars", typ: "bool", def: false, env: []string{"ANSIBLE_INVENTORY_USE_EXTRA_VARS", "ANSIBLE_GENERATOR_USE_EXTRA_VARS"},
+		ini: []string{"inventory_plugins.use_extra_vars", "inventory_plugin_generator.use_extra_vars"}},
 }
 
 // pyBoolean is ansible-core's boolean(value, strict=False).
@@ -109,20 +113,35 @@ func unquote(s string) string {
 	return s
 }
 
+// optionLookup reads an option from the environment and ansible.cfg
+// (see Options.PluginOption).
+type optionLookup func(env, ini []string) (value, origin string, ok bool)
+
+// envLookup is optionLookup without a configuration file.
+func envLookup(env, _ []string) (value, origin string, ok bool) {
+	for _, name := range env {
+		if s, set := os.LookupEnv(name); set {
+			value, origin, ok = s, "env: "+name, true
+		}
+	}
+	return value, origin, ok
+}
+
 // pluginOptions is set_options(direct=config): every option's value from
-// the config, the environment or its default, type-checked.
-func pluginOptions(loadName string, defs []optionDef, config any) (map[string]any, error) {
+// the config, the environment, ansible.cfg or its default, type-checked
+// (the last of several environment variables or ini entries set wins).
+func pluginOptions(loadName string, defs []optionDef, config any, lookup optionLookup) (map[string]any, error) {
+	if lookup == nil {
+		lookup = envLookup
+	}
 	direct, _ := asMapping(config)
 	out := map[string]any{}
 	for _, d := range defs {
 		label := fmt.Sprintf("%s for %s inventory plugin", pyQuote(d.name), pyQuote(loadName))
 		value, origin := direct[d.name], "Direct"
-		if value == nil {
-			for _, name := range d.env {
-				if s, ok := os.LookupEnv(name); ok {
-					value, origin = s, "env: "+name
-					break
-				}
+		if value == nil && (len(d.env) > 0 || len(d.ini) > 0) {
+			if s, o, ok := lookup(d.env, d.ini); ok {
+				value, origin = s, o
 			}
 		}
 		if value == nil {
@@ -173,7 +192,7 @@ func pyClassName(v any) string {
 // readConfigData is BaseInventoryPlugin._read_config_data: the config
 // file loaded and checked to name the plugin (as it was loaded), then its
 // options.
-func readConfigData(src, name, loadName string, defs []optionDef) (any, map[string]any, error) {
+func readConfigData(src, name, loadName string, defs []optionDef, lookup optionLookup) (any, map[string]any, error) {
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return nil, nil, err
@@ -197,7 +216,7 @@ func readConfigData(src, name, loadName string, defs []optionDef) (any, map[stri
 		}
 		return nil, nil, fmt.Errorf("Incorrect plugin name in file: %s", shown)
 	}
-	opts, err := pluginOptions(loadName, defs, config)
+	opts, err := pluginOptions(loadName, defs, config, lookup)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -435,23 +454,57 @@ func (l *loader) withExtraVars(vars map[string]any, use bool) map[string]any {
 // parseConstructed is the constructed plugin: variables and groups for
 // the hosts already in the inventory, from Jinja2 expressions.
 func parseConstructed(l *loader, src, name, loadName string) error {
-	_, opts, err := readConfigData(src, name, loadName, constructedOptions)
+	_, opts, err := readConfigData(src, name, loadName, constructedOptions, l.o.PluginOption)
 	if err != nil {
 		return err
 	}
-	if err := l.construct(opts); err != nil {
+	cache, err := factcache.Open(l.o.FactCache, l.cacheWarn)
+	if err != nil {
+		return err
+	}
+	if err := l.construct(opts, cache); err != nil {
 		return &chainError{msg: fmt.Sprintf("Failed to parse %s.", pyQuote(src)), cause: asChain(err)}
 	}
 	return nil
 }
 
-func (l *loader) construct(opts map[string]any) error {
+// withFacts is hostvars combined with the host's cached facts, if the
+// cache has any ("adds facts if cache is active").
+func withFacts(vars map[string]any, cache factcache.Cache, host string) (map[string]any, error) {
+	if !cache.Contains(host) {
+		return vars, nil
+	}
+	f, err := cache.Get(host)
+	if err != nil || f == nil {
+		return vars, err
+	}
+	out := make(map[string]any, len(vars)+f.Len())
+	for k, v := range vars {
+		out[k] = v
+	}
+	for _, k := range f.Keys() {
+		out[k], _ = f.Get(k)
+	}
+	return out, nil
+}
+
+// cacheWarn shows a cache plugin's warning.
+func (l *loader) cacheWarn(msg string) {
+	if l.o.Warn != nil {
+		l.o.Warn(msg + "\n")
+	}
+}
+
+func (l *loader) construct(opts map[string]any, cache factcache.Cache) error {
 	strict := opts["strict"].(bool)
 	useVarsPlugins := opts["use_vars_plugins"].(bool)
 	useExtra := opts["use_extra_vars"].(bool)
 	for _, h := range append([]*Host(nil), l.inv.hostOrder...) {
 		vars, err := l.hostVars(h, useVarsPlugins)
 		if err != nil {
+			return err
+		}
+		if vars, err = withFacts(vars, cache, h.Name); err != nil {
 			return err
 		}
 		if c, ok := asMapping(opts["compose"]); ok {
@@ -467,6 +520,9 @@ func (l *loader) construct(opts map[string]any) error {
 			}
 		}
 		if vars, err = l.hostVars(h, useVarsPlugins); err != nil {
+			return err
+		}
+		if vars, err = withFacts(vars, cache, h.Name); err != nil {
 			return err
 		}
 		if err := l.composedGroups(opts["groups"], vars, h, strict); err != nil {
@@ -630,7 +686,7 @@ func isEmptyContainer(v any) bool {
 // parseGenerator is the generator plugin: a host for every combination
 // of the layers' values, with templated names and parent groups.
 func parseGenerator(l *loader, src, name, loadName string) error {
-	config, opts, err := readConfigData(src, name, loadName, generatorOptions)
+	config, opts, err := readConfigData(src, name, loadName, generatorOptions, l.o.PluginOption)
 	if err != nil {
 		return err
 	}

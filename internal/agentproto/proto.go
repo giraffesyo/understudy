@@ -112,6 +112,9 @@ type Result struct {
 	DelegatedAddr string `json:"-"` // its address, when its connection names one other than its name
 	ShowDiff      bool   `json:"-"` // diff mode is on for the task: display Diff
 	Censored      bool   `json:"-"` // no_log: display only the censored placeholder
+	// FactsCacheable: set_fact's cacheable facts, already saved to the
+	// fact cache.
+	FactsCacheable bool `json:"-"`
 	// WarningHelp is the help text Display appends to a warning of the
 	// result's (its key) when showing it; the result keeps the message.
 	WarningHelp map[string]string `json:"-"`

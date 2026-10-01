@@ -1,0 +1,45 @@
+# The jsonfile cache: what set_fact's cacheable facts and gathered ones
+# write (tags included), smart gathering, and meta: clear_facts.
+- hosts: all
+  gather_subset: ['!all', '!min']
+  vars:
+    pv: hello
+    pl: [1, two]
+  tasks:
+    - set_fact:
+        foo: bar
+        n: 3
+        l: [1, "a"]
+        d: {x: "{{ 'templ' }}", y: 2}
+        b_sum: "{{ 1 + 2 }}"
+        d_var: "{{ pv }}"
+        e_plist: "{{ pl }}"
+        f_mixed: "pre {{ pv }}"
+        g_float: 1.5
+        h_none: null
+        i_unicode: "é✓"
+        j_true: true
+        cacheable: true
+      when: inventory_hostname == 'h1'
+    - set_fact: {nc: 1}
+    - debug: var=ansible_facts
+    - debug: var=ansible_facts._ansible_facts_gathered
+    - debug: msg="{{ lookup('file', 'cache/pre_s1_' ~ inventory_hostname) }}"
+
+- name: smart gathering skips gathered hosts
+  hosts: all
+  gather_subset: ['!all', '!min']
+  tasks:
+    - debug: var=foo
+    - meta: clear_facts
+      when: inventory_hostname == 'h1'
+    - debug: var=ansible_facts
+    - debug: msg="{{ lookup('pipe', 'ls cache') }}"
+    - debug: msg="{{ lookup('file', 'cache/pre_s1_' ~ inventory_hostname) }}"
+
+- name: smart gathering gathers again once cleared
+  hosts: all
+  gather_subset: ['!all', '!min']
+  tasks:
+    - debug: var=ansible_facts
+    - debug: var=nc
