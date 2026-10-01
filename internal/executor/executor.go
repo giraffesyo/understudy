@@ -103,6 +103,7 @@ type Options struct {
 	ConnOpts       connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
 
 	ForceHandlers bool           // --force-handlers: notified handlers run on failed hosts too
+	FlushCache    bool           // --flush-cache: the fact cache is cleared for every host first
 	StartAtTask   string         // --start-at-task: skip tasks until one matches
 	Step          bool           // --step: confirm each task interactively
 	Vault         *vault.Secrets // vault passwords for !vault values and encrypted files

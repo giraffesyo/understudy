@@ -163,6 +163,7 @@ type parsedArgs struct {
 	connPassFile   string
 	timeout        int
 	forceHandlers  bool
+	flushCache     bool
 	startAtTask    string
 	step           bool
 	listTags       bool
@@ -252,8 +253,8 @@ var cliFlags = []cliFlag{
 	{[]string{"--force-handlers"}, false, boolFlag(func(p *parsedArgs) { p.forceHandlers = true })},
 	{[]string{"--start-at-task"}, true, func(p *parsedArgs, v string) error { p.startAtTask = v; return nil }},
 	{[]string{"--step"}, false, boolFlag(func(p *parsedArgs) { p.step = true })},
-	// No fact cache and no Python module path: accepted, nothing to do.
-	{[]string{"--flush-cache"}, false, boolFlag(func(*parsedArgs) {})},
+	{[]string{"--flush-cache"}, false, boolFlag(func(p *parsedArgs) { p.flushCache = true })},
+	// No Python module path: accepted, nothing to do.
 	{[]string{"-M", "--module-path"}, true, func(*parsedArgs, string) error { return nil }},
 	{[]string{"-m", "--module-name"}, true, func(p *parsedArgs, v string) error { p.module = v; return nil }},
 	{[]string{"-a", "--args"}, true, func(p *parsedArgs, v string) error { p.moduleArgs = v; return nil }},
@@ -341,6 +342,7 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 	}
 	opts := executor.Options{
 		ForceHandlers:   p.forceHandlers,
+		FlushCache:      p.flushCache,
 		StartAtTask:     p.startAtTask,
 		Step:            p.step,
 		Forks:           forks,

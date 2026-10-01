@@ -1,0 +1,7 @@
+# --flush-cache clears every inventory host's cached facts and
+# localhost's (not the --limit's alone), before any play.
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: var=hostvars.h1.ansible_facts
+    - debug: msg="{{ lookup('pipe', 'ls cache') }}"

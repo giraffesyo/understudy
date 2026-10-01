@@ -34,6 +34,13 @@ func (r *Runner) openFactCache() {
 	}
 	r.facts = c
 	r.Store.FactLoader = r.loadCachedFacts
+	if r.Opts.FlushCache {
+		// CLI._flush_cache: localhost and every inventory host.
+		c.Delete("localhost")
+		for _, h := range r.Inv.HostNames() {
+			c.Delete(h)
+		}
+	}
 }
 
 // loadCachedFacts installs a host's cached facts in the variable store

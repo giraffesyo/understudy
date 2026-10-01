@@ -250,7 +250,7 @@ rolling batches, `max_fail_percentage`, and `meta` (`flush_handlers`,
 `fact_caching_prefix`, `fact_caching_timeout` and their
 `ANSIBLE_CACHE_PLUGIN*` variables), with the `gathering` policy
 (`implicit`, `explicit`, `smart`), `set_fact`'s `cacheable`, `meta:
-clear_facts` and `constructed` reading the cache. `jsonfile` writes the
+clear_facts`, `--flush-cache` and `constructed` reading the cache. `jsonfile` writes the
 files ansible-core does — the schema-qualified name (`<prefix>s1_<host>`),
 the payload with each value's tags (where a `set_fact` value or the
 template that made it came from), mode 0644 — so `ansible-playbook` and
