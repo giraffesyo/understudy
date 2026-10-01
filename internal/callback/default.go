@@ -507,6 +507,9 @@ func (d *Default) taskErrorChain(task *playbook.Task, ec *agentproto.ErrorChain)
 	if ec.OuterFile != "" {
 		file, line, col = ec.OuterFile, ec.OuterLine, ec.OuterCol
 	}
+	if ec.OuterUnlocated {
+		file = ""
+	}
 	if file != "" && line > 0 {
 		fmt.Fprintf(&b, "Origin: %s:%d:%d\n\n", file, line, col)
 		b.WriteString(strings.TrimRight(d.excerpt(file, line, col), "\n") + "\n")

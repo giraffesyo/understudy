@@ -49,6 +49,19 @@ func newLoopControl(task *playbook.Task, vctx *vars.Context, items []any) (*loop
 	if lc.pause, err = loopPause(task, vctx); err != nil {
 		return nil, err
 	}
+	// LoopControl.post_validate then checks the variable names.
+	for _, lv := range []struct{ key, name string }{{"loop_var", task.LoopVar}, {"index_var", task.IndexVar}} {
+		if lv.name == "" || playbook.ValidVariableName(lv.name) {
+			continue
+		}
+		msg, help := playbook.InvalidVariableName(lv.name)
+		outer := fmt.Sprintf("Invalid '%s'.", lv.key)
+		res := agentproto.Fail("Invalid '%s': %s", lv.key, msg)
+		p := task.KeywordPos["loop_control."+lv.key]
+		res.ErrorChain = &agentproto.ErrorChain{Outer: outer, OuterUnlocated: true, Inner: msg, Help: help,
+			InnerFile: p.File, InnerLine: p.Line, InnerCol: p.Col}
+		return nil, &loopControlError{res}
+	}
 	if lc.extended, err = loopFlag(task.LoopExtended, false, "extended", vctx); err != nil {
 		return nil, err
 	}

@@ -107,8 +107,10 @@ type ErrorChain struct {
 	// the task (a keyword's value).
 	OuterFile           string
 	OuterLine, OuterCol int
-	Inner               string // cause message
-	Help                string // the cause's help text
+	// OuterUnlocated: the outer event has no origin at all.
+	OuterUnlocated bool
+	Inner          string // cause message
+	Help           string // the cause's help text
 
 	// InnerFile/InnerLine/InnerCol locate the cause's origin, when known.
 	InnerFile           string

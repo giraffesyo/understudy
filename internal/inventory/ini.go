@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/giraffesyo/understudy/internal/template"
 )
 
 // LoadINI parses INI-format inventory text into inv, as ansible-core's
@@ -41,7 +43,9 @@ func parseINI(inv *Inventory, data []byte) error {
 	pending := map[string]*pendingDecl{}
 	var pendingOrder []string
 	groupName, state := "ungrouped", "hosts"
-	for _, raw := range pySplitLines(string(data)) {
+	source := inv.currentSource
+	for lineNo, raw := range pySplitLines(string(data)) {
+		lineNo++
 		line := strings.TrimFunc(raw, unicode.IsSpace)
 		if line == "" || line[0] == '#' || line[0] == ';' {
 			continue
@@ -102,13 +106,23 @@ func parseINI(inv *Inventory, data []byte) error {
 			for _, name := range hosts {
 				h := inv.addHost(name, inv.Groups[groupName], port)
 				vars.apply(h.Vars)
+				for _, t := range tokens[1:] {
+					if k, _, _ := strings.Cut(t, "="); template.IsReservedName(k) {
+						h.VarOrigins = append(h.VarOrigins, template.KeyOrigin{Name: k, File: source, Line: lineNo})
+					}
+				}
 			}
 		case "vars":
 			k, v, ok := strings.Cut(line, "=")
 			if !ok {
 				return fmt.Errorf("Expected key=value, got: %s", line)
 			}
-			inv.Groups[groupName].Vars[strings.TrimFunc(k, unicode.IsSpace)] = parseINIValue(strings.TrimFunc(v, unicode.IsSpace))
+			k = strings.TrimFunc(k, unicode.IsSpace)
+			g := inv.Groups[groupName]
+			g.Vars[k] = parseINIValue(strings.TrimFunc(v, unicode.IsSpace))
+			if template.IsReservedName(k) {
+				g.VarOrigins = append(g.VarOrigins, template.KeyOrigin{Name: k, File: source, Line: lineNo})
+			}
 		case "children":
 			m := iniGroupName.FindStringSubmatch(line)
 			if m == nil {

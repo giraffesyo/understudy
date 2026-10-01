@@ -12,6 +12,7 @@ type Play struct {
 	Name        string
 	HostPattern string
 	Vars        map[string]any
+	VarOrigins  []template.KeyOrigin // where vars: named reserved variables
 	VarsFiles   []string
 	GatherFacts *bool // nil = default (true)
 	// GatherArgs holds the play's gather_subset / gather_timeout /
@@ -47,6 +48,10 @@ type Play struct {
 	// Filled by ResolveRoles: per-role vars for the store's role layers.
 	RoleDefaults []map[string]any
 	RoleVars     []map[string]any
+	// RoleDefaultOrigins and RoleVarOrigins are where the roles' defaults
+	// and vars named reserved variables.
+	RoleDefaultOrigins []template.KeyOrigin
+	RoleVarOrigins     []template.KeyOrigin
 	// Role names for the ansible_play_role_names / ansible_dependent_role_names
 	// magic variables (roles: entries, and roles pulled in as dependencies).
 	PlayRoleNames      []string
@@ -119,8 +124,9 @@ type Task struct {
 	Delay          int
 	Become         BecomeFields
 	Vars           map[string]any
-	Environment    []any // environment entries, enclosing blocks' and role's first
-	Timeout        any   // timeout keyword, raw: an int or a template (nil = inherit)
+	VarOrigins     []template.KeyOrigin // where its (and its blocks') vars: named reserved variables
+	Environment    []any                // environment entries, enclosing blocks' and role's first
+	Timeout        any                  // timeout keyword, raw: an int or a template (nil = inherit)
 	Notify         []string
 	Tags           []string
 	NoLog          bool
@@ -137,6 +143,7 @@ type Task struct {
 	Synthesized    bool           // built without a source of its own (get_path shows the play's)
 	LoadNotes      []string       // -vv lines loading it printed (plugin redirects, static imports)
 	ArgPos         map[string]Pos // source position of each map-form module arg value
+	ArgKeyPos      map[string]Pos // source position of each map-form module arg name
 	ArgsPos        Pos            // the module's value (k=v or free-form string args share it)
 	ActionPos      Pos            // the module's key (or action:/local_action:)
 	KeywordPos     map[string]Pos // source position of each task keyword's value (when, ...)

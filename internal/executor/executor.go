@@ -72,23 +72,25 @@ func (st *HostStats) Processed() bool {
 
 // Options configure a run.
 type Options struct {
-	Forks        int
-	CheckMode    bool
-	Diff         bool
-	Verbosity    int
-	ExtraVars    map[string]any
-	Become       bool
-	BecomeUser   string
-	BecomeMethod string // --become-method ("" = sudo)
-	BecomePass   string
-	Connection   string // "" = per-host behavioral vars; "local" forces local
-	BaseDir      string // playbook directory
-	Tags         []string
-	SkipTags     []string
-	RolesPath    []string                  // roles_path search directories (after <playbook>/roles)
-	ConfigFile   string                    // ansible.cfg in effect ("" = none): ansible_config_file
-	Inventory    []string                  // inventory sources: ansible_inventory_sources
-	ConnOpts     connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
+	Forks     int
+	CheckMode bool
+	Diff      bool
+	Verbosity int
+	ExtraVars map[string]any
+	// ExtraVarOrigins are where the extra vars named reserved variables.
+	ExtraVarOrigins []template.KeyOrigin
+	Become          bool
+	BecomeUser      string
+	BecomeMethod    string // --become-method ("" = sudo)
+	BecomePass      string
+	Connection      string // "" = per-host behavioral vars; "local" forces local
+	BaseDir         string // playbook directory
+	Tags            []string
+	SkipTags        []string
+	RolesPath       []string                  // roles_path search directories (after <playbook>/roles)
+	ConfigFile      string                    // ansible.cfg in effect ("" = none): ansible_config_file
+	Inventory       []string                  // inventory sources: ansible_inventory_sources
+	ConnOpts        connection.ManagerOptions // ssh-level settings (user, keys, host key checking)
 
 	ForceHandlers bool           // --force-handlers: notified handlers run on failed hosts too
 	StartAtTask   string         // --start-at-task: skip tasks until one matches
@@ -337,6 +339,7 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 	r.playEnded = false
 	r.mu.Unlock()
 	r.Store.SetPlayVars(play.Vars)
+	reserved := append([]template.KeyOrigin{}, play.VarOrigins...)
 	for _, defaults := range play.RoleDefaults {
 		r.Store.AddRoleDefaults(defaults)
 	}
@@ -373,7 +376,13 @@ func (r *Runner) runPlay(ctx context.Context, play *playbook.Play) error {
 			return fmt.Errorf("%s: vars file must contain a mapping", path)
 		}
 		r.Store.AddVarsFile(m)
+		if node, err := yaml.ParseSingle(data, path); err == nil {
+			reserved = append(reserved, playbook.ReservedKeyOrigins(node, path)...)
+		}
 	}
+	// The play's variables, before any host's, are checked for reserved
+	// names (VariableManager.get_vars warns as it merges them).
+	r.warnReserved(append(reserved, r.Opts.ExtraVarOrigins...))
 	// ansible-core reads vars_files and resolves the play's hosts before
 	// the banner: a file that fails to parse, or a pattern that is an
 	// error, ends the run without one.
@@ -1227,6 +1236,7 @@ func (r *Runner) execTaskOnHost(ctx context.Context, play *playbook.Play, task *
 	// included.
 	ctx = context.WithValue(ctx, connectedKey{}, new(string))
 	pos := template.Position{File: task.Src.File, Line: task.Src.Line, Col: task.Src.Col}
+	r.warnReservedFor(host, task)
 	base := r.newHostContext(host, pos, playHosts)
 	if len(task.Vars) > 0 {
 		base = base.WithOverlay(task.Vars)
@@ -1406,6 +1416,11 @@ func (r *Runner) runOnce(ctx context.Context, play *playbook.Play, task *playboo
 			continue
 		}
 		args[k] = v
+	}
+	if task.Module == "set_fact" {
+		if bad := invalidSetFactName(task, args); bad != nil {
+			return bad
+		}
 	}
 	freeForm := task.FreeForm
 	if freeForm != "" {
@@ -2176,6 +2191,13 @@ func (r *Runner) record(host string, task *playbook.Task, res *agentproto.Result
 		return
 	}
 	ignored := task.IgnoreErrors && res.Failed
+	if task.Module == "set_fact" && !res.Failed && !res.Skipped {
+		r.warnReserved(setFactOrigins(task))
+	}
+	if task.Register != "" && template.IsReservedName(task.Register) {
+		p := task.KeywordPos["register"]
+		r.warnReserved([]template.KeyOrigin{{Name: task.Register, File: p.File, Line: p.Line, Col: p.Col}})
+	}
 	if res.Changed && !res.Failed && !res.Skipped && len(task.Notify) > 0 {
 		// Notifications are saved before the result prints, once per
 		// result that carries them: a loop's item results that ran.
@@ -2503,6 +2525,91 @@ func whenSkip(vctx *vars.Context, when []string, pos map[string]template.Positio
 		}
 	}
 	return nil, nil
+}
+
+// invalidSetFactName is set_fact's failure for a fact name that is not a
+// valid variable name (the first, in the task's order), nil when all are.
+func invalidSetFactName(task *playbook.Task, args map[string]any) *agentproto.Result {
+	keys := slices.Collect(maps.Keys(args))
+	slices.SortFunc(keys, func(a, b string) int {
+		pa, pb := task.ArgKeyPos[a], task.ArgKeyPos[b]
+		if pa.Line != pb.Line {
+			return pa.Line - pb.Line
+		}
+		if pa.Col != pb.Col {
+			return pa.Col - pb.Col
+		}
+		return strings.Compare(a, b)
+	})
+	for _, k := range keys {
+		if k == "cacheable" || playbook.ValidVariableName(k) {
+			continue
+		}
+		msg, help := playbook.InvalidVariableName(k)
+		res := agentproto.Fail("Task failed: %s", msg)
+		res.Origin = "verbatim"
+		p, ok := task.ArgKeyPos[k]
+		if !ok {
+			p = argPos(task, k)
+		}
+		res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: msg, Help: help,
+			InnerFile: p.File, InnerLine: p.Line, InnerCol: p.Col}
+		return res
+	}
+	return nil
+}
+
+// setFactOrigins are the reserved names set_fact sets, where each was
+// written, in source order.
+func setFactOrigins(task *playbook.Task) []template.KeyOrigin {
+	var out []template.KeyOrigin
+	for k := range task.Args {
+		if k == "cacheable" || !template.IsReservedName(k) {
+			continue
+		}
+		p, ok := task.ArgKeyPos[k]
+		if !ok {
+			p = argPos(task, k)
+		}
+		out = append(out, template.KeyOrigin{Name: k, File: p.File, Line: p.Line, Col: p.Col})
+	}
+	slices.SortFunc(out, func(a, b template.KeyOrigin) int {
+		if a.Line != b.Line {
+			return a.Line - b.Line
+		}
+		return a.Col - b.Col
+	})
+	return out
+}
+
+// warnReserved shows warn_if_reserved's warning for each variable named
+// with a reserved name, once per distinct origin.
+func (r *Runner) warnReserved(origins []template.KeyOrigin) {
+	for _, o := range origins {
+		r.warnBlock(template.ReservedWarning(o))
+	}
+}
+
+// warnReservedFor checks the variables a task sees on host, as get_vars
+// does before the task runs: the play's roles' defaults, the host's
+// inventory variables (its groups' then its own), the roles' vars, then
+// the task's (and its blocks') vars.
+func (r *Runner) warnReservedFor(host string, task *playbook.Task) {
+	if play := r.curPlay; play != nil {
+		r.warnReserved(play.RoleDefaultOrigins)
+	}
+	if r.Inv != nil {
+		if h := r.Inv.Hosts[host]; h != nil {
+			for _, g := range r.Inv.OrderedGroups(h) {
+				r.warnReserved(g.VarOrigins)
+			}
+			r.warnReserved(h.VarOrigins)
+		}
+	}
+	if play := r.curPlay; play != nil {
+		r.warnReserved(play.RoleVarOrigins)
+	}
+	r.warnReserved(task.VarOrigins)
 }
 
 // condError is a conditional that failed to evaluate, at its origin.

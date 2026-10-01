@@ -110,27 +110,29 @@ type parsedArgs struct {
 	// ansible-core loads extra vars, it fails the inventory sources'
 	// parsing and then the run.
 	extraVarsErr error
-	forks        int
-	verbosity    int
-	check        bool
-	diff         bool
-	become       bool
-	becomeUser   string
-	askBecome    bool
-	askPass      bool
-	askVault     bool
-	vaultFiles   []string
-	remoteUser   string
-	privateKey   string
-	connection   string
-	tags         string
-	skipTags     string
-	syntax       bool
-	listHosts    bool
-	listTasks    bool
-	module       string // adhoc -m
-	moduleArgs   string // adhoc -a
-	positional   []string
+	// extraVarOrigins are where -e named reserved variables.
+	extraVarOrigins []template.KeyOrigin
+	forks           int
+	verbosity       int
+	check           bool
+	diff            bool
+	become          bool
+	becomeUser      string
+	askBecome       bool
+	askPass         bool
+	askVault        bool
+	vaultFiles      []string
+	remoteUser      string
+	privateKey      string
+	connection      string
+	tags            string
+	skipTags        string
+	syntax          bool
+	listHosts       bool
+	listTasks       bool
+	module          string // adhoc -m
+	moduleArgs      string // adhoc -a
+	positional      []string
 
 	becomeMethod   string
 	becomePassFile string
@@ -169,7 +171,7 @@ var cliFlags = []cliFlag{
 				return nil
 			}
 		}
-		return parseExtraVars(v, p.extraVars)
+		return parseExtraVars(v, p.extraVars, &p.extraVarOrigins)
 	}},
 	{[]string{"-f", "--forks"}, true, func(p *parsedArgs, v string) (err error) { p.forks, err = strconv.Atoi(v); return }},
 	{[]string{"-t", "--tags"}, true, func(p *parsedArgs, v string) error { p.tags = joinCSV(p.tags, v); return nil }},
@@ -386,23 +388,24 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		timeout = time.Duration(p.timeout) * time.Second
 	}
 	opts := executor.Options{
-		ForceHandlers: p.forceHandlers,
-		StartAtTask:   p.startAtTask,
-		Step:          p.step,
-		Forks:         forks,
-		CheckMode:     p.check,
-		Diff:          p.diff,
-		Verbosity:     p.verbosity,
-		ExtraVars:     p.extraVars,
-		Become:        p.become,
-		BecomeUser:    p.becomeUser,
-		BecomeMethod:  becomeMethod,
-		Connection:    p.connection,
-		BaseDir:       baseDir,
-		RolesPath:     cfg.RolesPath,
-		Inventory:     p.inventory,
-		Tags:          splitCSV(p.tags),
-		SkipTags:      splitCSV(p.skipTags),
+		ForceHandlers:   p.forceHandlers,
+		StartAtTask:     p.startAtTask,
+		Step:            p.step,
+		Forks:           forks,
+		CheckMode:       p.check,
+		Diff:            p.diff,
+		Verbosity:       p.verbosity,
+		ExtraVars:       p.extraVars,
+		ExtraVarOrigins: p.extraVarOrigins,
+		Become:          p.become,
+		BecomeUser:      p.becomeUser,
+		BecomeMethod:    becomeMethod,
+		Connection:      p.connection,
+		BaseDir:         baseDir,
+		RolesPath:       cfg.RolesPath,
+		Inventory:       p.inventory,
+		Tags:            splitCSV(p.tags),
+		SkipTags:        splitCSV(p.skipTags),
 
 		NoColor:               callback.NoColor(),
 		NoDeprecationWarnings: !cfg.DeprecationWarnings,
@@ -528,7 +531,7 @@ func splitCSV(s string) []string {
 }
 
 // parseExtraVars handles -e k=v, -e '{"json": true}', and -e @file.yml.
-func parseExtraVars(s string, into map[string]any) error {
+func parseExtraVars(s string, into map[string]any, origins *[]template.KeyOrigin) error {
 	switch {
 	case strings.HasPrefix(s, "@"):
 		data, err := os.ReadFile(s[1:])
@@ -538,6 +541,11 @@ func parseExtraVars(s string, into map[string]any) error {
 		v, err := yaml.Unmarshal(data, s[1:])
 		if err != nil {
 			return err
+		}
+		if abs, err := filepath.Abs(s[1:]); err == nil {
+			if node, err := yaml.ParseSingle(data, abs); err == nil {
+				*origins = append(*origins, playbook.ReservedKeyOrigins(node, abs)...)
+			}
 		}
 		m, ok := yaml.PlainMap(v)
 		if !ok {
@@ -552,6 +560,14 @@ func parseExtraVars(s string, into map[string]any) error {
 		if err := json.Unmarshal([]byte(s), &m); err != nil {
 			return fmt.Errorf("extra-vars JSON: %w", err)
 		}
+		if node, err := yaml.ParseSingle([]byte(s), ""); err == nil {
+			// JSON keys carry no origin.
+			for _, k := range node.MapKeys() {
+				if template.IsReservedName(k) {
+					*origins = append(*origins, template.KeyOrigin{Name: k})
+				}
+			}
+		}
 		for k, val := range m {
 			into[k] = val
 		}
@@ -563,6 +579,9 @@ func parseExtraVars(s string, into map[string]any) error {
 				return fmt.Errorf("extra-vars: expected key=value, got %q", pair)
 			}
 			into[pair[:eq]] = pair[eq+1:]
+			if template.IsReservedName(pair[:eq]) {
+				*origins = append(*origins, template.KeyOrigin{Name: pair[:eq], Label: "<CLI option '-e'>"})
+			}
 		}
 		return nil
 	}
@@ -1192,6 +1211,13 @@ func loadErrorCode(err error) int {
 // "[ERROR]: <message>", then the Origin and the source excerpt when the
 // error points into a file.
 func printError(err error) {
+	var fe interface{ Formatted() string }
+	if errors.As(err, &fe) {
+		if f := fe.Formatted(); f != "" {
+			fmt.Fprint(os.Stderr, f)
+			return
+		}
+	}
 	var oe playbook.OriginError
 	if errors.As(err, &oe) {
 		help := ""

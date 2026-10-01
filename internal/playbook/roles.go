@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
@@ -55,6 +56,8 @@ type roleContent struct {
 	defaults map[string]any
 	vars     map[string]any
 	deps     []*RoleRef
+
+	defaultOrigins, varOrigins []template.KeyOrigin
 }
 
 // ResolveRoles materializes each play's roles: role tasks run before the
@@ -143,9 +146,11 @@ func resolveRoleRef(play *Play, ref *RoleRef, baseDir string, rolesPath []string
 
 	if role.defaults != nil {
 		play.RoleDefaults = append(play.RoleDefaults, role.defaults)
+		play.RoleDefaultOrigins = append(play.RoleDefaultOrigins, role.defaultOrigins...)
 	}
 	if role.vars != nil {
 		play.RoleVars = append(play.RoleVars, role.vars)
+		play.RoleVarOrigins = append(play.RoleVarOrigins, role.varOrigins...)
 	}
 
 	// The ref's when/tags/params inherit into every role task.
@@ -217,10 +222,10 @@ func loadRole(ref *RoleRef, baseDir string, rolesPath []string) (*roleContent, e
 	}
 
 	var err error
-	if role.defaults, err = loadVarsMain(filepath.Join(dir, "defaults")); err != nil {
+	if role.defaults, role.defaultOrigins, err = loadVarsMainOrigins(filepath.Join(dir, "defaults")); err != nil {
 		return nil, err
 	}
-	if role.vars, err = loadVarsMain(filepath.Join(dir, "vars")); err != nil {
+	if role.vars, role.varOrigins, err = loadVarsMainOrigins(filepath.Join(dir, "vars")); err != nil {
 		return nil, err
 	}
 
@@ -382,6 +387,9 @@ type RoleInclude struct {
 	Handlers []*Task
 	Defaults map[string]any
 	Vars     map[string]any
+	// DefaultOrigins and VarOrigins are where they name reserved
+	// variables.
+	DefaultOrigins, VarOrigins []template.KeyOrigin
 }
 
 // LoadRoleForInclude loads a role for include_role: its task file (tasksFrom,
@@ -420,10 +428,10 @@ func LoadRoleForInclude(name, baseDir string, rolesPath []string, tasksFrom stri
 		ri.Handlers = flattenRole(handlers, dir, name)
 	}
 	var err error
-	if ri.Defaults, err = loadVarsMain(filepath.Join(dir, "defaults")); err != nil {
+	if ri.Defaults, ri.DefaultOrigins, err = loadVarsMainOrigins(filepath.Join(dir, "defaults")); err != nil {
 		return nil, err
 	}
-	if ri.Vars, err = loadVarsMain(filepath.Join(dir, "vars")); err != nil {
+	if ri.Vars, ri.VarOrigins, err = loadVarsMainOrigins(filepath.Join(dir, "vars")); err != nil {
 		return nil, err
 	}
 	return ri, nil
@@ -453,10 +461,26 @@ func loadYAMLBase(dir, base string) (*yaml.Node, string, error) {
 
 // loadVarsMain loads <dir>/main.yml as a vars mapping.
 func loadVarsMain(dir string) (map[string]any, error) {
+	m, _, err := loadVarsMainOrigins(dir)
+	return m, err
+}
+
+// loadVarsMainOrigins is loadVarsMain, with where the file names reserved
+// variables.
+func loadVarsMainOrigins(dir string) (map[string]any, []template.KeyOrigin, error) {
 	node, path, err := loadYAMLMain(dir)
 	if err != nil || node == nil {
-		return nil, err
+		return nil, nil, err
 	}
+	m, err := varsOf(node, path)
+	if err != nil || m == nil {
+		return m, nil, err
+	}
+	return m, reservedKeyOrigins(node, path), nil
+}
+
+// varsOf decodes a vars file's document as a mapping.
+func varsOf(node *yaml.Node, path string) (map[string]any, error) {
 	v, err := node.Decode()
 	if err != nil {
 		return nil, err
