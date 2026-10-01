@@ -383,8 +383,8 @@ than silently diverging. Known boundaries:
   their option validation and errors included; a config naming a
   collection's plugin fails to parse as an unknown plugin, and the source
   is skipped as ansible-core skips one it cannot parse. TOML dates and
-  times load as their `isoformat()` strings (as YAML timestamps load as
-  strings). ansible-core orders a group's hosts two or more levels of
+  times load as `datetime` dates, datetimes and times, as `tomllib` builds
+  them. ansible-core orders a group's hosts two or more levels of
   child groups down by Python set iteration (object addresses); understudy
   takes them level by level in the order the groups were added, so such
   hosts can list in another order in `groups`. `constructed`'s
@@ -560,8 +560,7 @@ than silently diverging. Known boundaries:
   payloads, `Using module file`, the variable manager's repeated ``Read
   `vars_file` `` lines, and SSH connection tracing (understudy's agent
   protocol runs no per-command `ssh`).
-- **Documented divergences**: YAML timestamps and sexagesimals resolve as
-  strings; regular expressions use
+- **Documented divergences**: regular expressions use
   Go's RE2 (lookaround and backreferences in *patterns* are rejected with a
   clear error rather than mis-matched),
   iterated with Python's `re.sub`/`findall` match rules; a task that hits
@@ -594,10 +593,15 @@ than silently diverging. Known boundaries:
   salt's first 16 bytes encoded). `escape`, `safe`, `forceescape` and
   `tojson` return markup, which stays markup through the case filters and
   `+` (escaping the other operand) and becomes a str, with ansible-core's
-  warning, in a template's result; `to_datetime` returns a datetime
-  (attributes, `strftime`/`isoformat`/`timestamp`/`weekday`, subtraction
-  to a timedelta, comparison; stored as itself, shown as its
-  `isoformat()`), and a timedelta in a template's result fails as
+  warning, in a template's result; `to_datetime` returns a datetime, and
+  YAML timestamps load as dates and datetimes (sexagesimals such as `1:20`
+  as ints and floats) as PyYAML constructs them, an impossible date failing
+  the load with `datetime`'s error (attributes and methods, `strftime`,
+  `isoformat`, `replace`, arithmetic with timedeltas, comparison; stored as
+  themselves, shown as their `isoformat()` in results and module
+  arguments, their `str()` in text, their `repr()` in a rendered list, a
+  timestamp in `to_yaml`; a time or timezone where PyYAML cannot represent
+  it fails), and a timedelta or timezone in a template's result fails as
   unsupported for variable storage. String literals in `{{ }}` keep their
   backslashes, as ansible-core's `escape_backslashes` has them. Not
   modeled: markup through `format`, slicing and `%`; `rekey_on_member` on
@@ -605,9 +609,10 @@ than silently diverging. Known boundaries:
   strings); `fileglob` lists a directory in its own order, as Python's
   `os.scandir` does; a plugin error about a value (`rekey_on_member`'s
   missing key) shows the value with an unknown origin where ansible-core
-  knows a variable's; comparing or subtracting a variable's datetime
-  names `datetime.datetime` where ansible-core names
-  `_AnsibleTaggedDateTime`; `attr` of a method and a bare method in a
+  knows a variable's; an item of a list literal read from a variable is
+  named by its plain class (`datetime.date`) where ansible-core names
+  the tagged one (`_AnsibleTaggedDate`) in a `sort` error; a date or
+  datetime as a dict key is keyed by its `isoformat()`; `attr` of a method and a bare method in a
   template's result render (an address) rather than failing as
   unsupported for variable storage.
 - **Broken conditionals**: a conditional whose result is not a boolean

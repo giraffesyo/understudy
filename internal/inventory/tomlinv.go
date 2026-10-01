@@ -56,8 +56,14 @@ func parseTOMLInventory(l *loader, src, _, _ string) error {
 
 // tomlTypeRepr is type() of a value tomllib decoded.
 func tomlTypeRepr(v any) string {
-	name := "str" // dates and times decode to their isoformat()
+	name := "str"
 	switch v.(type) {
+	case yaml.Datetime:
+		name = "datetime.datetime"
+	case yaml.Date:
+		name = "datetime.date"
+	case yaml.Time:
+		name = "datetime.time"
 	case bool:
 		name = "bool"
 	case int64, *big.Int:

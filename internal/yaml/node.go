@@ -169,10 +169,6 @@ type VaultedString struct {
 	Ciphertext string
 }
 
-// Timestamp is a datetime as PyYAML represents it: its isoformat(' '),
-// tagged as a timestamp (plain where it resolves as one).
-type Timestamp string
-
 // UnsafeString is the decoded form of a !unsafe-tagged scalar. The template
 // engine renders it but never re-templates its contents.
 type UnsafeString string

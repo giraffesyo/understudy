@@ -2717,7 +2717,7 @@ func (r *Runner) runModule(ctx context.Context, host, target string, kw connecti
 		// (internal/modules, which must not import yaml) only ever sees plain
 		// JSON-shaped values, never *yaml.OMap. Flatten ordered maps in the args
 		// so the in-process path matches what the wire path delivers.
-		if m, ok := yaml.AsMap(req.Args).(map[string]any); ok {
+		if m, ok := yaml.WireValue(req.Args).(map[string]any); ok {
 			req.Args = m
 		}
 		if become == nil {

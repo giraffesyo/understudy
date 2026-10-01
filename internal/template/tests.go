@@ -137,7 +137,7 @@ func cmpTest(op string) TestFunc {
 		if len(args) != 1 {
 			return false, fmt.Errorf("comparison test requires one argument")
 		}
-		return ec.compareOnce(op, in, args[0], 0)
+		return ec.compareOnce(op, in, args[0], 0, [2]bool{ec.fromVar(-1), ec.fromVar(0)})
 	}
 }
 

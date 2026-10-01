@@ -251,7 +251,7 @@ func TestSerializationFilters(t *testing.T) {
 		{"'hello' | b64encode", "aGVsbG8="},
 		{"'aGVsbG8=' | b64decode", "hello"},
 		{"'abc' | hash('sha256')", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
-		{"'x' | quote", "'x'"},
+		{"'x' | quote", "x"}, {"'a b' | quote", "'a b'"}, {"'' | quote", "''"}, {"none | quote", "''"},
 		{"\"it's\" | quote", `'it'"'"'s'`},
 	}
 	for _, c := range cases {

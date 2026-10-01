@@ -79,6 +79,12 @@ func (ec *EvalCtx) eval(e Expr) (any, error) {
 				return nil, err
 			}
 			ks, ok := asString(k)
+			switch d := Undeprecate(k).(type) {
+			case pyDate: // keyed as the JSON output shows it
+				ks, ok = d.Isoformat(), true
+			case pyDatetime:
+				ks, ok = d.Isoformat("T"), true
+			}
 			if !ok {
 				return nil, ec.errf(t.keys[i].exprOff(), "dict keys must be strings, got %s", typeName(k))
 			}
@@ -183,10 +189,8 @@ func (ec *EvalCtx) getAttr(x any, name string, off int) (any, error) {
 			return ec.ownedChild(x, name, ec.access(v)), nil
 		}
 	}
-	if o, ok := x.(pyObject); ok {
-		if v, ok := o.PyAttr(name); ok {
-			return v, nil
-		}
+	if v, ok := pyAttrOf(x, name); ok {
+		return v, nil
 	}
 	if m, ok := lookupMethod(x, name); ok {
 		return m, nil
@@ -301,6 +305,10 @@ func describeOwner(x any) string {
 	}
 	if t, ok := x.(PyTyped); ok {
 		return t.PyTypeName() + " object"
+	}
+	switch Undeprecate(x).(type) {
+	case pyDatetime, pyDate, pyTime, *pyTZ, pyTimedelta:
+		return pyTypeName(Undeprecate(x)) + " object"
 	}
 	return typeName(x) + " object"
 }
@@ -468,7 +476,7 @@ func (ec *EvalCtx) evalBin(t *binExpr) (any, error) {
 	}
 	v, err := arith(t.op, l, r)
 	if err != nil {
-		return nil, ec.errf(t.off, "%s", err)
+		return nil, ec.errf(t.off, "%s", operandText(err, ec.isVarRef(t.l), ec.isVarRef(t.r)))
 	}
 	return v, nil
 }
@@ -478,12 +486,14 @@ func (ec *EvalCtx) evalCompare(t *compareExpr) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	leftExpr := t.first
 	for i, op := range t.ops {
 		right, err := ec.eval(t.rest[i])
 		if err != nil {
 			return nil, err
 		}
-		ok, err := ec.compareOnce(op, left, right, t.off)
+		ok, err := ec.compareOnce(op, left, right, t.off, [2]bool{ec.isVarRef(leftExpr), ec.isVarRef(t.rest[i])})
+		leftExpr = t.rest[i]
 		if err != nil {
 			return nil, err
 		}
@@ -495,7 +505,9 @@ func (ec *EvalCtx) evalCompare(t *compareExpr) (any, error) {
 	return true, nil
 }
 
-func (ec *EvalCtx) compareOnce(op string, l, r any, off int) (bool, error) {
+// compareOnce is l op r; fromVar tells which operands were read from
+// variables, for the class names a TypeError shows.
+func (ec *EvalCtx) compareOnce(op string, l, r any, off int, fromVar [2]bool) (bool, error) {
 	// Comparing an undefined value raises (StrictUndefined's __eq__ too).
 	if err := ec.rejectUndefined(l, off); err != nil {
 		return false, err
@@ -522,7 +534,7 @@ func (ec *EvalCtx) compareOnce(op string, l, r any, off int) (bool, error) {
 	}
 	c, err := compareOp(l, r, op)
 	if err != nil {
-		return false, ec.errf(off, "%s", err)
+		return false, ec.errf(off, "%s", operandText(err, fromVar[0], fromVar[1]))
 	}
 	switch op {
 	case "<":
