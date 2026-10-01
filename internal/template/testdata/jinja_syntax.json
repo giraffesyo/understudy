@@ -1,0 +1,1038 @@
+[
+ {
+  "src": "{{ 1 }}}",
+  "want": null
+ },
+ {
+  "src": "{{ 1 2 }}",
+  "want": {
+   "msg": "expected token 'end of print statement', got 'integer'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% foo %}",
+  "want": {
+   "msg": "Encountered unknown tag 'foo'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% if true %}x",
+  "want": {
+   "msg": "Unexpected end of template. Jinja was looking for the following tags: 'elif' or 'else' or 'endif'. The innermost block that needs to be closed is 'if'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ (1 }}",
+  "want": {
+   "msg": "unexpected '}', expected ')'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x |  }}",
+  "want": {
+   "msg": "expected token 'name', got 'end of print statement'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% for x in %}{% endfor %}",
+  "want": {
+   "msg": "Expected an expression, got 'end of statement block'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% endif %}",
+  "want": {
+   "msg": "Encountered unknown tag 'endif'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% for x in y %}{% endif %}",
+  "want": {
+   "msg": "Encountered unknown tag 'endif'. Jinja was looking for the following tags: 'endfor' or 'else'. The innermost block that needs to be closed is 'for'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% for x in y %}{% break %}{% endfor %}",
+  "want": {
+   "msg": "Encountered unknown tag 'break'. Jinja was looking for the following tags: 'endfor' or 'else'. The innermost block that needs to be closed is 'for'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% do x %}",
+  "want": {
+   "msg": "Encountered unknown tag 'do'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ 'a\\x' }}",
+  "want": null
+ },
+ {
+  "src": "{% set y = 'a\\x' %}",
+  "want": {
+   "msg": "truncated \\xXX escape",
+   "line": 1,
+   "cause": "'unicodeescape' codec can't decode bytes in position 1-2: truncated \\xXX escape"
+  }
+ },
+ {
+  "src": "{% set y = 'a\\u12' %}",
+  "want": {
+   "msg": "truncated \\uXXXX escape",
+   "line": 1,
+   "cause": "'unicodeescape' codec can't decode bytes in position 1-4: truncated \\uXXXX escape"
+  }
+ },
+ {
+  "src": "{% set y = 'ab\\' %}",
+  "want": {
+   "msg": "unexpected char \"'\" at 11",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% set y = '\\N{foo' %}",
+  "want": {
+   "msg": "malformed \\N character escape",
+   "line": 1,
+   "cause": "'unicodeescape' codec can't decode bytes in position 0-5: malformed \\N character escape"
+  }
+ },
+ {
+  "src": "{% set y = '\\Nx' %}",
+  "want": {
+   "msg": "malformed \\N character escape",
+   "line": 1,
+   "cause": "'unicodeescape' codec can't decode bytes in position 0-1: malformed \\N character escape"
+  }
+ },
+ {
+  "src": "{% set y = '\\N{}' %}",
+  "want": {
+   "msg": "malformed \\N character escape",
+   "line": 1,
+   "cause": "'unicodeescape' codec can't decode bytes in position 0-2: malformed \\N character escape"
+  }
+ },
+ {
+  "src": "{% set y = '\\U00110000' %}",
+  "want": {
+   "msg": "illegal Unicode character",
+   "line": 1,
+   "cause": "'unicodeescape' codec can't decode bytes in position 0-9: illegal Unicode character"
+  }
+ },
+ {
+  "src": "{% set y = 'é\\x4' %}",
+  "want": {
+   "msg": "truncated \\xXX escape",
+   "line": 1,
+   "cause": "'unicodeescape' codec can't decode bytes in position 4-6: truncated \\xXX escape"
+  }
+ },
+ {
+  "src": "line1\n{{ x | }}\nline3",
+  "want": {
+   "msg": "expected token 'name', got 'end of print statement'",
+   "line": 2,
+   "cause": ""
+  }
+ },
+ {
+  "src": "line1\n{% if x %}\nline3\n",
+  "want": {
+   "msg": "Unexpected end of template. Jinja was looking for the following tags: 'elif' or 'else' or 'endif'. The innermost block that needs to be closed is 'if'.",
+   "line": 3,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x y }}",
+  "expr": false,
+  "want": {
+   "msg": "expected token 'end of print statement', got 'y'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "x y",
+  "expr": true,
+  "want": {
+   "msg": "chunk after expression",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "1 }} 2",
+  "expr": true,
+  "want": {
+   "msg": "chunk after expression",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ 1 }}",
+  "expr": true,
+  "want": {
+   "msg": "expected token ':', got '}'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "d | nofilter",
+  "expr": true,
+  "want": {
+   "msg": "No filter named 'nofilter'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "d if d | nofilter else 2",
+  "expr": true,
+  "want": null
+ },
+ {
+  "src": "{% if false %}{{ d | nofilter }}{% endif %}",
+  "want": null
+ },
+ {
+  "src": "{{ d | nofilter }}",
+  "want": {
+   "msg": "No filter named 'nofilter'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ d is notest }}",
+  "want": {
+   "msg": "No test named 'notest'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% for x in y %}{{ x | nofilter }}{% endfor %}",
+  "want": {
+   "msg": "No filter named 'nofilter'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% if x %}{% for i in y %}{{ i | nofilter }}{% endfor %}{% endif %}",
+  "want": {
+   "msg": "No filter named 'nofilter'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x | nofilter | otherbad }}",
+  "want": {
+   "msg": "No filter named 'otherbad'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x | upper(y | nofilter2) | nofilter1 }}",
+  "want": {
+   "msg": "No filter named 'nofilter1'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ }}",
+  "want": {
+   "msg": "Expected an expression, got 'end of print statement'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{",
+  "want": {
+   "msg": "unexpected 'end of template'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x",
+  "want": {
+   "msg": "unexpected end of template, expected 'end of print statement'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% if %}",
+  "want": {
+   "msg": "Expected an expression, got 'end of statement block'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% %}",
+  "want": {
+   "msg": "tag name expected",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{# comment",
+  "want": {
+   "msg": "Missing end of comment tag",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{#",
+  "want": null
+ },
+ {
+  "src": "{% raw %}abc",
+  "want": {
+   "msg": "Missing end of raw directive",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ 'abc }}",
+  "want": {
+   "msg": "unexpected char \"'\" at 3",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x ! y }}",
+  "want": {
+   "msg": "unexpected char '!' at 5",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x ] }}",
+  "want": {
+   "msg": "unexpected ']'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ [1, 2 }}",
+  "want": {
+   "msg": "unexpected '}', expected ']'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ {'a': 1 }}",
+  "want": {
+   "msg": "unexpected '}'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ {'a' 1} }}",
+  "want": {
+   "msg": "expected token ':', got 'integer'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x.1.2 }}",
+  "want": null
+ },
+ {
+  "src": "{{ x. }}",
+  "want": {
+   "msg": "expected name or number",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x.( }}",
+  "want": {
+   "msg": "unexpected '}', expected ')'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ f(a=1, 2) }}",
+  "want": {
+   "msg": "invalid syntax for function call expression",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ f(*a, *b) }}",
+  "want": {
+   "msg": "invalid syntax for function call expression",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x is is y }}",
+  "want": {
+   "msg": "No test named 'is'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x is defined is defined }}",
+  "want": {
+   "msg": "You cannot chain multiple tests with is",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% set 1 = 2 %}",
+  "want": {
+   "msg": "can't assign to 'const'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% set x.y = 2 %}",
+  "want": null
+ },
+ {
+  "src": "{% set ns.y = 2 %}",
+  "want": null
+ },
+ {
+  "src": "{% set (a, 1) = 2 %}",
+  "want": {
+   "msg": "can't assign to 'tuple'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% for 1 in x %}{% endfor %}",
+  "want": {
+   "msg": "can't assign to 'const'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% for loop in x %}{% endfor %}",
+  "want": {
+   "msg": "Can't assign to special loop variable in for-loop target",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% for x in y %}{% set loop = 1 %}{% endfor %}",
+  "want": {
+   "msg": "Can't assign to special loop variable in for-loop target",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% macro m(a=1, b) %}{% endmacro %}",
+  "want": {
+   "msg": "non-default argument follows default argument",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% macro m(a %}{% endmacro %}",
+  "want": {
+   "msg": "expected token ',', got '%'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% call m %}{% endcall %}",
+  "want": {
+   "msg": "expected call",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% block a-b %}{% endblock %}",
+  "want": {
+   "msg": "Block names in Jinja have to be valid Python identifiers and may not contain hyphens, use an underscore instead.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% block a %}{% endblock %}{% block a %}{% endblock %}",
+  "want": {
+   "msg": "block 'a' defined twice",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% for x in y %}{% extends 'a' %}{% endfor %}",
+  "want": {
+   "msg": "cannot use extend from a non top-level scope",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% if x %}{% extends 'a' %}{% endif %}",
+  "want": null
+ },
+ {
+  "src": "{% from 'x' import _a %}",
+  "want": {
+   "msg": "names starting with an underline can not be imported",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% from 'x' import %}",
+  "want": {
+   "msg": "expected token 'name', got 'end of statement block'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% import 'x' %}",
+  "want": {
+   "msg": "expected token 'as', got 'end of statement block'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% include %}",
+  "want": {
+   "msg": "unexpected 'end of statement block'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% with a %}{% endwith %}",
+  "want": {
+   "msg": "expected token '=', got 'end of statement block'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% with a = 1 %}",
+  "want": {
+   "msg": "Unexpected end of template. Jinja was looking for the following tags: 'endwith'. The innermost block that needs to be closed is 'with'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% filter %}{% endfilter %}",
+  "want": {
+   "msg": "expected token 'name', got 'end of statement block'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% filter nofilter %}x{% endfilter %}",
+  "want": {
+   "msg": "No filter named 'nofilter'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% set x | nofilter %}x{% endset %}",
+  "want": {
+   "msg": "No filter named 'nofilter'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% set x %}x",
+  "want": {
+   "msg": "Unexpected end of template. Jinja was looking for the following tags: 'endset'. The innermost block that needs to be closed is 'set'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% block x required %}x{% endblock %}",
+  "want": {
+   "msg": "Required blocks can only contain comments or whitespace",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% print 1 2 %}",
+  "want": {
+   "msg": "expected token ',', got 'integer'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% if x %}{% else %}{% else %}{% endif %}",
+  "want": {
+   "msg": "Encountered unknown tag 'else'. Jinja was looking for the following tags: 'endif'. The innermost block that needs to be closed is 'if'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% if x %}{% elif %}{% endif %}",
+  "want": {
+   "msg": "Expected an expression, got 'end of statement block'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% for x in y %}{% else %}{% endif %}",
+  "want": {
+   "msg": "Encountered unknown tag 'endif'. Jinja was looking for the following tags: 'endfor'. The innermost block that needs to be closed is 'for'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% if x %}{% endfor %}",
+  "want": {
+   "msg": "Encountered unknown tag 'endfor'. Jinja was looking for the following tags: 'elif' or 'else' or 'endif'. The innermost block that needs to be closed is 'if'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% if x %}\n{% for y in z %}\n{% endif %}",
+  "want": {
+   "msg": "Encountered unknown tag 'endif'. You probably made a nesting mistake. Jinja is expecting this tag, but currently looking for 'endfor' or 'else'. The innermost block that needs to be closed is 'for'.",
+   "line": 3,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ 1 if x }}",
+  "want": null
+ },
+ {
+  "src": "{{ 1 if }}",
+  "want": {
+   "msg": "unexpected 'end of print statement'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x[] }}",
+  "want": null
+ },
+ {
+  "src": "{{ x[1:2:3:4] }}",
+  "want": {
+   "msg": "expected token ',', got ':'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ 0x }}",
+  "want": {
+   "msg": "expected token 'end of print statement', got 'x'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ 1_000 + 0b101 + 0o17 + 0xff + 1.5e3 + 1_0.5 }}",
+  "want": null
+ },
+ {
+  "src": "{{ 1__0 }}",
+  "want": {
+   "msg": "expected token 'end of print statement', got '__0'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ 1. }}",
+  "want": {
+   "msg": "expected name or number",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x.y( }}",
+  "want": {
+   "msg": "unexpected '}', expected ')'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x;y }}",
+  "want": {
+   "msg": "expected token 'end of print statement', got ';'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ not }}",
+  "want": {
+   "msg": "unexpected 'end of print statement'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ - }}",
+  "want": {
+   "msg": "unexpected 'end of print statement'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ 1 + }}",
+  "want": {
+   "msg": "unexpected 'end of print statement'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ a and }}",
+  "want": {
+   "msg": "unexpected 'end of print statement'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ a not b }}",
+  "want": {
+   "msg": "expected token 'end of print statement', got 'not'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ a not in b in }}",
+  "want": {
+   "msg": "unexpected 'end of print statement'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "a\nb\n{{ 1 +\n\n }}",
+  "want": {
+   "msg": "unexpected 'end of print statement'",
+   "line": 5,
+   "cause": ""
+  }
+ },
+ {
+  "src": "a {{- 1 -}} b {%- if x -%} c {%+ endif +%}",
+  "want": null
+ },
+ {
+  "src": "{% raw %}{{ x }{% endraw %}{{ (1 }}",
+  "want": {
+   "msg": "unexpected '}', expected ')'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{%- raw -%} x {%- endraw -%}{{ ) }}",
+  "want": {
+   "msg": "unexpected ')'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x | default(1, true }}",
+  "want": {
+   "msg": "unexpected '}', expected ')'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ '\\q' }}",
+  "want": null
+ },
+ {
+  "src": "{% set a = '\\q' %}",
+  "want": null
+ },
+ {
+  "src": "x | default(1) )",
+  "expr": true,
+  "want": {
+   "msg": "unexpected ')'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "",
+  "expr": true,
+  "want": {
+   "msg": "unexpected 'end of template'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "(",
+  "expr": true,
+  "want": {
+   "msg": "unexpected 'end of template'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "a = 1",
+  "expr": true,
+  "want": {
+   "msg": "chunk after expression",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "x is",
+  "expr": true,
+  "want": {
+   "msg": "unexpected end of template, expected 'name'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "x is nottest",
+  "expr": true,
+  "want": {
+   "msg": "No test named 'nottest'.",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "x is not version('1', '<')",
+  "expr": true,
+  "want": null
+ },
+ {
+  "src": "{{ x }}",
+  "expr": true,
+  "want": {
+   "msg": "expected token ':', got '}'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "'a\\x'",
+  "expr": true,
+  "want": {
+   "msg": "truncated \\xXX escape",
+   "line": 1,
+   "cause": "'unicodeescape' codec can't decode bytes in position 1-2: truncated \\xXX escape"
+  }
+ },
+ {
+  "src": "x\ny ==",
+  "expr": true,
+  "want": {
+   "msg": "chunk after expression",
+   "line": 2,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% for x in y recursive %}{{ loop(x) }}{% endfor %}{{ 1 + }}",
+  "want": {
+   "msg": "unexpected 'end of print statement'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x |\n\n upper |\n nofilter }}",
+  "want": {
+   "msg": "No filter named 'nofilter'.",
+   "line": 4,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% autoescape %}{% endautoescape %}",
+  "want": {
+   "msg": "unexpected 'end of statement block'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% set a, b = 1 %}{{ a.b.c( }}",
+  "want": {
+   "msg": "unexpected '}', expected ')'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ ~ }}",
+  "want": {
+   "msg": "unexpected '~'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x ~ }}",
+  "want": {
+   "msg": "unexpected 'end of print statement'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ 'a' 'b' }}{{ ( }}",
+  "want": {
+   "msg": "unexpected '}', expected ')'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x if y else }}",
+  "want": {
+   "msg": "unexpected 'end of print statement'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ [x for x in y] }}",
+  "want": {
+   "msg": "expected token ',', got 'for'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ lambda: 1 }}",
+  "want": {
+   "msg": "expected token 'end of print statement', got ':'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x := 1 }}",
+  "want": {
+   "msg": "expected token 'end of print statement', got ':'",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x @ y }}",
+  "want": {
+   "msg": "unexpected char '@' at 5",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ $x }}",
+  "want": {
+   "msg": "unexpected char '$' at 3",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ `x` }}",
+  "want": {
+   "msg": "unexpected char '`' at 3",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{{ x² }}",
+  "want": {
+   "msg": "Invalid character in identifier",
+   "line": 1,
+   "cause": ""
+  }
+ },
+ {
+  "src": "{% set x = 1 %}{% set y = 2 %}\n{% for i in x %}\n{% if i %}\n{{ i | nofilter }}\n{% endif %}\n{% endfor %}",
+  "want": null
+ }
+]

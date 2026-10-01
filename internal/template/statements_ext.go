@@ -606,6 +606,9 @@ func (ec *EvalCtx) loadTemplate(name string) ([]tmplNode, string, error) {
 			continue
 		}
 		src := strings.TrimSuffix(string(data), "\n")
+		if err := ec.engine.syntaxError(src, Position{File: path, Line: 1, Col: 1}, false, false); err != nil {
+			return nil, "", err
+		}
 		nodes, err := ec.engine.parseTemplate(src, Position{File: path, Line: 1, Col: 1})
 		if err != nil {
 			return nil, "", err

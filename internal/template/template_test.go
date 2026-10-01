@@ -293,7 +293,7 @@ func TestCoreFilters(t *testing.T) {
 		t.Error("mandatory on undefined should error")
 	}
 	if _, err := e.EvalExpression("1 | nosuchfilter", nil, testPos); err == nil ||
-		!strings.Contains(err.Error(), `no filter named "nosuchfilter"`) {
+		!strings.Contains(err.Error(), `No filter named 'nosuchfilter'.`) {
 		t.Error("unknown filter should name itself in the error")
 	}
 }

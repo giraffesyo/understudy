@@ -515,7 +515,9 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 	}
 	fn, ok := ec.engine.Filters[t.name]
 	if !ok {
-		return nil, ec.errf(t.off, "no filter named %q", t.name)
+		// Compiling rejects an unknown filter outside if-statements and
+		// conditional expressions; inside them it fails when called.
+		return nil, ec.errf(t.off, "No filter named %s found.", pyStrRepr(t.full))
 	}
 	if isUndefined(in) && !undefinedTolerantFilters[t.name] {
 		u := in.(Undefined)
@@ -537,9 +539,25 @@ func (ec *EvalCtx) evalFilter(t *filterExpr) (any, error) {
 		if _, ok := err.(*UndefinedError); ok {
 			return nil, err
 		}
-		return nil, ec.errf(t.off, "filter %q: %s", t.name, err)
+		return nil, ec.pluginError("filter", t.full, err)
 	}
 	return out, nil
+}
+
+// pluginError is AnsibleTemplatePluginRuntimeError: "The filter plugin
+// 'ansible.builtin.combine' failed", caused by the plugin's exception.
+func (ec *EvalCtx) pluginError(kind, name string, err error) error {
+	if !strings.Contains(name, ".") {
+		name = "ansible.builtin." + name
+	}
+	head := fmt.Sprintf("The %s plugin %s failed.", kind, pyStrRepr(name))
+	msg := err.Error()
+	if strings.HasSuffix(head, msg) {
+		msg = head
+	} else {
+		msg = strings.TrimRight(head, ". ") + ": " + msg
+	}
+	return &TemplateError{Pos: ec.pos, Msg: msg, Src: ec.src, Plugin: true}
 }
 
 // undefinedTolerantTests may receive an Undefined input.
@@ -554,7 +572,7 @@ func (ec *EvalCtx) evalTest(t *testExpr) (any, error) {
 	}
 	fn, ok := ec.engine.Tests[t.name]
 	if !ok {
-		return nil, ec.errf(t.off, "no test named %q", t.name)
+		return nil, ec.errf(t.off, "No test named %s found.", pyStrRepr(t.full))
 	}
 	if isUndefined(in) && !undefinedTolerantTests[t.name] {
 		u := in.(Undefined)
@@ -569,7 +587,10 @@ func (ec *EvalCtx) evalTest(t *testExpr) (any, error) {
 		if _, ok := err.(*TemplateError); ok {
 			return nil, err
 		}
-		return nil, ec.errf(t.off, "test %q: %s", t.name, err)
+		if _, ok := err.(*UndefinedError); ok {
+			return nil, err
+		}
+		return nil, ec.pluginError("test", t.full, err)
 	}
 	if t.negated {
 		return !res, nil
