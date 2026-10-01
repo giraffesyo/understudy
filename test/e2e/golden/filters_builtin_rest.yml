@@ -234,6 +234,7 @@
           - "{{ 'secret' | vault('pw', salt='s', vault_id='myid') }}"
           - "{{ 'secret' | vault('pw') | unvault('pw') }}"
           - "{{ 'plain' | unvault('pw') }}"
+          - "{{ 'data' | vault('pw', salt='s', wrap_object=true) }}"
 
     - name: unvault with the wrong secret
       debug: {msg: "{{ 'secret' | vault('pw', salt='s') | unvault('bad') }}"}

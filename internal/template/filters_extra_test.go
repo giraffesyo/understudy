@@ -1,6 +1,7 @@
 package template
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -51,6 +52,37 @@ func TestFiltersMatchAnsible(t *testing.T) {
 		}
 		if g := PyJSON(got, 0, false, false); g != want {
 			t.Errorf("%s:\n got %s\nwant %s", tpl, g, want)
+		}
+	}
+}
+
+// TestEveryBuiltinPlugin holds the registries to every ansible.builtin
+// filter and test (testdata/plugin_names.json, from
+// testdata/plugin_names.py), each with its Python signature.
+func TestEveryBuiltinPlugin(t *testing.T) {
+	data, err := os.ReadFile("testdata/plugin_names.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names struct{ Filters, Tests []string }
+	if err := json.Unmarshal(data, &names); err != nil {
+		t.Fatal(err)
+	}
+	e := New()
+	for _, n := range names.Filters {
+		if _, ok := e.Filters[n]; !ok {
+			t.Errorf("no filter %s", n)
+		}
+		if _, ok := filterSignatures[n]; !ok {
+			t.Errorf("no signature for the filter %s", n)
+		}
+	}
+	for _, n := range names.Tests {
+		if _, ok := e.Tests[n]; !ok {
+			t.Errorf("no test %s", n)
+		}
+		if _, ok := testSignatures[n]; !ok {
+			t.Errorf("no signature for the test %s", n)
 		}
 	}
 }
