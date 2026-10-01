@@ -1,0 +1,10 @@
+---
+# The python facts describe the interpreter that runs the module (the
+# harness's ANSIBLE_PYTHON_INTERPRETER): its sys.executable and version.
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - setup: {gather_subset: ['!all', '!min', python]}
+      register: r
+    - debug: {msg: "{{ r.ansible_facts.ansible_python }}"}
+    - debug: {msg: "{{ r.ansible_facts.ansible_python_version | default('unset') }}"}

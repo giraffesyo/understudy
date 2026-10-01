@@ -144,6 +144,10 @@ func pythonInfo(e *factEnv) *pyInfo {
 
 func probePython(e *factEnv) *pyInfo {
 	exe := e.binPath("python3")
+	reported := exe
+	if e.python != nil {
+		exe, reported = e.python()
+	}
 	if exe == "" {
 		return nil
 	}
@@ -159,7 +163,7 @@ func probePython(e *factEnv) *pyInfo {
 	if m == nil {
 		return nil
 	}
-	pi := &pyInfo{exe: exe, level: "final"}
+	pi := &pyInfo{exe: reported, level: "final"}
 	pi.major, _ = strconv.Atoi(m[1])
 	pi.minor, _ = strconv.Atoi(m[2])
 	pi.micro, _ = strconv.Atoi(m[3])
