@@ -576,7 +576,9 @@ func (m *varsMapping) Keys() []string {
 	names := m.ctx.Names()
 	out := names[:0:0]
 	for _, n := range names {
-		if n != "vars" {
+		// get_vars has no omit placeholder, nor what the task executor
+		// adds later (ansible_search_path) or understudy keeps inside.
+		if n != "vars" && n != "omit" && n != "ansible_search_path" && !strings.HasPrefix(n, "__understudy") {
 			out = append(out, n)
 		}
 	}
