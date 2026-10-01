@@ -3,6 +3,7 @@ package playbook
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/giraffesyo/understudy/internal/modules/pyre"
 )
@@ -36,6 +37,55 @@ func parseKVRaw(s string) (map[string]any, string) {
 		raw = append(raw, rawParam(orig, word))
 	}
 	return out, pyJoinArgs(raw)
+}
+
+// SplitArgsError is split_args' error for args that end inside quotes or
+// a Jinja2 block (an AnsibleParserError).
+type SplitArgsError struct{ Args string }
+
+func (e *SplitArgsError) Error() string {
+	return "failed at splitting arguments, either an unbalanced jinja2 block or quotes: " + e.Args
+}
+
+// ParseKV is parse_kv(args) as ansible-core parses `-e key=value` extra
+// vars: the key=value words (keys and values stripped, values unquoted)
+// in order, a repeated key keeping its first place, and any other words
+// joined as `_raw_params`. Every value is a string.
+func ParseKV(s string) (keys []string, vals map[string]string, err error) {
+	words, balanced := pySplitArgsChecked(s)
+	if !balanced {
+		return nil, nil, &SplitArgsError{s}
+	}
+	vals = map[string]string{}
+	set := func(k, v string) {
+		if _, ok := vals[k]; !ok {
+			keys = append(keys, k)
+		}
+		vals[k] = v
+	}
+	var raw []string
+	for _, orig := range words {
+		x := decodeEscapes(orig)
+		if !strings.Contains(x, "=") {
+			raw = append(raw, orig)
+			continue
+		}
+		pos := kvSplitPos(x)
+		if pos < 0 {
+			raw = append(raw, strings.ReplaceAll(x, `\=`, "="))
+			continue
+		}
+		set(strings.TrimFunc(x[:pos], isPyStrSpace), unquote(strings.TrimFunc(x[pos+1:], isPyStrSpace)))
+	}
+	if len(raw) > 0 {
+		set("_raw_params", pyJoinArgs(raw))
+	}
+	return keys, vals, nil
+}
+
+// isPyStrSpace is str.isspace for one character (what str.strip strips).
+func isPyStrSpace(r rune) bool {
+	return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f)
 }
 
 // isAllTemplate reports whether s starts and ends with template
@@ -110,10 +160,17 @@ func pyJoinArgs(params []string) string {
 // of spaces and the newlines carried on the tokens so join_args rebuilds
 // the original text.
 func pySplitArgs(args string) []string {
+	params, _ := pySplitArgsChecked(args)
+	return params
+}
+
+// pySplitArgsChecked is pySplitArgs that also reports whether the args
+// end outside quotes and Jinja2 blocks (split_args raises
+// SplitArgsError when they do not).
+func pySplitArgsChecked(args string) (params []string, balanced bool) {
 	if args == "" {
-		return nil
+		return nil, true
 	}
-	var params []string
 	var quoteChar byte
 	insideQuotes := false
 	depths := []struct {
@@ -173,7 +230,7 @@ func pySplitArgs(args string) []string {
 			params[len(params)-1] += "\n"
 		}
 	}
-	return params
+	return params, !inJinja() && !insideQuotes
 }
 
 // pyQuoteState is splitter._get_quote_state.
@@ -259,9 +316,10 @@ func splitWords(s string) []string {
 	return out
 }
 
-// unquote strips one level of surrounding quotes.
+// unquote is parsing.quoting.unquote: one level of surrounding quotes
+// stripped, unless the closing one is escaped.
 func unquote(s string) string {
-	if len(s) >= 2 && (s[0] == '\'' || s[0] == '"') && s[len(s)-1] == s[0] {
+	if len(s) >= 2 && (s[0] == '\'' || s[0] == '"') && s[len(s)-1] == s[0] && s[len(s)-2] != '\\' {
 		return s[1 : len(s)-1]
 	}
 	return s

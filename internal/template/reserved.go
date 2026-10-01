@@ -49,7 +49,11 @@ func ReservedWarning(o KeyOrigin) string {
 	head := fmt.Sprintf("[WARNING]: Found variable using reserved name %s.\n", PyRepr(o.Name))
 	switch {
 	case o.File != "" && o.Line > 0 && o.Col > 0:
-		return head + fmt.Sprintf("Origin: %s:%d:%d\n\n%s\n", o.File, o.Line, o.Col, SourceExcerpt(o.File, o.Line, o.Col))
+		if excerpt := SourceExcerpt(o.File, o.Line, o.Col); excerpt != "" {
+			return head + fmt.Sprintf("Origin: %s:%d:%d\n\n%s\n", o.File, o.Line, o.Col, excerpt)
+		}
+		// No source to show (-e YAML text): the name stands in for it.
+		return head + fmt.Sprintf("Origin: %s:%d:%d\n\n%s\n\n", o.File, o.Line, o.Col, o.Name)
 	case o.File != "" && o.Line > 0:
 		return head + fmt.Sprintf("Origin: %s:%d\n\n%s\n", o.File, o.Line, lineExcerpt(o.File, o.Line))
 	case o.Label != "":

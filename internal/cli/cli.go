@@ -5,7 +5,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -128,7 +128,10 @@ type parsedArgs struct {
 	inventory []string
 	limit     string
 	extraVars map[string]any
-	// extraVarsErr is the first -e @file that could not be read: as
+	// extraVarArgs are the -e options, loaded with the inventory.
+	extraVarArgs    []string
+	extraVarsLoaded bool
+	// extraVarsErr is the first -e option that could not be loaded: as
 	// ansible-core loads extra vars, it fails the inventory sources'
 	// parsing and then the run.
 	extraVarsErr error
@@ -198,19 +201,8 @@ var cliFlags = []cliFlag{
 	{[]string{"-i", "--inventory", "--inventory-file"}, true, func(p *parsedArgs, v string) error { p.inventory = append(p.inventory, v); return nil }},
 	{[]string{"-l", "--limit"}, true, func(p *parsedArgs, v string) error { p.limit = v; return nil }},
 	{[]string{"-e", "--extra-vars"}, true, func(p *parsedArgs, v string) error {
-		if path, ok := strings.CutPrefix(v, "@"); ok {
-			if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
-				if p.extraVarsErr == nil {
-					abs, _ := filepath.Abs(path)
-					p.extraVarsErr = inventory.FileNotFoundError(abs)
-				}
-				return nil
-			}
-		}
-		if p.extraVarValues == nil {
-			p.extraVarValues = map[string]template.Position{}
-		}
-		return parseExtraVars(v, p.extraVars, &p.extraVarOrigins, p.extraVarValues)
+		p.extraVarArgs = append(p.extraVarArgs, v)
+		return nil
 	}},
 	{[]string{"-f", "--forks"}, true, func(p *parsedArgs, v string) error { p.forks, _ = pyInt(v); p.forksSet = true; return nil }},
 	{[]string{"-t", "--tags"}, true, func(p *parsedArgs, v string) error { p.tags = joinCSV(p.tags, v); return nil }},
@@ -493,82 +485,161 @@ func splitCSV(s string) []string {
 	return out
 }
 
-// parseExtraVars handles -e k=v, -e '{"json": true}', and -e @file.yml.
+// loadExtraVars is load_extra_vars, once: the -e options in order, up to
+// the first that fails.
+func (p *parsedArgs) loadExtraVars() {
+	if p.extraVarsLoaded {
+		return
+	}
+	p.extraVarsLoaded = true
+	p.extraVarValues = map[string]template.Position{}
+	for _, v := range p.extraVarArgs {
+		if p.extraVarsErr = parseExtraVars(v, p.extraVars, &p.extraVarOrigins, p.extraVarValues); p.extraVarsErr != nil {
+			return
+		}
+	}
+}
+
+// cliExtraVarsOrigin is the origin ansible-core gives -e text.
+const cliExtraVarsOrigin = "<CLI option '-e'>"
+
+// extraVarsError is an error loading the extra vars: the event every
+// inventory source fails with, and ansible-core's exit status for its
+// exception (4 for an AnsibleParserError, 5 for an AnsibleOptionsError,
+// 1 for a missing file).
+type extraVarsError struct {
+	event error
+	code  int
+}
+
+func (e *extraVarsError) Error() string { return e.event.Error() }
+
+// Formatted is the error as Display.error shows it.
+func (e *extraVarsError) Formatted() string { return "[ERROR]: " + inventory.FormatEvent(e.event) }
+
+// ExitCode is ansible-core's exit status for the error.
+func (e *extraVarsError) ExitCode() int { return e.code }
+
+// extraVarsEvent is the event an extra vars error fails the inventory
+// sources with (nil for none).
+func extraVarsEvent(err error) error {
+	if e, ok := err.(*extraVarsError); ok {
+		return e.event
+	}
+	return err
+}
+
+// parseExtraVars is one -e option as load_extra_vars reads it: @file (a
+// YAML or JSON file), YAML or JSON text starting with [ or {, or
+// key=value words (parse_kv); a path not given as @file is refused.
 func parseExtraVars(s string, into map[string]any, origins *[]template.KeyOrigin, values map[string]template.Position) error {
-	switch {
-	case strings.HasPrefix(s, "@"):
-		data, err := os.ReadFile(s[1:])
-		if err != nil {
-			return fmt.Errorf("extra-vars file: %w", err)
-		}
-		abs, err := filepath.Abs(s[1:])
-		if err != nil {
-			abs = s[1:]
-		}
-		// ansible-core's loader reads JSON first: its values carry just
-		// the file as their origin (not a line and column).
-		isJSON := json.Valid(data)
-		name := abs
-		if isJSON {
-			name = ""
-		}
-		v, err := yaml.Unmarshal(data, name)
-		if err != nil {
-			return err
-		}
-		if node, err := yaml.ParseSingle(data, abs); err == nil {
-			*origins = append(*origins, playbook.ReservedKeyOrigins(node, abs)...)
-		}
-		m, ok := yaml.PlainMap(v)
-		if !ok {
-			return fmt.Errorf("extra-vars file %s must contain a mapping", s[1:])
-		}
-		for k, val := range m {
-			into[k] = val
-			if isJSON {
-				values[k] = template.Position{File: abs}
-			} else if file, line, col, ok := yaml.ChildOrigin(m, k); ok {
-				values[k] = template.Position{File: file, Line: line, Col: col}
-			}
-		}
+	if s == "" {
 		return nil
-	case strings.HasPrefix(strings.TrimSpace(s), "{"):
-		// Python's json: ints stay ints, keys keep their order.
-		jv, err := omap.UnmarshalJSON([]byte(s))
-		if err != nil {
-			return fmt.Errorf("extra-vars JSON: %w", err)
-		}
-		m, ok := yaml.PlainMap(jv)
-		if !ok {
-			return fmt.Errorf("extra-vars JSON: not an object")
-		}
-		if node, err := yaml.ParseSingle([]byte(s), ""); err == nil {
-			// JSON keys carry no origin.
-			for _, k := range node.MapKeys() {
+	}
+	optionsErr := func(msg string) error {
+		return &extraVarsError{inventory.EventError(msg, "", ""), 5}
+	}
+	if strings.HasPrefix(s, "@") {
+		// The option's type, maybe_unfrack_path('@').
+		s = "@" + unfrackPath(s[1:])
+	}
+	notMapping := func() error {
+		return optionsErr(fmt.Sprintf("Invalid extra vars data supplied. '%s' could not be made into a dictionary", s))
+	}
+	// load is DataLoader.load: Python's json first (ints stay ints, keys
+	// keep their order; the values carry just the source as their origin
+	// and the keys none), then YAML.
+	load := func(data []byte, name string) error {
+		if jv, err := omap.UnmarshalJSON(data); err == nil {
+			om, ok := jv.(*omap.OMap)
+			if !ok {
+				return notMapping()
+			}
+			for _, k := range om.Keys() {
+				into[k] = om.Get(k)
+				values[k] = template.Position{File: name}
 				if template.IsReservedName(k) {
 					*origins = append(*origins, template.KeyOrigin{Name: k})
 				}
 			}
+			return nil
+		}
+		v, err := yaml.Unmarshal(data, name)
+		if err != nil {
+			var ye *yaml.Error
+			if name == cliExtraVarsOrigin && errors.As(err, &ye) {
+				// The text has no file to show or analyze it from.
+				ctx := "Origin: " + name
+				if ye.Line > 0 {
+					ctx = fmt.Sprintf("Origin: %s:%d:%d\n\n(source not shown: TypeError)", name, ye.Line, ye.Col)
+				}
+				return &extraVarsError{inventory.EventError(ye.UnanalyzedMessage(), ctx, ""), 4}
+			}
+			return &extraVarsError{inventory.AsEvent(err), 4}
+		}
+		m, ok := yaml.PlainMap(v)
+		if !ok {
+			return notMapping()
+		}
+		if node, err := yaml.ParseSingle(data, name); err == nil {
+			*origins = append(*origins, playbook.ReservedKeyOrigins(node, name)...)
 		}
 		for k, val := range m {
 			into[k] = val
-			values[k] = template.Position{File: "<CLI option '-e'>"}
-		}
-		return nil
-	default:
-		for _, pair := range strings.Fields(s) {
-			eq := strings.IndexByte(pair, '=')
-			if eq <= 0 {
-				return fmt.Errorf("extra-vars: expected key=value, got %q", pair)
-			}
-			into[pair[:eq]] = pair[eq+1:]
-			values[pair[:eq]] = template.Position{File: "<CLI option '-e'>"}
-			if template.IsReservedName(pair[:eq]) {
-				*origins = append(*origins, template.KeyOrigin{Name: pair[:eq], Label: "<CLI option '-e'>"})
+			if file, line, col, ok := yaml.ChildOrigin(m, k); ok {
+				values[k] = template.Position{File: file, Line: line, Col: col}
+			} else {
+				values[k] = template.Position{File: name}
 			}
 		}
 		return nil
 	}
+	switch {
+	case strings.HasPrefix(s, "@"):
+		path := s[1:]
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return &extraVarsError{inventory.FileNotFoundError(path), 1}
+			}
+			return &extraVarsError{inventory.EventError(fmt.Sprintf("An error occurred while trying to read the file '%s': %s", path, pyOSError(err, path)), "", ""), 4}
+		}
+		return load(data, path)
+	case s[0] == '/' || s[0] == '.':
+		return optionsErr(fmt.Sprintf("Please prepend extra_vars filename '%s' with '@'", s))
+	case s[0] == '[' || s[0] == '{':
+		return load([]byte(s), cliExtraVarsOrigin)
+	default:
+		keys, kv, err := playbook.ParseKV(s)
+		if err != nil {
+			return &extraVarsError{inventory.EventError(err.Error(), "", ""), 4}
+		}
+		for _, k := range keys {
+			into[k] = kv[k]
+			values[k] = template.Position{File: cliExtraVarsOrigin}
+			if template.IsReservedName(k) {
+				*origins = append(*origins, template.KeyOrigin{Name: k, Label: cliExtraVarsOrigin})
+			}
+		}
+		return nil
+	}
+}
+
+// pyOSError is how Python words an OSError reading path ("[Errno 21] Is
+// a directory: '<path>'").
+func pyOSError(err error, path string) string {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		text := map[syscall.Errno]string{
+			syscall.EISDIR: "Is a directory", syscall.EACCES: "Permission denied",
+			syscall.ENOTDIR: "Not a directory", syscall.ELOOP: "Too many levels of symbolic links",
+		}[errno]
+		if text == "" {
+			text = errno.Error()
+		}
+		return fmt.Sprintf("[Errno %d] %s: '%s'", int(errno), text, path)
+	}
+	return err.Error()
 }
 
 // loadInventory builds the inventory from -i sources (falling back to
@@ -576,6 +647,7 @@ func parseExtraVars(s string, into map[string]any, origins *[]template.KeyOrigin
 // group_vars/host_vars adjacent to sources and to the playbook directory.
 // Its warnings print as ansible-core's Display prints them.
 func loadInventory(p *parsedArgs, playbookDir string) (*inventory.Inventory, error) {
+	p.loadExtraVars()
 	cfg, err := config.Load()
 	if err != nil {
 		cfg = config.Defaults()
@@ -599,7 +671,7 @@ func loadInventory(p *parsedArgs, playbookDir string) (*inventory.Inventory, err
 		UnparsedWarning:     cfg.InventoryUnparsedWarning,
 		UnparsedIsFailed:    cfg.InventoryUnparsedIsFailed,
 		AnyUnparsedIsFailed: cfg.InventoryAnyUnparsedIsFailed,
-		ExtraVarsErr:        p.extraVarsErr,
+		ExtraVarsErr:        extraVarsEvent(p.extraVarsErr),
 		TransformGroupChars: cfg.TransformInvalidGroupChars,
 		Warn:                warnOnce,
 		Verbose: func(level int, msg string) {
@@ -616,7 +688,7 @@ func loadInventory(p *parsedArgs, playbookDir string) (*inventory.Inventory, err
 	}
 	if p.extraVarsErr != nil {
 		// The variable manager loads them again, for good.
-		return nil, errors.New(inventory.Inline(p.extraVarsErr))
+		return nil, p.extraVarsErr
 	}
 	inv.PatternMismatch = cfg.HostPatternMismatch
 	inv.TransformGroupChars = cfg.TransformInvalidGroupChars
@@ -748,6 +820,10 @@ func playbookCmd(args []string) int {
 	inv, err := loadInventory(p, filepath.Dir(p.positional[0]))
 	if err != nil {
 		printError(err)
+		var ce interface{ ExitCode() int }
+		if errors.As(err, &ce) {
+			return ce.ExitCode()
+		}
 		return 1
 	}
 	if err := checkHostList(inv, p.limit, "all"); err != nil {
@@ -1056,6 +1132,10 @@ func adhocCmd(args []string) int {
 	inv, err := loadInventory(p, p.playbookDir)
 	if err != nil {
 		printError(err)
+		var ce interface{ ExitCode() int }
+		if errors.As(err, &ce) {
+			return ce.ExitCode()
+		}
 		return 1
 	}
 	// AdHocCLI.run: the hosts (none matching is a warning, unless --limit
@@ -1305,8 +1385,12 @@ func configureYAML(cfg *config.Config) {
 		var msg string
 		switch {
 		case w.Line > 0:
-			msg = fmt.Sprintf("[WARNING]: %s\nOrigin: %s:%d:%d\n\n%s\n%s\n\n", w.Msg, w.File, w.Line, w.Col,
-				template.SourceExcerpt(w.File, w.Line, w.Col), w.Help)
+			excerpt := template.SourceExcerpt(w.File, w.Line, w.Col)
+			if excerpt == "" {
+				// No source to show (-e YAML text): the key stands in.
+				excerpt = w.Key + "\n"
+			}
+			msg = fmt.Sprintf("[WARNING]: %s\nOrigin: %s:%d:%d\n\n%s\n%s\n\n", w.Msg, w.File, w.Line, w.Col, excerpt, w.Help)
 		case w.Value != "":
 			// A key with no origin (a bool): its value stands in for the source.
 			msg = fmt.Sprintf("[WARNING]: %s\nOrigin: <unknown>\n\n%s\n\n%s\n\n", w.Msg, w.Value, w.Help)

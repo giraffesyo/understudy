@@ -1,0 +1,26 @@
+ansible-playbook
+-i
+localhost,
+-c
+local
+-e
+x="1 == 1"
+-e
+a='b c' d=2 free  words
+-e
+e=a\=b f="q\"q" g=\x41\n h= i
+-e
+p=1 \ q=2
+-e
+t=\N{LATIN u=\u00e9\U0001F600 w=it\'s
+-e
+{"j": 1, "k": {"l": [1]}}
+-e
+{m: 2020-01-01, n: !unsafe '{{ 1 }}', o: 1, o: 2, hostvars: 1}
+-e
+@vars.yml
+-e
+@./vars.json
+-e
+@EMPTY@
+pb.yml

@@ -68,6 +68,15 @@ func (e *Error) Message() string {
 	return "YAML parsing failed: " + e.analyze.msg
 }
 
+// UnanalyzedMessage is Message without the friendly-message analysis,
+// which ansible-core skips when it cannot read the source (YAML text from
+// the command line); the error then points at e.Line and e.Col.
+func (e *Error) UnanalyzedMessage() string {
+	c := *e
+	c.Ansible, c.analyze = true, analysis{}
+	return c.Message()
+}
+
 // Origin is where the error points (line 0: the file as a whole).
 func (e *Error) Origin() (file string, line, col int) {
 	e.analyzeOnce()

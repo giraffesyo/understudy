@@ -47,3 +47,31 @@ func TestSplitFreeFormKeepsWhitespace(t *testing.T) {
 		}
 	}
 }
+
+// ParseKV is parse_kv as -e reads key=value words: quotes keep spaces
+// together, escapes decode, other words join as _raw_params, and
+// unbalanced quotes or blocks fail.
+func TestParseKVExtraVars(t *testing.T) {
+	cases := []struct {
+		in   string
+		keys []string
+		vals map[string]string
+	}{
+		{`x="1 == 1"`, []string{"x"}, map[string]string{"x": "1 == 1"}},
+		{`a='b c' d=2 free  words`, []string{"a", "d", "_raw_params"}, map[string]string{"a": "b c", "d": "2", "_raw_params": "free  words"}},
+		{`e=a\=b f="q\"q" g=\x41\n h= i`, []string{"e", "f", "g", "h", "_raw_params"}, map[string]string{"e": `a\=b`, "f": `q"q`, "g": "A", "h": "", "_raw_params": "i"}},
+		{`=x x=1 x=2`, []string{"x", "_raw_params"}, map[string]string{"_raw_params": "=x", "x": "2"}},
+		{`p=1 \ q=2`, []string{"p", "q"}, map[string]string{"p": "1", "q": "2"}},
+	}
+	for _, c := range cases {
+		keys, vals, err := ParseKV(c.in)
+		if err != nil || !reflect.DeepEqual(keys, c.keys) || !reflect.DeepEqual(vals, c.vals) {
+			t.Errorf("%s: got %q %q %v", c.in, keys, vals, err)
+		}
+	}
+	for _, in := range []string{`x="unbal`, `x={{ foo`, `x="a\\"`} {
+		if _, _, err := ParseKV(in); err == nil {
+			t.Errorf("%s: no error", in)
+		}
+	}
+}

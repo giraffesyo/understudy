@@ -1,0 +1,8 @@
+ansible-playbook
+-i
+localhost,
+-c
+local
+-e
+x={{ foo
+pb.yml
