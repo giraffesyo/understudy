@@ -100,3 +100,11 @@
     - name: called, it is a method as before
       debug:
         msg: "{{ d.items() | list }} {{ d.items is callable }} {{ range(2) | list }}"
+
+    - name: attr's method too
+      debug:
+        msg: "{{ d | attr('items') }}"
+      ignore_errors: true
+
+    - debug:
+        msg: "x {{ d | attr('values') }} {{ {'k': 1} | attr('get') is callable }}"
