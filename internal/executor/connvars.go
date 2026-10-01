@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/template"
 	"github.com/giraffesyo/understudy/internal/vars"
@@ -222,6 +223,31 @@ func (r *Runner) connectionVars(play *playbook.Play, task *playbook.Task, host, 
 		}
 	}
 	return out
+}
+
+// delegatedLabel labels a result that failed before its connection was
+// set up with the host the task delegates to (target), as the callback
+// labels it from the task's delegate_to.
+func delegatedLabel(res *agentproto.Result, host, target string) *agentproto.Result {
+	if res != nil && target != host {
+		res.DelegatedTo = target
+	}
+	return res
+}
+
+// delegateFailure is the task's result when its delegate_to (at pos)
+// does not template: the task fails, raised at delegate_to, its result
+// naming the delegate as written (nil: not a template error).
+func delegateFailure(task *playbook.Task, host string, pos template.Position, err error) *agentproto.Result {
+	cause, ok := template.Cause(err)
+	if !ok {
+		return nil
+	}
+	res := agentproto.Fail("Task failed: %s", cause)
+	res.Origin = "verbatim"
+	res.ErrorChain = &agentproto.ErrorChain{Outer: "Task failed.", Inner: cause,
+		InnerFile: pos.File, InnerLine: pos.Line, InnerCol: pos.Col}
+	return delegatedLabel(res, host, task.Delegate)
 }
 
 // anyDefined reports whether any of names is defined in c.

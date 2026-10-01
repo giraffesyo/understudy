@@ -660,6 +660,11 @@ const (
 func (d *Default) Retrying(host string, task *playbook.Task, name string, left int, res *agentproto.Result) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if res.DelegatedTo != "" && res.DelegatedTo != host {
+		// The attempt's result has no delegated variables yet: the
+		// delegate alone.
+		host += " -> " + res.DelegatedTo
+	}
 	line := fmt.Sprintf("FAILED - RETRYING: [%s]: %s (%d retries left).", host, name, left)
 	if d.runIsVerbose(task, res, 2) {
 		// v2_runner_retry dumps without _clean_results (no debug trim).
