@@ -35,6 +35,7 @@ type Settings struct {
 // each key's plain value (what variables see) and its serialized form
 // with the tags ansible-core keeps (what the payload holds).
 type Facts struct {
+	mu     sync.RWMutex // hosts' tasks run concurrently
 	keys   []string
 	plain  map[string]any
 	tagged map[string]any
@@ -46,16 +47,24 @@ func NewFacts() *Facts {
 }
 
 // Keys are the fact names in order.
-func (f *Facts) Keys() []string { return f.keys }
+func (f *Facts) Keys() []string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return append([]string(nil), f.keys...)
+}
 
 // Get is a fact's plain value.
 func (f *Facts) Get(k string) (any, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	v, ok := f.plain[k]
 	return v, ok
 }
 
 // Map is the facts as a plain map.
 func (f *Facts) Map() map[string]any {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	out := make(map[string]any, len(f.keys))
 	for _, k := range f.keys {
 		out[k] = f.plain[k]
@@ -64,11 +73,21 @@ func (f *Facts) Map() map[string]any {
 }
 
 // Len is the number of facts.
-func (f *Facts) Len() int { return len(f.keys) }
+func (f *Facts) Len() int {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return len(f.keys)
+}
 
 // Set sets one fact (host_cache |= facts: a key already there keeps its
 // place): its plain value and its tagged form (see Tag).
 func (f *Facts) Set(k string, plain, tagged any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.set(k, plain, tagged)
+}
+
+func (f *Facts) set(k string, plain, tagged any) {
 	if _, had := f.plain[k]; !had {
 		f.keys = append(f.keys, k)
 	}
@@ -78,8 +97,20 @@ func (f *Facts) Set(k string, plain, tagged any) {
 
 // Update merges other into f (dict |=).
 func (f *Facts) Update(other *Facts) {
-	for _, k := range other.keys {
-		f.Set(k, other.plain[k], other.tagged[k])
+	// Snapshot other first: holding both locks could deadlock against
+	// an Update the other way round.
+	other.mu.RLock()
+	keys := append([]string(nil), other.keys...)
+	plain := make([]any, len(keys))
+	tagged := make([]any, len(keys))
+	for i, k := range keys {
+		plain[i], tagged[i] = other.plain[k], other.tagged[k]
+	}
+	other.mu.RUnlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, k := range keys {
+		f.set(k, plain[i], tagged[i])
 	}
 }
 
@@ -92,6 +123,8 @@ func (f *Facts) Clone() *Facts {
 
 // payload is the interposer's JSON payload of the facts.
 func (f *Facts) payload() string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	m := omap.NewOMap()
 	for _, k := range f.keys {
 		m.Set(k, f.tagged[k])

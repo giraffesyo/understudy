@@ -199,6 +199,7 @@ type Runner struct {
 	implicitMu     sync.Mutex
 	implicitSet    bool            // the implicit localhost's inventory vars are set
 	facts          factcache.Cache // the fact cache (VariableManager's)
+	factsMu        sync.Mutex      // serializes setHostFacts' read-update-write
 }
 
 // NewRunner builds a runner over a loaded inventory.

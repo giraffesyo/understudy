@@ -90,17 +90,23 @@ func (r *Runner) installFacts(host string, facts map[string]any) {
 // which a persistent plugin writes out even when nothing changed) and
 // its variables.
 func (r *Runner) setHostFacts(host string, facts *factcache.Facts) {
+	r.factsMu.Lock()
 	cur, err := r.facts.Get(host)
 	if err != nil {
+		r.factsMu.Unlock()
 		r.fatal(err)
 		return
 	}
+	// A copy: the memory plugin hands out the facts it holds, and the
+	// caller may keep using facts.
 	if cur == nil {
-		cur = facts
+		cur = facts.Clone()
 	} else {
+		cur = cur.Clone()
 		cur.Update(facts)
 	}
 	r.facts.Set(host, cur)
+	r.factsMu.Unlock()
 	if facts.Len() > 0 {
 		r.installFacts(host, facts.Map())
 	}
