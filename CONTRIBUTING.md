@@ -5,8 +5,9 @@
 - `canary` is the only long-lived branch (and the repository's default):
   work lands there, and releases are cut from it. Each push to `canary`
   makes [release-please](https://github.com/googleapis/release-please) open
-  or update a release PR; merging the release PR publishes the release (see
-  [Releases](README.md#releases)).
+  or update a release PR; merging the release PR tags and creates the
+  release, and GoReleaser then builds, signs and uploads its artifacts and
+  container image (see [Releases](README.md#releases)).
 
 ## Commit messages: Conventional Commits
 
@@ -41,7 +42,7 @@ docs: README install section
 | `perf`     | a speedup                                  | Performance Improvements | patch                         |
 | `revert`   | reverting an earlier commit                | Reverts                  | patch                         |
 | `docs`     | documentation only                         | Documentation            | patch                         |
-| `build`    | Makefile, release artifacts, toolchain     | Build System             | patch                         |
+| `build`    | Makefile, GoReleaser/Dockerfile, toolchain | Build System             | patch                         |
 | `refactor` | code change with no behavior change        | (hidden)                 | none on its own               |
 | `test`     | tests, golden corpus, harnesses            | (hidden)                 | none on its own               |
 | `ci`       | workflows, CI configuration                | (hidden)                 | none on its own               |
@@ -75,8 +76,14 @@ make test-golden                # with ansible-core installed (see README)
 make test-e2e                   # with Docker
 ```
 
+Changes to `.goreleaser.yaml` or the `Dockerfile`: run
+`goreleaser check` and `goreleaser release --snapshot --clean --skip=sign`
+(GoReleaser v2, the version pinned in `.github/workflows/release.yml`; the
+images need Docker with buildx), then `make clean` or `rm -rf dist`.
+
 CI also runs `go mod verify`, staticcheck, govulncheck, the race detector,
-the cross-compile check, CodeQL, and the golden and Docker suites; see
+the cross-compile check, `goreleaser check` with a snapshot release build,
+CodeQL, and the golden and Docker suites; see
 [.github/workflows/ci.yml](.github/workflows/ci.yml) for the pinned tool
 versions (staticcheck and govulncheck run with `go run module@version`
 and stay out of `go.mod`). The module takes no third-party Go

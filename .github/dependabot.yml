@@ -34,6 +34,21 @@ updates:
       prefix: ci
       include: scope
 
+  # The release image's base (Dockerfile, pinned by digest). It ships in
+  # the image, so a bump is a fix(deps) with a changelog entry.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      docker-base:
+        patterns: ["*"]
+    commit-message:
+      prefix: fix
+      include: scope
+
   # The ansible-core the golden suite compares against (it tracks the latest
   # release). After merging, regenerate requirements.txt's hashes if the PR
   # did not (see the comment in requirements.in).

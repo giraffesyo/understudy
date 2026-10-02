@@ -47,10 +47,28 @@ standard library.
 
 ## Install
 
-Prebuilt binaries for Linux and macOS (amd64 and arm64) are attached to each
-[GitHub release](https://github.com/giraffesyo/understudy/releases), with a
-`checksums.txt` of their SHA-256 sums, a CycloneDX SBOM per tarball, and
-build provenance attestations (see [SECURITY.md](SECURITY.md#verifying-release-artifacts)):
+Each [GitHub release](https://github.com/giraffesyo/understudy/releases)
+carries static binaries for Linux and macOS (amd64 and arm64) as tarballs,
+`.deb`, `.rpm` and `.apk` packages for Linux, a CycloneDX SBOM per tarball,
+and `checksums.txt` (SHA-256 of all of them) with its Sigstore signature;
+a multi-arch container image goes to `ghcr.io/giraffesyo/understudy`.
+Everything is signed with cosign (keyless) and has a GitHub build provenance
+attestation; to verify a download:
+
+```sh
+id=https://github.com/giraffesyo/understudy/.github/workflows/release.yml@refs/heads/canary
+cosign verify-blob --certificate-identity $id \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --bundle checksums.txt.sigstore.json checksums.txt
+sha256sum --check --ignore-missing checksums.txt
+gh attestation verify understudy_v0.1.0_linux_amd64.tar.gz --repo giraffesyo/understudy
+cosign verify ghcr.io/giraffesyo/understudy:0.1.0 --certificate-identity $id \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+More in [SECURITY.md](SECURITY.md#verifying-release-artifacts).
+
+Tarball:
 
 ```sh
 v=v0.1.0 os=linux arch=amd64    # or darwin / arm64
@@ -58,6 +76,34 @@ curl -fsSLO https://github.com/giraffesyo/understudy/releases/download/$v/unders
 tar xzf understudy_${v}_${os}_${arch}.tar.gz
 sudo install understudy_${v}_${os}_${arch}/understudy /usr/local/bin/
 ```
+
+Linux packages (the version without the `v`; arch `amd64` or `arm64`):
+
+```sh
+base=https://github.com/giraffesyo/understudy/releases/download/v0.1.0
+curl -fsSLO $base/understudy_0.1.0_linux_amd64.deb && sudo apt install ./understudy_0.1.0_linux_amd64.deb
+curl -fsSLO $base/understudy_0.1.0_linux_amd64.rpm && sudo dnf install ./understudy_0.1.0_linux_amd64.rpm
+curl -fsSLO $base/understudy_0.1.0_linux_amd64.apk && sudo apk add --allow-untrusted ./understudy_0.1.0_linux_amd64.apk
+```
+
+The packages install `/usr/bin/understudy` and, in `/usr/lib/understudy/bin`,
+`ansible` and `ansible-playbook` symlinks to it (kept off the default PATH,
+so they never clash with an installed ansible-core). The `.apk` is not
+signed with an Alpine key, hence `--allow-untrusted`; verify it against
+the signed `checksums.txt` instead.
+
+Container image (linux/amd64 and linux/arm64; tags `0.1.0`, `v0.1` and
+`latest`), with the playbook directory mounted at `/work`:
+
+```sh
+docker run --rm ghcr.io/giraffesyo/understudy version
+docker run --rm -v "$PWD:/work" -v "$HOME/.ssh:/root/.ssh:ro" \
+  ghcr.io/giraffesyo/understudy playbook -i inventory site.yml
+```
+
+The image is Alpine with the static binary: understudy's SSH client is
+built in (no OpenSSH needed); the shell is there for the local connection,
+`pipe` lookups and `ProxyCommand`.
 
 Or build from source (Go, see `go.mod` for the version):
 
@@ -70,7 +116,8 @@ make build          # cross-compiles the agents, then embeds + builds the CLI
 
 `make build` also creates `ansible` and `ansible-playbook` symlinks — the
 binary dispatches on its own name, so symlinks with those names (to a
-release binary too) work as drop-in replacements.
+release binary too) work as drop-in replacements. With a package installed,
+`export PATH=/usr/lib/understudy/bin:$PATH` does the same.
 
 ## Quick start
 
@@ -832,7 +879,8 @@ is left out), and settings only a command line or config reaches.
 CI (`.github/workflows/ci.yml`) runs gofmt, `go mod verify`, `go vet`,
 staticcheck, govulncheck, `make depcheck`, the unit suite on Linux and macOS
 (and on the minimum Go `go.mod` declares), the unit suite under the race
-detector, the cross-compile check, the golden suite against the latest
+detector, the cross-compile check, `goreleaser check` and a snapshot release
+build (archives, packages, SBOMs and images, nothing published), the golden suite against the latest
 ansible-core (pinned in one place: `.github/golden/requirements.in`,
 installed from its hash-checked lock), and the Docker end-to-end suite.
 The golden and Docker jobs set `UNDERSTUDY_REQUIRE_PREREQS=1`, which turns
@@ -844,16 +892,26 @@ own workflows; contributions follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
 `understudy version` reports the version stamped at build time with
 `-ldflags -X github.com/giraffesyo/understudy/internal/cli.version=...`.
-`make build` stamps `git describe` output; builds without the Makefile fall
-back to the module version `go install` records.
+`make build` stamps `git describe` output; release builds stamp the tag;
+builds without either fall back to the module version `go install` records.
+
+Release artifacts are built by [GoReleaser](https://goreleaser.com)
+(`.goreleaser.yaml`, which runs `make agents` first so the embedded agents
+are current). To build them all locally without publishing or signing
+(images need Docker with buildx):
 
 ```sh
-make release VERSION=v1.2.3   # dist/understudy_v1.2.3_<os>_<arch>.tar.gz + dist/checksums.txt
-make sbom VERSION=v1.2.3      # + dist/understudy_v1.2.3_<os>_<arch>.sbom.cdx.json, checksums over both
+goreleaser check
+goreleaser release --snapshot --clean --skip=sign
 ```
 
-builds stripped, static tarballs (binary, LICENSE, README) for linux and
-darwin on amd64 and arm64.
+That writes to `dist/`: the tarballs
+(`understudy_<version>_<os>_<arch>.tar.gz`: the stripped static binary,
+LICENSE, README), the `.deb`/`.rpm`/`.apk` packages, the SBOMs
+(`understudy_<version>_<os>_<arch>.sbom.cdx.json`, from each binary's Go
+build info by cyclonedx-gomod), `checksums.txt`, and one local image per
+platform (`ghcr.io/giraffesyo/understudy:<version>-amd64`/`-arm64`). CI runs
+the same snapshot build on every change.
 
 Releases are cut by [release-please](https://github.com/googleapis/release-please)
 from the [Conventional Commits](CONTRIBUTING.md#commit-messages-conventional-commits)
@@ -861,12 +919,17 @@ on `canary`; nobody pushes tags by hand. On each push to `canary` the release
 workflow (`.github/workflows/release.yml`) opens or updates a release PR
 that bumps the version in `.release-please-manifest.json` and adds the
 release's section to `CHANGELOG.md`. Merging that PR tags `vX.Y.Z` and
-creates the GitHub release; the same workflow then checks out the tag, runs
-the unit tests, `make release VERSION=vX.Y.Z` (so `understudy version`
-reports the tag, which it checks) and `make sbom`, attests build provenance
-and the SBOMs, and uploads the tarballs, SBOMs and `checksums.txt` to the
-release. Running the workflow by hand with a tag rebuilds and re-uploads an
-existing release's artifacts.
+creates the GitHub release with those notes. The same workflow then checks
+out the tag, runs the unit tests, checks that a fresh build's `understudy
+version` reports the tag, and runs `goreleaser release`, which builds
+everything above, signs `checksums.txt` with cosign (keyless, through the
+workflow's GitHub identity), uploads the files to the existing release
+(release-please's notes stay as they are; GoReleaser writes no changelog),
+and pushes and signs the multi-arch image (`X.Y.Z`, `vX.Y`, `latest`). The
+workflow then attests build provenance for every file in `checksums.txt`
+and for the image, and attaches each tarball's SBOM as an attestation.
+Running the workflow by hand with a tag rebuilds and re-uploads an existing
+release's artifacts.
 
 ## License
 

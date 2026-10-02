@@ -33,8 +33,8 @@ import (
 	"github.com/giraffesyo/understudy/internal/yaml"
 )
 
-// version is stamped at build time by the Makefile and the release
-// workflow: -ldflags "-X github.com/giraffesyo/understudy/internal/cli.version=v1.2.3".
+// version is stamped at build time by the Makefile and GoReleaser
+// (.goreleaser.yaml): -ldflags "-X github.com/giraffesyo/understudy/internal/cli.version=v1.2.3".
 // Unstamped builds fall back to the module version `go install` records.
 var version = "0.1.0-dev"
 

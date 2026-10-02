@@ -1,0 +1,215 @@
+# GoReleaser builds and publishes the release artifacts; release-please
+# stays the authority for the version, the tag, the changelog and the GitHub
+# release itself (see README "Releases"). The release workflow checks out a
+# tag release-please made and runs `goreleaser release --clean`, which
+# uploads to that existing release without touching its notes.
+#
+# Local check: `goreleaser check` and
+# `goreleaser release --snapshot --clean --skip=sign` (images need Docker).
+version: 2
+
+project_name: understudy
+
+before:
+  hooks:
+    # The control binary embeds the gzipped linux agents (internal/embedded);
+    # this builds them (and runs the agent's dependency check) first.
+    - make agents
+
+# The stamped version: the release tag (vX.Y.Z), so `understudy version`
+# prints `understudy vX.Y.Z` exactly as `make build` on a tag does. Snapshot
+# builds stamp their snapshot version instead of the previous tag. The same
+# expression names the archives and SBOMs.
+builds:
+  - id: understudy
+    main: ./cmd/understudy
+    binary: understudy
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/giraffesyo/understudy/internal/cli.version={{ if .IsSnapshot }}v{{ .Version }}{{ else }}{{ .Tag }}{{ end }}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    # Reproducible: file times come from the commit, not the build clock.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# understudy_<tag>_<os>_<arch>.tar.gz with understudy_<tag>_<os>_<arch>/
+# {understudy,LICENSE,README.md}, the names `make release` used.
+archives:
+  - id: understudy
+    ids: [understudy]
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ if .IsSnapshot }}v{{ .Version }}{{ else }}{{ .Tag }}{{ end }}_{{ .Os }}_{{ .Arch }}
+    wrap_in_directory: true
+    builds_info: &fileinfo
+      owner: root
+      group: root
+      mtime: "{{ .CommitDate }}"
+    files:
+      - src: LICENSE
+        info: *fileinfo
+      - src: README.md
+        info: *fileinfo
+
+# One CycloneDX SBOM per binary (understudy_<tag>_<os>_<arch>.sbom.cdx.json,
+# beside the tarball of the same name), from the module and standard-library
+# versions in the binary's Go build info. cyclonedx-gomod reads exactly what
+# the Go linker recorded and runs with `go run module@version`, so the
+# release needs no extra installer and the tool never enters go.mod.
+sboms:
+  - id: understudy
+    artifacts: binary
+    ids: [understudy]
+    documents:
+      - >-
+        {{ .ProjectName }}_{{ if .IsSnapshot }}v{{ .Version }}{{ else }}{{ .Tag }}{{ end }}_{{ .Os }}_{{ .Arch }}.sbom.cdx.json
+    cmd: go
+    args:
+      - run
+      - github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
+      - bin
+      - -json
+      - -std
+      - -version
+      - '{{ if .IsSnapshot }}v{{ .Version }}{{ else }}{{ .Tag }}{{ end }}'
+      - -output
+      - $document
+      - $artifact
+    env:
+      - GOFLAGS=-trimpath
+
+# Linux packages. The binary goes to /usr/bin; the `ansible-playbook` and
+# `ansible` names that `make build` links in bin/ go to
+# /usr/lib/understudy/bin, so they never collide with an installed
+# ansible-core: put that directory first on PATH to use understudy as a
+# drop-in replacement.
+nfpms:
+  - id: understudy
+    ids: [understudy]
+    package_name: understudy
+    formats: [deb, rpm, apk]
+    vendor: giraffesyo
+    maintainer: Michael McQuade <michael@giraffesyo.io>
+    homepage: https://github.com/giraffesyo/understudy
+    description: |-
+      An Ansible-compatible playbook engine in a single static binary
+      understudy runs Ansible playbooks, ad-hoc commands and vaults with no
+      Python on the control node, shipping a small agent to the targets.
+    license: Apache-2.0
+    section: admin
+    bindir: /usr/bin
+    mtime: "{{ .CommitDate }}"
+    contents:
+      - dst: /usr/lib/understudy/bin
+        type: dir
+        file_info:
+          mode: 0755
+      - src: /usr/bin/understudy
+        dst: /usr/lib/understudy/bin/ansible-playbook
+        type: symlink
+      - src: /usr/bin/understudy
+        dst: /usr/lib/understudy/bin/ansible
+        type: symlink
+      - src: LICENSE
+        dst: /usr/share/doc/understudy/LICENSE
+        file_info:
+          mode: 0644
+      - src: README.md
+        dst: /usr/share/doc/understudy/README.md
+        file_info:
+          mode: 0644
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Keyless (Sigstore) signature of checksums.txt, which covers every archive,
+# package and SBOM: checksums.txt.sigstore.json (certificate + signature).
+signs:
+  - id: cosign
+    artifacts: checksum
+    cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - --bundle=${signature}
+      - ${artifact}
+      - --yes
+    output: true
+
+# Multi-arch image (linux/amd64, linux/arm64) from the binaries built above;
+# see Dockerfile. Snapshot builds load one image per platform locally
+# (tag suffixed -amd64/-arm64) instead of pushing.
+dockers_v2:
+  - id: understudy
+    ids: [understudy]
+    dockerfile: Dockerfile
+    images:
+      - ghcr.io/giraffesyo/understudy
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .IsSnapshot }}v{{ .Major }}.{{ .Minor }}{{ end }}"
+      - "{{ if and (not .IsSnapshot) (not .Prerelease) }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.description: An Ansible-compatible playbook engine in a single static binary
+      org.opencontainers.image.url: https://github.com/giraffesyo/understudy
+      org.opencontainers.image.source: https://github.com/giraffesyo/understudy
+      org.opencontainers.image.documentation: https://github.com/giraffesyo/understudy#readme
+      org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .CommitDate }}"
+      org.opencontainers.image.base.name: "{{ .BaseImage }}"
+      org.opencontainers.image.base.digest: "{{ .BaseImageDigest }}"
+    annotations:
+      "{{ if not .IsSnapshot }}index,{{ end }}manifest:org.opencontainers.image.title": "{{ .ProjectName }}"
+      "{{ if not .IsSnapshot }}index,{{ end }}manifest:org.opencontainers.image.description": An Ansible-compatible playbook engine in a single static binary
+      "{{ if not .IsSnapshot }}index,{{ end }}manifest:org.opencontainers.image.source": https://github.com/giraffesyo/understudy
+      "{{ if not .IsSnapshot }}index,{{ end }}manifest:org.opencontainers.image.licenses": Apache-2.0
+      "{{ if not .IsSnapshot }}index,{{ end }}manifest:org.opencontainers.image.version": "{{ .Version }}"
+      "{{ if not .IsSnapshot }}index,{{ end }}manifest:org.opencontainers.image.revision": "{{ .FullCommit }}"
+      "{{ if not .IsSnapshot }}index,{{ end }}manifest:org.opencontainers.image.created": "{{ .CommitDate }}"
+
+# Keyless cosign signature of the pushed image index (by digest).
+docker_signs:
+  - id: cosign
+    cmd: cosign
+    args:
+      - sign
+      - ${artifact}@${digest}
+      - --yes
+    output: true
+
+# dist/digests.txt: the pushed image digests, for the workflow's image
+# attestation.
+docker_digest:
+  name_template: digests.txt
+
+# release-please writes the changelog and the release notes.
+changelog:
+  disable: true
+
+# Upload to the release release-please already created for this tag: keep
+# its name and notes, never create a draft of our own, replace assets that
+# exist (a re-run through workflow_dispatch), and leave "latest" to GitHub
+# (an empty make_latest is not sent, so re-running an old tag does not
+# mark it latest).
+release:
+  github:
+    owner: giraffesyo
+    name: understudy
+  mode: keep-existing
+  draft: false
+  prerelease: auto
+  replace_existing_artifacts: true
+  make_latest: '{{ "" }}'
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
