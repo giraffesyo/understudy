@@ -56,11 +56,10 @@ func filterPasswordHash(ec *EvalCtx, in any, args []any, kwargs map[string]any) 
 		known = known || hashtype == m[1]
 	}
 	usePasslib := !cryptGensalt()
-	if usePasslib && !known {
+	if !known {
+		// do_encrypt hands an algorithm crypt lacks to passlib, which the
+		// controller is assumed to have (CI's does).
 		return nil, fmt.Errorf("%s is not in the list of supported passlib algorithms: md5, blowfish, sha256, sha512", hashtype)
-	}
-	if !usePasslib && !known {
-		return nil, fmt.Errorf("crypt does not support %s algorithm", pyStrRepr(hashtype))
 	}
 	algo := hashAlgos[hashtype]
 	if ec.engine.Verbose != nil {
@@ -194,8 +193,15 @@ func libxcryptHash(name string, algo hashAlgo, secret, salt, saltSize, rounds, i
 	}
 	var saltStr string
 	if salt != nil {
+		switch salt.(type) {
+		case bool, int64, int, float64, *big.Int:
+			if truthy(salt) {
+				// _salt's set(salt).
+				return nil, fmt.Errorf("%s object is not iterable", pyStrRepr(pyTypeName(salt)))
+			}
+		}
 		saltStr = toStr(salt)
-		if saltStr == "" {
+		if !truthy(salt) {
 			saltStr = randomSalt(size)
 		}
 		for _, c := range saltStr {
@@ -213,17 +219,18 @@ func libxcryptHash(name string, algo hashAlgo, secret, salt, saltSize, rounds, i
 	} else {
 		saltStr = randomSalt(size)
 	}
+	n := algo.implicitRound
+	if truthy(rounds) {
+		// crypt_gensalt's count is a ctypes c_ulong argument.
+		r, ok := rounds.(int64)
+		if !ok {
+			return nil, fmt.Errorf("argument 2: TypeError: %s object cannot be interpreted as an integer", pyStrRepr(pyTypeName(rounds)))
+		}
+		n = int(r)
+	}
 	pw := toStr(secret)
 	if name == "md5_crypt" {
 		return md5Crypt(pw, saltStr), nil
-	}
-	n := algo.implicitRound
-	if truthy(rounds) {
-		r, ok := asInt(rounds)
-		if !ok {
-			return nil, fmt.Errorf("Failed to generate salt for %s algorithm", pyStrRepr(name))
-		}
-		n = int(r)
 	}
 	return shaCrypt(pw, saltStr, n, name == "sha512_crypt"), nil
 }

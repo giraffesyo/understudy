@@ -195,6 +195,9 @@ var cryptGensalt = sync.OnceValue(func() bool {
 // crypt_gensalt the given salt is not used verbatim: it is the "random
 // bytes" input, which libxcrypt's gensalt_sha_rn encodes 3 bytes to 4 salt
 // characters (at most 16), so "abcdefghijklmnop" becomes "V7qMYJaNbVKOeh4P".
+// It encodes a group only while more bytes follow it (used + 3 <
+// nrbytes), so a final group of exactly 3 bytes is dropped: "abc"
+// becomes the empty salt.
 func cryptSalt(salt string) (string, error) {
 	if !cryptGensalt() {
 		return salt, nil
@@ -203,7 +206,7 @@ func cryptSalt(salt string) (string, error) {
 		return "", fmt.Errorf("crypt_gensalt failed: unable to generate salt")
 	}
 	var b []byte
-	for used := 0; used+3 <= len(salt) && used*4/3 < 16; used += 3 {
+	for used := 0; used+3 < len(salt) && used*4/3 < 16; used += 3 {
 		v := uint32(salt[used]) | uint32(salt[used+1])<<8 | uint32(salt[used+2])<<16
 		b = append(b, cryptAlphabet[v&63], cryptAlphabet[v>>6&63], cryptAlphabet[v>>12&63], cryptAlphabet[v>>18&63])
 	}
