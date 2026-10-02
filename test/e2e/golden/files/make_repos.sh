@@ -67,7 +67,7 @@ git commit -q -m 'add sub'
 if command -v gpg >/dev/null 2>&1; then
   g=$(mktemp -d /tmp/gpgXXXXXX)
   GNUPGHOME=$g gpg --batch --quiet --import "$signer" 2>/dev/null
-  printf '#!/bin/sh\nexec gpg --faked-system-time 20260101T000000 "$@"\n' > "$g/gpg.sh"
+  printf '#!/bin/sh\nexec gpg --faked-system-time 20260101T000000! "$@"\n' > "$g/gpg.sh"
   chmod +x "$g/gpg.sh"
   git init -q -b main "$d/signed"
   cd "$d/signed"
