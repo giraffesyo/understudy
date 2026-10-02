@@ -53,7 +53,8 @@ carries static binaries for Linux and macOS (amd64 and arm64) as tarballs,
 and `checksums.txt` (SHA-256 of all of them) with its Sigstore signature;
 a multi-arch container image goes to `ghcr.io/giraffesyo/understudy`.
 Everything is signed with cosign (keyless) and has a GitHub build provenance
-attestation; to verify a download:
+attestation; to verify a download (the image's signature is in Sigstore's
+bundle format, which needs cosign 3 or newer):
 
 ```sh
 id=https://github.com/giraffesyo/understudy/.github/workflows/release.yml@refs/heads/canary
@@ -61,8 +62,8 @@ cosign verify-blob --certificate-identity $id \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --bundle checksums.txt.sigstore.json checksums.txt
 sha256sum --check --ignore-missing checksums.txt
-gh attestation verify understudy_v0.1.0_linux_amd64.tar.gz --repo giraffesyo/understudy
-cosign verify ghcr.io/giraffesyo/understudy:0.1.0 --certificate-identity $id \
+gh attestation verify understudy_v0.1.1_linux_amd64.tar.gz --repo giraffesyo/understudy
+cosign verify ghcr.io/giraffesyo/understudy:0.1.1 --certificate-identity $id \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
