@@ -33,7 +33,10 @@ func Musl() bool {
 // referral; some DNS proxies answer every unknown name so) is a server
 // failure to glibc, which tries the next server and ends in EAI_AGAIN,
 // and an empty answer, EAI_NODATA, to musl. Everything else (SERVFAIL,
-// timeouts, unreadable answers) is EAI_AGAIN.
+// timeouts, unreadable answers) is EAI_AGAIN — unless glibc's hosts
+// database goes on past the failed dns source to one that does not know
+// the name either (files, myhostname: Rocky's "files dns myhostname"),
+// whose HOST_NOT_FOUND, the last word, makes it EAI_NONAME.
 func GaiError(err *net.DNSError) string {
 	switch {
 	case err.IsNotFound && Musl():
@@ -44,8 +47,107 @@ func GaiError(err *net.DNSError) string {
 		return "[Errno -5] Name has no usable address"
 	case Musl():
 		return "[Errno -3] Try again"
+	case notFoundAfterDNS("/etc/nsswitch.conf"):
+		return "[Errno -2] Name or service not known"
 	}
 	return "[Errno -3] Temporary failure in name resolution"
+}
+
+// notFoundAfterDNS reports whether the hosts line of the nsswitch.conf
+// at path, once its dns source has failed (NSS_STATUS_UNAVAIL: no server
+// answered usably), goes on to a source that answers NOTFOUND for a name
+// DNS does not know: files or myhostname. Without the file glibc uses
+// "files dns".
+func notFoundAfterDNS(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var sources []nssSource
+	for _, line := range strings.Split(string(data), "\n") {
+		line, _, _ = strings.Cut(line, "#")
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "hosts:"); ok {
+			sources = parseNSSSources(rest)
+			break
+		}
+	}
+	status, afterDNS, notFound := "unavail", false, false
+	for _, s := range sources {
+		switch {
+		case !afterDNS && s.name != "dns":
+			continue
+		case !afterDNS:
+			afterDNS = true
+		case s.name == "files" || s.name == "myhostname":
+			status, notFound = "notfound", true
+		default:
+			// A source understudy cannot answer for leaves the verdict.
+			continue
+		}
+		if s.returns(status) {
+			break
+		}
+	}
+	return notFound
+}
+
+// nssSource is a service on an nsswitch.conf line and the actions
+// ("[NOTFOUND=return]") that follow it.
+type nssSource struct {
+	name    string
+	actions []nssAction
+}
+
+// nssAction is one STATUS=ACTION item, lower case; negate for "!STATUS".
+type nssAction struct {
+	negate         bool
+	status, action string
+}
+
+// returns reports whether the lookup stops after the source ends in a
+// non-success status (by default it continues).
+func (s nssSource) returns(status string) bool {
+	ret := false
+	for _, a := range s.actions {
+		if (a.status == status) != a.negate {
+			ret = a.action == "return"
+		}
+	}
+	return ret
+}
+
+// parseNSSSources splits the services of an nsswitch.conf line, each
+// with the bracketed actions after it.
+func parseNSSSources(line string) []nssSource {
+	var out []nssSource
+	for line = strings.TrimSpace(line); line != ""; line = strings.TrimSpace(line) {
+		if line[0] != '[' {
+			end := strings.IndexAny(line, " \t[")
+			if end < 0 {
+				end = len(line)
+			}
+			out = append(out, nssSource{name: strings.ToLower(line[:end])})
+			line = line[end:]
+			continue
+		}
+		block, rest, _ := strings.Cut(line[1:], "]")
+		line = rest
+		if len(out) == 0 {
+			continue
+		}
+		// STATUS=ACTION items, spaces allowed around '='.
+		f := strings.Fields(strings.ReplaceAll(block, "=", " = "))
+		for i := 0; i+2 < len(f); i++ {
+			if f[i+1] != "=" {
+				continue
+			}
+			st, neg := strings.CutPrefix(strings.ToLower(f[i]), "!")
+			last := &out[len(out)-1]
+			last.actions = append(last.actions, nssAction{negate: neg, status: st, action: strings.ToLower(f[i+2])})
+			i += 2
+		}
+	}
+	return out
 }
 
 // Addr is a "host:port" address to dial as the C library would look its

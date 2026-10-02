@@ -28,6 +28,9 @@ func TestGaiError(t *testing.T) {
 	if Musl() {
 		t.Skip("glibc's wording")
 	}
+	if notFoundAfterDNS("/etc/nsswitch.conf") {
+		t.Skip("a hosts source after dns has the last word")
+	}
 	for _, c := range []struct {
 		err  net.DNSError
 		want string
@@ -42,5 +45,36 @@ func TestGaiError(t *testing.T) {
 		if got := GaiError(&c.err); got != c.want {
 			t.Errorf("%q: %s, want %s", c.err.Err, got, c.want)
 		}
+	}
+}
+
+// TestNotFoundAfterDNS: glibc's getaddrinfo reports the h_errno of the
+// last hosts source it asked; one after a failed dns that does not know
+// the name makes EAI_AGAIN EAI_NONAME.
+func TestNotFoundAfterDNS(t *testing.T) {
+	dir := t.TempDir()
+	for conf, want := range map[string]bool{
+		"":                                   false,
+		"hosts:      files dns myhostname\n": true,  // Rocky 9
+		"hosts:          files dns\n":        false, // Ubuntu, Debian
+		"hosts: files myhostname resolve [!UNAVAIL=return] dns\n": false, // Fedora
+		"hosts: files dns [UNAVAIL=return] myhostname\n":          false,
+		"hosts: dns [!UNAVAIL=return] files\n":                    true,
+		"hosts: dns [!TRYAGAIN=return] files\n":                   false,
+		"hosts: dns [ NOTFOUND = return ] files\n":                true,
+		"hosts: files dns mdns4_minimal\n":                        false,
+		"hosts: files dns mdns4 [NOTFOUND=return] files\n":        true,
+		"hosts: files dns myhostname [NOTFOUND=return] mdns4\n":   true,
+		"# hosts: files dns myhostname\nhosts: files dns\n":       false,
+		"hosts: files dns # myhostname\n":                         false,
+	} {
+		p := filepath.Join(dir, "nsswitch.conf")
+		os.WriteFile(p, []byte(conf), 0o644)
+		if got := notFoundAfterDNS(p); got != want {
+			t.Errorf("%q: %v, want %v", conf, got, want)
+		}
+	}
+	if notFoundAfterDNS(filepath.Join(dir, "missing")) {
+		t.Error("no nsswitch.conf: glibc's default is files dns")
 	}
 }
