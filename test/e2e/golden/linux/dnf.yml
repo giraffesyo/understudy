@@ -50,9 +50,16 @@
       when: false
     - name: autoremove alone
       dnf: {autoremove: true}
-    - name: a package with a dependency
+    # One package per transaction: ansible-core's dnf lists a multi-package
+    # transaction in a Python set's order (libsolv's package ids), which
+    # follows the mirrors' metadata and is not reproducible.
+    - name: a dependency, installed on its own
+      dnf: {name: unzip}
+    - name: a package whose dependency is already there
       dnf: {name: zip}
-    - name: remove it and its unused dependency
+    - name: remove it (autoremove keeps the explicitly installed dependency)
       dnf: {name: zip, state: absent, autoremove: true}
+    - name: remove the dependency
+      dnf: {name: unzip, state: absent}
     - name: cleanup
       dnf: {name: tree, state: absent}
