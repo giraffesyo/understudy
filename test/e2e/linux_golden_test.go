@@ -29,7 +29,9 @@ import (
 const lgUser = "tester"
 
 // lgImages are the target images: each runs sshd in the foreground with
-// python3 (for ansible) and a passwordless-sudo user.
+// python3 (for ansible) and a passwordless-sudo user. The Rocky images
+// upgrade the base image first: its libraries (OpenSSL 3.5.5) lag the
+// current openssh-server that dnf installs over them.
 var lgImages = map[string]string{
 	"ubuntu": `FROM ubuntu:24.04
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server sudo python3 git && \
@@ -44,7 +46,8 @@ RUN apk add --no-cache openssh sudo python3 git && ssh-keygen -A && \
     echo '` + lgUser + ` ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/` + lgUser + `
 CMD ["/usr/sbin/sshd", "-D", "-e"]`,
 	"rocky": `FROM rockylinux/rockylinux:9
-RUN printf 'keepcache=1\nmetadata_expire=-1\n' >> /etc/dnf/dnf.conf && \
+RUN dnf -y upgrade && \
+    printf 'keepcache=1\nmetadata_expire=-1\n' >> /etc/dnf/dnf.conf && \
     dnf -y install openssh-server openssh-clients sudo python3 chkconfig git-core && \
     dnf -y install --downloadonly tree zip && ssh-keygen -A && \
     useradd -m ` + lgUser + ` && \
@@ -54,7 +57,8 @@ CMD ["/usr/sbin/sshd", "-D", "-e"]`,
 	// firewalld and selinux modules; only playbooks that ask for it run
 	// on it.
 	"rocky-systemd": `FROM rockylinux/rockylinux:9
-RUN dnf -y install openssh-server sudo python3 systemd procps-ng firewalld \
+RUN dnf -y upgrade && \
+    dnf -y install openssh-server sudo python3 systemd procps-ng firewalld \
       python3-libselinux selinux-policy-targeted policycoreutils && \
     ssh-keygen -A && systemctl enable sshd firewalld && \
     sed -i 's/^IPv6_rpfilter=.*/IPv6_rpfilter=no/' /etc/firewalld/firewalld.conf && \
@@ -128,6 +132,17 @@ func lgBoot(t *testing.T, image, base, pub string, extra ...string) (name, port 
 	return "", ""
 }
 
+// lgSSHDLog is the target's sshd log, to tell why it closed a connection:
+// the container's output (sshd -D -e) or, on a systemd image, the unit's
+// journal.
+func lgSSHDLog(name string) string {
+	out, _ := exec.Command("docker", "logs", "--tail", "40", name).CombinedOutput()
+	if j, err := exec.Command("docker", "exec", name, "journalctl", "-u", "sshd", "-n", "40", "--no-pager").CombinedOutput(); err == nil {
+		out = append(out, j...)
+	}
+	return string(out)
+}
+
 var lgDistros = regexp.MustCompile(`^#\s*distros:\s*(.*)`)
 
 func TestLinuxGoldenOutput(t *testing.T) {
@@ -166,7 +181,7 @@ func TestLinuxGoldenOutput(t *testing.T) {
 			t.Run(filepath.Base(pb)+"/"+distro, func(t *testing.T) {
 				image := lgImage(t, distro)
 				abs, _ := filepath.Abs(pb)
-				var lastStderr string
+				var lastStderr, lastName string
 				run := func(tool string, bin string, pre ...string) string {
 					name, port := lgBoot(t, image, "understudy-lg-"+distro+"-"+tool, strings.TrimSpace(string(pub)), lgRunArgs[distro]...)
 					if ready := lgReady[distro]; ready != "" {
@@ -193,12 +208,12 @@ func TestLinuxGoldenOutput(t *testing.T) {
 					var stderr strings.Builder
 					cmd.Stderr = &stderr
 					out, _ := cmd.Output()
-					lastStderr = stderr.String()
+					lastStderr, lastName = stderr.String(), name
 					return normalizeVerbose(normalizeOutput(string(out), dir))
 				}
 				want := run("ansible", ansible)
 				if !strings.Contains(want, "PLAY RECAP") || strings.Contains(want, "UNREACHABLE!") {
-					t.Fatalf("ansible-playbook did not run the play:\n%s\n%s", want, lastStderr)
+					t.Fatalf("ansible-playbook did not run the play:\n%s\n%s\n--- sshd ---\n%s", want, lastStderr, lgSSHDLog(lastName))
 				}
 				got := run("understudy", understudy, "playbook")
 				if os.Getenv("UNDERSTUDY_GOLDEN_LOG") != "" {
