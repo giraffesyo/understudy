@@ -78,6 +78,13 @@ func tempfileModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	if env.CheckMode {
 		return &agentproto.Result{Skipped: true, Msg: "remote module (tempfile) does not support check mode"}
 	}
+	// ansible-core 2.21.4: prefix and suffix must be file name components
+	// (prefix != os.path.basename(prefix)).
+	for _, k := range []string{"prefix", "suffix"} {
+		if v := p.Str(k); strings.Contains(v, "/") {
+			return agentproto.Fail("%s must be a valid file name component, got %s", k, pyStrRepr(v))
+		}
+	}
 	dir := pyGettempdir()
 	if p.Has("path") {
 		dir = pyExpandPath(p.Str("path"))
