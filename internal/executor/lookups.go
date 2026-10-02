@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
+	"github.com/giraffesyo/understudy/internal/modules"
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/template"
 )
@@ -978,9 +979,26 @@ func lookupURL(_ *Runner, _ *template.EvalCtx, terms []any, kw map[string]any) (
 	}
 	var out []any
 	for _, u := range termStrings(terms) {
+		// ansible-core 2.21.4 masks credentials in the URL and raises
+		// from the urllib error; a URLError with its own cause (a socket
+		// or TLS failure) shows as a cause of its own.
+		shown := modules.MaskURL(u)
+		failed := func(err error) error {
+			return &template.LookupError{Msg: "Failed lookup url for " + shown, Cause: modules.URLOpenError(err)}
+		}
+		scheme, _, _ := strings.Cut(u, ":")
+		switch strings.ToLower(scheme) {
+		case "http", "https", "ftp", "file", "data":
+		default:
+			if !strings.Contains(u, ":") {
+				// urllib's Request raises a ValueError the lookup does not catch.
+				return nil, &template.LookupError{Msg: "unknown url type: " + template.PyRepr(u)}
+			}
+			return nil, &template.LookupError{Msg: "Failed lookup url for " + shown + ": <urlopen error unknown url type: " + strings.ToLower(scheme) + ">"}
+		}
 		req, err := http.NewRequest(http.MethodGet, u, nil)
 		if err != nil {
-			return nil, fmt.Errorf("Failed lookup url for %s : %v", u, err)
+			return nil, failed(err)
 		}
 		if user, ok := kw["username"]; ok {
 			req.SetBasicAuth(template.PyStr(user), template.PyStr(kw["password"]))
@@ -992,15 +1010,15 @@ func lookupURL(_ *Runner, _ *template.EvalCtx, terms []any, kw map[string]any) (
 		}
 		resp, err := client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("Failed lookup url for %s : %v", u, err)
+			return nil, failed(err)
 		}
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("Failed lookup url for %s : %v", u, err)
+			return nil, failed(err)
 		}
 		if resp.StatusCode >= 400 {
-			return nil, fmt.Errorf("Received HTTP error for %s : HTTP Error %d: %s", u, resp.StatusCode, http.StatusText(resp.StatusCode))
+			return nil, &template.LookupError{Msg: fmt.Sprintf("Received HTTP error for %s: HTTP Error %d: %s", shown, resp.StatusCode, http.StatusText(resp.StatusCode))}
 		}
 		if opt("split_lines", true) {
 			for _, line := range strings.Split(strings.TrimRight(string(body), "\n"), "\n") {

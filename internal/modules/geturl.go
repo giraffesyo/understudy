@@ -116,7 +116,7 @@ func getURLModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	checksum := p.Str("checksum")
 	result := map[string]any{
 		"changed": false, "checksum_dest": nil, "checksum_src": nil,
-		"dest": dest, "elapsed": int64(0), "url": rawURL,
+		"dest": dest, "elapsed": int64(0), "url": MaskURL(rawURL),
 	}
 	out := func(extra map[string]any) *agentproto.Result {
 		res := &agentproto.Result{Extra: map[string]any{}}
@@ -175,7 +175,7 @@ func getURLModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 				}
 			}
 			if found == "" {
-				return agentproto.Fail("Unable to find a checksum for file '%s' in '%s'", filename, checksum)
+				return agentproto.Fail("Unable to find a checksum for file '%s' in '%s'", filename, MaskURL(checksum))
 			}
 			checksum = found
 		}
@@ -445,10 +445,10 @@ func (r *getURLRun) urlGet(rawURL, dest string, lastMod time.Time, force bool, m
 	if resp != nil {
 		defer resp.Body.Close()
 	}
-	base := map[string]any{"url": rawURL, "dest": dest}
+	base := map[string]any{"url": MaskURL(rawURL), "dest": dest}
 	if info.status == 304 {
 		res := &agentproto.Result{Msg: info.msg, Extra: map[string]any{
-			"url": rawURL, "dest": dest, "status_code": int64(304), "elapsed": r.elapsed()}}
+			"url": MaskURL(rawURL), "dest": dest, "status_code": int64(304), "elapsed": r.elapsed()}}
 		return "", nil, res // exit_json: not a failure
 	}
 	if info.status == -1 {
@@ -521,7 +521,9 @@ func (r *getURLRun) urlGet(rawURL, dest string, lastMod time.Time, force bool, m
 // unredirected headers and urllib's request headers.
 func (r *getURLRun) fetch(rawURL string, lastMod time.Time, force bool, method string) (*http.Response, *fetchInfo, *agentproto.Result) {
 	p := r.p
-	info := &fetchInfo{status: -1, url: rawURL}
+	// fetch_url's info: the URL as mask_url shows it.
+	shown := MaskURL(rawURL)
+	info := &fetchInfo{status: -1, url: shown}
 	if path, ok := strings.CutPrefix(rawURL, "file://"); ok {
 		f, err := os.Open(path)
 		if err != nil {
@@ -542,7 +544,7 @@ func (r *getURLRun) fetch(rawURL string, lastMod time.Time, force bool, method s
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		info.msg = err.Error()
-		return nil, nil, r.fail(info.msg, map[string]any{"url": rawURL, "status": int64(-1)})
+		return nil, nil, r.fail(info.msg, map[string]any{"url": shown, "status": int64(-1)})
 	}
 	if username == "" && u.User != nil {
 		username = u.User.Username()
@@ -581,7 +583,7 @@ func (r *getURLRun) fetch(rawURL string, lastMod time.Time, force bool, method s
 	if list := p.List("ciphers"); len(list) > 0 {
 		suites, err := tlsCipherSuites(list)
 		if err != nil {
-			return nil, nil, r.fail(err.Error(), map[string]any{"url": rawURL, "status": int64(-1)})
+			return nil, nil, r.fail(err.Error(), map[string]any{"url": shown, "status": int64(-1)})
 		}
 		tlsCfg.CipherSuites = suites
 	}
@@ -645,7 +647,7 @@ func (r *getURLRun) fetch(rawURL string, lastMod time.Time, force bool, method s
 	}
 	req, err := build("")
 	if err != nil {
-		return nil, nil, r.fail(err.Error(), map[string]any{"url": rawURL, "status": int64(-1)})
+		return nil, nil, r.fail(err.Error(), map[string]any{"url": shown, "status": int64(-1)})
 	}
 	resp, err := client.Do(req)
 	if err == nil && resp.StatusCode == 401 && challengeAuth &&
@@ -659,7 +661,7 @@ func (r *getURLRun) fetch(rawURL string, lastMod time.Time, force bool, method s
 		return nil, info, nil
 	}
 	info.headers = resp.Header
-	info.url = resp.Request.URL.String()
+	info.url = MaskURL(resp.Request.URL.String())
 	info.status = resp.StatusCode
 	if resp.StatusCode >= 300 {
 		info.msg = fmt.Sprintf("HTTP Error %d: %s", resp.StatusCode, httpReason(resp))

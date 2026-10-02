@@ -27,18 +27,33 @@ func (e IntEnum) String() string { return strconv.FormatInt(e.Value, 10) }
 //
 // Separate marks an exception raised while handling another (Python's
 // implicit __context__), which the display shows apart too.
+//
+// Cause, when set, is the exception Msg was raised from (raise ... from
+// e) when that one has a cause of its own: the message joins them with
+// ": " and the display shows Cause as an event of its own.
 type LookupError struct {
 	Msg      string
 	Help     string
 	Separate bool
+	Cause    string
 }
 
-func (e *LookupError) Error() string { return e.Msg }
+func (e *LookupError) Error() string {
+	if e.Cause != "" {
+		return e.Msg + ": " + e.Cause
+	}
+	return e.Msg
+}
 
 // lookupPluginError is AnsibleTemplatePluginRuntimeError for a lookup:
 // "The lookup plugin 'name' failed: ...", name as the template gave it.
 func (ec *EvalCtx) lookupPluginError(name string, le *LookupError) error {
 	head := "The lookup plugin " + pyStrRepr(name) + " failed."
+	if le.Cause != "" {
+		head = strings.TrimRight(head, ". ") + ": " + le.Msg
+		return &TemplateError{Pos: ec.pos, Msg: head + ": " + le.Cause, Src: ec.src, Plugin: true,
+			pluginHead: head, pluginDetail: le.Cause}
+	}
 	msg := head
 	if !strings.HasSuffix(head, le.Msg) {
 		msg = strings.TrimRight(head, ". ") + ": " + le.Msg

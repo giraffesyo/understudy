@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
+	"github.com/giraffesyo/understudy/internal/modules"
 )
 
 func init() {
@@ -14,9 +15,9 @@ func init() {
 
 // runUnarchive is ansible.builtin.unarchive's action plugin: resolve a
 // controller-side src (files/ search path) and transfer it, then run the
-// unarchive module on the target. With remote_src (or a URL) the module
-// reads src there. The remote "dest must be an existing dir" check runs
-// in the module, in the same round trip as the transfer.
+// unarchive module on the target. With remote_src the module reads src
+// there (a URL src requires it). The remote "dest must be an existing
+// dir" check runs in the module, in the same round trip as the transfer.
 func runUnarchive(ctx context.Context, actx *Context, args map[string]any, _ string) *agentproto.Result {
 	fwd := make(map[string]any, len(args)+1)
 	for k, v := range args {
@@ -46,6 +47,11 @@ func runUnarchive(ctx context.Context, actx *Context, args map[string]any, _ str
 		if st, _ := res.Extra["stat"].(map[string]any); st != nil && st["exists"] == true {
 			return &agentproto.Result{Skipped: true, Msg: "skipped, since " + creates + " exists"}
 		}
+	}
+	if !remoteSrc && strings.Contains(source, "://") {
+		// ansible-core 2.21.4 refuses a URL src the controller would have
+		// to fetch.
+		return actionRaise("Unsupported option, an URI src (%s) is only supported when remote_src is True", modules.MaskURL(source))
 	}
 	if strings.HasPrefix(source, "~") {
 		if home, err := os.UserHomeDir(); err == nil && (source == "~" || strings.HasPrefix(source, "~/")) {

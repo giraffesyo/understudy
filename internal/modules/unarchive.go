@@ -359,12 +359,12 @@ func unarchiveCore(env *RunEnv, rawArgs map[string]any) (*agentproto.Result, str
 func unarchiveFetch(p *args.Parsed, rawURL string) (string, string) {
 	parts, err := url.Parse(rawURL)
 	if err != nil {
-		return "", fmt.Sprintf("Failure downloading %s, %v", rawURL, err)
+		return "", fmt.Sprintf("Failure downloading %s, %v", MaskURL(rawURL), err)
 	}
 	prefix, ext := splitMultiExt(filepath.Base(parts.Path), 2)
 	f, err := os.CreateTemp("", prefix+"*"+ext)
 	if err != nil {
-		return "", fmt.Sprintf("Failure downloading %s, %v", rawURL, err)
+		return "", fmt.Sprintf("Failure downloading %s, %v", MaskURL(rawURL), err)
 	}
 	defer f.Close()
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -375,17 +375,17 @@ func unarchiveFetch(p *args.Parsed, rawURL string) (string, string) {
 	resp, err := client.Get(rawURL)
 	if err != nil {
 		os.Remove(f.Name())
-		return "", fmt.Sprintf("Failure downloading %s, %s", rawURL, urlErrorMsg(err))
+		return "", fmt.Sprintf("Failure downloading %s, %s", MaskURL(rawURL), urlErrorMsg(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		os.Remove(f.Name())
-		return "", fmt.Sprintf("Failure downloading %s, HTTP Error %d: %s", rawURL, resp.StatusCode, httpReason(resp))
+		return "", fmt.Sprintf("Failure downloading %s, HTTP Error %d: %s", MaskURL(rawURL), resp.StatusCode, httpReason(resp))
 	}
 	client.Timeout = 0
 	if _, err := io.Copy(f, resp.Body); err != nil {
 		os.Remove(f.Name())
-		return "", fmt.Sprintf("Failure downloading %s, %v", rawURL, err)
+		return "", fmt.Sprintf("Failure downloading %s, %v", MaskURL(rawURL), err)
 	}
 	return f.Name(), ""
 }

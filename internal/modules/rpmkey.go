@@ -65,10 +65,10 @@ func rpmKeyModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 					msg = "Request failed: " + msg
 				}
 			}
-			return agentproto.Fail("failed to fetch key at %s , error was: %s", key, msg)
+			return agentproto.Fail("failed to fetch key at %s , error was: %s", MaskURL(key), msg)
 		}
 		if !isPGPPubkey(body) {
-			return agentproto.Fail("Not a public key: %s", key)
+			return agentproto.Fail("Not a public key: %s", MaskURL(key))
 		}
 		keyData = body
 	case rpmKeyIDRe.MatchString(strings.ReplaceAll(key, " ", "")):

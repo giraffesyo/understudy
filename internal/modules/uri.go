@@ -269,7 +269,9 @@ func uriModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 	}
 
 	resp := map[string]any{}
-	resp["redirected"] = info.fields["url"] != url
+	// mask_url's form, as fetch_url records it.
+	maskedURL := MaskURL(url)
+	resp["redirected"] = info.fields["url"] != maskedURL
 	for k, v := range info.fields {
 		resp[k] = v
 	}
@@ -297,7 +299,7 @@ func uriModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		uresp[strings.ToLower(strings.ReplaceAll(k, "-", "_"))] = v
 	}
 	if loc, ok := uresp["location"].(string); ok {
-		uresp["location"] = pyURLJoin(url, loc)
+		uresp["location"] = pyURLJoin(maskedURL, loc)
 	}
 
 	var text *string

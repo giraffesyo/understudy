@@ -217,7 +217,7 @@ func newURIClient(env *RunEnv, p *args.Parsed) *uriClient {
 
 // fetch is fetch_url: the response (nil when none arrived) and info.
 func (c *uriClient) fetch(rawURL, method string, data []byte, hasData bool, userHeaders *uriHeaders, lastMod *time.Time) (*uriResponse, *uriInfo) {
-	info := &uriInfo{fields: map[string]any{"url": rawURL, "status": -1}}
+	info := &uriInfo{fields: map[string]any{"url": MaskURL(rawURL), "status": -1}}
 	if c.p.Bool("use_gssapi") {
 		info.fields = map[string]any{}
 		info.fatal = missingRequiredLib(c.env, "gssapi", "for use_gssapi=True", "https://pypi.org/project/gssapi/")
@@ -278,7 +278,7 @@ func (c *uriClient) fetch(rawURL, method string, data []byte, hasData bool, user
 			length = "unknown"
 		}
 		info.fields["msg"] = "OK (" + length + " bytes)"
-		info.fields["url"] = resp.url
+		info.fields["url"] = MaskURL(resp.url)
 		info.fields["status"] = resp.code
 		return resp, info
 	case *uriHTTPError:
@@ -843,6 +843,20 @@ func pyQuoteURL(s string) string {
 
 // urlJoin is urllib.parse.urljoin.
 func urlJoin(base, ref string) string {
+	if scheme, netloc, _, _, _, ok := pyURLSplit(base); ok && strings.Contains(netloc, "@") {
+		// net/url re-escapes userinfo ("****" as "%2A%2A%2A%2A"), where
+		// urljoin keeps the base's netloc verbatim: join against the bare
+		// host, then put the netloc back on a result relative to it.
+		host := netloc[strings.LastIndexByte(netloc, '@')+1:]
+		out := urlJoin(strings.Replace(base, netloc, host, 1), ref)
+		refScheme, _, _, _, _, _ := pyURLSplit(ref)
+		prefix := scheme + "://" + host
+		if refScheme == "" && !strings.HasPrefix(ref, "//") && strings.HasPrefix(out, prefix) &&
+			(len(out) == len(prefix) || strings.ContainsRune("/?#", rune(out[len(prefix)]))) {
+			return scheme + "://" + netloc + out[len(prefix):]
+		}
+		return out
+	}
 	bu, err := url.Parse(base)
 	if err != nil {
 		return ref

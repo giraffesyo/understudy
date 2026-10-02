@@ -431,11 +431,11 @@ func aptInstallDeb(env *RunEnv, p *args.Parsed, debs string) *agentproto.Result 
 func fetchDeb(url string) (string, error) {
 	resp, err := http.Get(url)
 	if err != nil {
-		return "", fmt.Errorf("Failure downloading %s, %s", url, urlErrorMsg(err))
+		return "", fmt.Errorf("Failure downloading %s, %s", MaskURL(url), urlErrorMsg(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("Failure downloading %s, %s", url, httpReason(resp))
+		return "", fmt.Errorf("Failure downloading %s, %s", MaskURL(url), httpReason(resp))
 	}
 	dir, err := os.MkdirTemp("", "ansible-deb")
 	if err != nil {
@@ -452,7 +452,7 @@ func fetchDeb(url string) (string, error) {
 	}
 	defer f.Close()
 	if _, err := io.Copy(f, resp.Body); err != nil {
-		return "", fmt.Errorf("Failure downloading %s, %s", url, err)
+		return "", fmt.Errorf("Failure downloading %s, %s", MaskURL(url), err)
 	}
 	return local, nil
 }

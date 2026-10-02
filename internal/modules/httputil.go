@@ -21,6 +21,16 @@ func httpReason(resp *http.Response) string {
 	return http.StatusText(resp.StatusCode)
 }
 
+// URLOpenError is str() of the urllib URLError open_url raises for a
+// transport error: "<urlopen error [Errno 111] Connection refused>".
+func URLOpenError(err error) string {
+	m := urlErrorMsg(err)
+	if s, ok := strings.CutPrefix(m, "Request failed: "); ok {
+		return s
+	}
+	return "<urlopen error " + strings.TrimPrefix(m, "Connection failure: ") + ">"
+}
+
 // urlErrorMsg approximates fetch_url's info['msg'] for a transport error.
 func urlErrorMsg(err error) string {
 	var ue *url.Error

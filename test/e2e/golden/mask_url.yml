@@ -1,0 +1,74 @@
+---
+# ansible-core 2.21.4's mask_url: credentials in a URL show as ****
+# in uri's and get_url's results and in failure messages; plus 2.21.4's
+# tempfile prefix/suffix check and unarchive's refusal of a URL src the
+# controller would fetch. Uses the fixture server of results_uri.yml.
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: clear a previous run's fixture state
+      file: {path: "{{ workdir }}/{{ item }}", state: absent}
+      loop: [http.port, https.port, ftp.port, http.sockpath, dl]
+    - name: a self-signed certificate for the fixture's HTTPS listener
+      no_log: true
+      command: >-
+        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj /CN=localhost
+        -addext subjectAltName=DNS:localhost
+        -keyout {{ workdir }}/key.pem -out {{ workdir }}/cert.pem
+    - name: start the fixture server
+      shell: nohup python3 {{ playbook_dir }}/files/http_fixture.py {{ workdir }} >/dev/null 2>&1 &
+    - wait_for: {path: "{{ workdir }}/http.port"}
+      no_log: true
+    - no_log: true
+      set_fact:
+        hp: "127.0.0.1:{{ lookup('file', workdir + '/http.port') }}"
+
+    - name: uri, credentials in the URL
+      uri: {url: "http://user:secret@{{ hp }}/json"}
+      register: r
+    - debug: {msg: "{{ r.url }} {{ r.redirected }}"}
+
+    - name: a redirect's location joins the masked URL
+      uri: {url: "http://user:secret@{{ hp }}/redirect/302", follow_redirects: none, status_code: [302]}
+      register: r
+    - debug: {msg: "{{ r.url }} {{ r.location }} {{ r.redirected }}"}
+
+    - name: a password but no username
+      uri: {url: "http://:secret@{{ hp }}/status/404"}
+      ignore_errors: true
+
+    - name: a username alone
+      uri: {url: "HTTP://user@{{ hp }}/status/500"}
+      ignore_errors: true
+
+    - name: get_url, a failed download
+      get_url: {url: "http://user:secret@{{ hp }}/status/404", dest: "{{ workdir }}/dl"}
+      ignore_errors: true
+
+    - name: get_url, an argument failure before any download
+      get_url: {url: "http://user:secret@{{ hp }}/text", dest: "{{ workdir }}/dl", checksum: "sha1:zz"}
+      ignore_errors: true
+
+    - name: get_url, a download
+      get_url: {url: "http://user:secret@{{ hp }}/text", dest: "{{ workdir }}/dl"}
+      register: r
+    - debug: {msg: "{{ r.url }}"}
+
+    - name: unarchive of a URL needs remote_src
+      unarchive: {src: "http://user:secret@{{ hp }}/x.tgz", dest: "{{ workdir }}"}
+      ignore_errors: true
+
+    - name: unarchive, a failed remote download
+      unarchive: {src: "http://user:secret@{{ hp }}/status/404", dest: "{{ workdir }}", remote_src: true}
+      ignore_errors: true
+
+    - name: tempfile, a prefix with a path separator
+      tempfile: {path: "{{ workdir }}", prefix: "a/b"}
+      ignore_errors: true
+
+    - name: tempfile, a suffix with a path separator
+      tempfile: {path: "{{ workdir }}", suffix: "../x", state: directory}
+      ignore_errors: true
+
+    - name: stop the fixture server
+      uri: {url: "http://{{ hp }}/shutdown"}
