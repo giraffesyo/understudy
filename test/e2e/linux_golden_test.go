@@ -28,12 +28,18 @@ import (
 
 const lgUser = "tester"
 
-// lgRockyAccount makes the test user a key-only account PAM's account
-// stage accepts: useradd leaves it locked ("!!") with the distribution's
-// aging, which sshd on GitHub's runners refused ("Access denied for user
-// tester by PAM account configuration"). "*" has no usable password and is
-// not a lock; the aging and expiry are turned off.
-const lgRockyAccount = "usermod -p '*' " + lgUser + " && chage -I -1 -m 0 -M 99999 -E -1 " + lgUser
+// lgRockyAccount makes the test user a key-only account: useradd leaves it
+// locked ("!!") with the distribution's aging; "*" has no usable password
+// and is not a lock, and the aging and expiry are turned off. sshd on
+// GitHub's runners refused it anyway ("Access denied for user tester by PAM
+// account configuration"), so the Rocky targets' sshd does without PAM.
+const lgRockyAccount = "usermod -p '*' " + lgUser + " && chage -I -1 -m 0 -M 99999 -E -1 " + lgUser +
+	// PAM's account stage still refused the user on GitHub's runners, for
+	// a reason that does not reproduce elsewhere (not nologin, a lock or
+	// aging); sshd's own checks are enough for a key-only test user, and
+	// both tools log in through the same sshd. A drop-in sorts before
+	// 50-redhat.conf, whose UsePAM would otherwise win.
+	" && printf 'UsePAM no\\nLogLevel VERBOSE\\n' > /etc/ssh/sshd_config.d/00-golden.conf"
 
 // lgImages are the target images: each runs sshd in the foreground with
 // python3 (for ansible) and a passwordless-sudo user. The Rocky images
