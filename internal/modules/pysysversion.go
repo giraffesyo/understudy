@@ -13,8 +13,9 @@ import (
 // [GCC 13.3.0])"). understudy does not run Python to ask: CPython builds
 // it from string constants compiled into the interpreter (or its
 // libpython) — PY_VERSION, the build date and time, and the compiler
-// banner — formatted "%.80s (%.80s) %.80s" with build info "main, DATE,
-// TIME". Those strings are read off the binary.
+// banner — formatted "%.80s (%.80s) %.80s" with build info "BRANCH,
+// DATE, TIME". Those strings are read off the binary; the branch follows
+// from the version (pyNoGitBranch).
 
 // pyBuildInfoFormat is Py_GetBuildInfo's format string, which marks the
 // binary that holds the build strings.
@@ -69,7 +70,6 @@ func pySysVersionOf(exe, minor string) string {
 func pySysVersionFromBinary(data []byte, minor string) string {
 	versionRe := regexp.MustCompile(`^` + regexp.QuoteMeta(minor) + `\.[0-9]+(?:(?:a|b|rc)[0-9]+)?\+?$`)
 	var version, date, clock, compiler []string
-	hasMain := false
 	for _, s := range cStrings(data) {
 		switch {
 		case versionRe.MatchString(s):
@@ -80,20 +80,13 @@ func pySysVersionFromBinary(data []byte, minor string) string {
 			clock = append(clock, s)
 		case pyCompilerRe.MatchString(s):
 			compiler = append(compiler, s)
-		case s == "main":
-			hasMain = true
 		}
 	}
 	version, date, clock, compiler = dedupeStrings(version), dedupeStrings(date), dedupeStrings(clock), dedupeStrings(compiler)
 	if len(version) != 1 || len(date) != 1 || len(clock) != 1 || len(compiler) != 1 {
 		return ""
 	}
-	// A build outside a git checkout names its branch "main" (CPython
-	// 3.9.5 and later; "default" before).
-	branch := "default"
-	if hasMain && !pyVersionBefore(version[0], 3, 9, 5) {
-		branch = "main"
-	}
+	branch := pyNoGitBranch(version[0])
 	trunc := func(s string, n int) string {
 		if len(s) > n {
 			return s[:n]
@@ -104,20 +97,35 @@ func pySysVersionFromBinary(data []byte, minor string) string {
 	return trunc(version[0], 80) + " (" + trunc(info, 80) + ") " + trunc(compiler[0], 80)
 }
 
-// pyVersionBefore compares a "3.9.25" version with major.minor.micro.
-func pyVersionBefore(v string, major, minor, micro int) bool {
-	parts := strings.SplitN(v, ".", 3)
+// pyNoGitBranch is the name Py_GetBuildInfo gives a build made outside a
+// git checkout (every distro's), which the binary does not show apart:
+// the literal is often only the tail of another string ("__main__"), as
+// in Rocky 9's x86_64 libpython. Modules/getbuildinfo.c changed it from
+// "default" to "main" in 3.9.8, 3.10.1 and 3.11.0a2; 3.8 and earlier
+// kept "default".
+func pyNoGitBranch(version string) string {
+	parts := strings.SplitN(version, ".", 3)
 	if len(parts) < 3 {
-		return false
+		return "main"
 	}
-	got := []int{atoiSafe(parts[0]), atoiSafe(parts[1]), atoiSafe(parts[2])}
-	want := []int{major, minor, micro}
-	for i := range got {
-		if got[i] != want[i] {
-			return got[i] < want[i]
-		}
+	major, minor := atoiSafe(parts[0]), atoiSafe(parts[1])
+	// The micro version, then any pre-release ("0a2", "25+").
+	n := strings.IndexFunc(parts[2], func(r rune) bool { return r < '0' || r > '9' })
+	if n < 0 {
+		n = len(parts[2])
 	}
-	return false
+	micro, pre := atoiSafe(parts[2][:n]), strings.TrimSuffix(parts[2][n:], "+")
+	switch {
+	case major < 3:
+		return "default"
+	case major > 3 || minor >= 12:
+		return "main"
+	case minor == 11 && micro == 0 && (pre == "a0" || pre == "a1"):
+		return "default"
+	case minor == 11, minor == 10 && micro >= 1, minor == 9 && micro >= 8:
+		return "main"
+	}
+	return "default"
 }
 
 // cStrings lists the NUL-terminated runs of printable ASCII (tabs and
