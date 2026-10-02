@@ -31,6 +31,7 @@ var pySSLLines = map[string][3]int{
 	"cpython-3.11.16":        {1016, 3927, 4178}, // Homebrew
 	"cpython-3.12.14":        {1010, 3855, 4106}, // Homebrew
 	"cpython-3.14.7":         {1082, 4163, 4416}, // Homebrew
+	"cpython-3.14.8":         {1082, 4166, 4419}, // actions/setup-python (CI's golden job)
 	"deb:3.11.2-6+deb12u8":   {992, 3874, 4123},  // Debian 12
 	"deb:3.12.3-1ubuntu0.17": {1000, 3845, 4096}, // Ubuntu 24.04
 	"apk:3.12.13-r0":         {1010, 3855, 4106}, // Alpine 3.20
