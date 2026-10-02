@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.1](https://github.com/giraffesyo/understudy/compare/v0.1.0...v0.1.1) (2026-10-02)
+
+
+### Bug Fixes
+
+* **facts:** concurrent fact updates no longer race on the cache ([b30b599](https://github.com/giraffesyo/understudy/commit/b30b5995fb95f4d55a2750f184f69523e4ce1b43))
+
+
+### Build System
+
+* **release:** GoReleaser builds the artifacts, packages and image ([0577a7c](https://github.com/giraffesyo/understudy/commit/0577a7c0161c19fe06d800873b6710a3ca822a9a))
+
 ## 0.1.0 (2026-10-01)
 
 
