@@ -143,6 +143,40 @@ jobs:
       - name: make cross (RELEASE_PLATFORMS in the Makefile)
         run: make cross
 
+  goreleaser:
+    name: goreleaser check + snapshot (archives, packages, SBOMs, images)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # GoReleaser reads the tags for the snapshot version.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-key: goreleaser
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: v2.18.2 # keep in step with GORELEASER_VERSION in release.yml
+          install-only: true
+      - name: goreleaser check
+        run: goreleaser check
+      # The release build without publishing or signing: every archive,
+      # package and SBOM, and the image per platform (loaded locally, never
+      # pushed), so a broken .goreleaser.yaml or Dockerfile fails here.
+      - name: goreleaser release --snapshot
+        run: goreleaser release --snapshot --clean --skip=sign
+      - name: check the snapshot image
+        run: |
+          img=$(jq -r '[.[] | select(.type | startswith("Docker Image")) | .name | select(endswith("-amd64"))][0]' dist/artifacts.json)
+          [ -n "$img" ] && [ "$img" != null ] || { echo "::error::no linux/amd64 image in dist/artifacts.json"; exit 1; }
+          docker run --rm "$img" version
+
   golden:
     name: golden (vs ansible-playbook)
     runs-on: ubuntu-latest
