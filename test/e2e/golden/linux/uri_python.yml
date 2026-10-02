@@ -23,8 +23,8 @@
         - file:///etc/hostname
         - file:///etc/no-such-file
         - file:///etc
-        - file://example.invalid/etc/hostname
-        - file://example.invalid/etc/no-such-file
+        - file://192.0.2.1/etc/hostname
+        - file://192.0.2.1/etc/no-such-file
       register: r
       ignore_errors: true
     - debug: {msg: "{{ r.results | map(attribute='msg') | list }}"}
