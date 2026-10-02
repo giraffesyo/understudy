@@ -102,7 +102,10 @@ func TestRHELGoldenDifferential(t *testing.T) {
 
 	env := []string{"NO_COLOR=1", "ANSIBLE_NOCOLOR=1", "ANSIBLE_HOST_KEY_CHECKING=False",
 		"ANSIBLE_DEPRECATION_WARNINGS=False", "ANSIBLE_SYSTEM_WARNINGS=False",
-		"ANSIBLE_COMMAND_WARNINGS=False", "ANSIBLE_ACTION_WARNINGS=False"}
+		"ANSIBLE_COMMAND_WARNINGS=False", "ANSIBLE_ACTION_WARNINGS=False",
+		// The target's Python is discovered, whatever the controller's
+		// (CI exports its own as ANSIBLE_PYTHON_INTERPRETER).
+		"ANSIBLE_PYTHON_INTERPRETER=auto"}
 
 	writeInv := func(dir string) string {
 		inv := filepath.Join(dir, "hosts")
