@@ -28,6 +28,13 @@ import (
 
 const lgUser = "tester"
 
+// lgRockyAccount makes the test user a key-only account PAM's account
+// stage accepts: useradd leaves it locked ("!!") with the distribution's
+// aging, which sshd on GitHub's runners refused ("Access denied for user
+// tester by PAM account configuration"). "*" has no usable password and is
+// not a lock; the aging and expiry are turned off.
+const lgRockyAccount = "usermod -p '*' " + lgUser + " && chage -I -1 -m 0 -M 99999 -E -1 " + lgUser
+
 // lgImages are the target images: each runs sshd in the foreground with
 // python3 (for ansible) and a passwordless-sudo user. The Rocky images
 // upgrade the base image first: its libraries (OpenSSL 3.5.5) lag the
@@ -50,7 +57,7 @@ RUN dnf -y upgrade && \
     printf 'keepcache=1\nmetadata_expire=-1\n' >> /etc/dnf/dnf.conf && \
     dnf -y install openssh-server openssh-clients sudo python3 chkconfig git-core && \
     dnf -y install --downloadonly tree zip && ssh-keygen -A && \
-    useradd -m ` + lgUser + ` && \
+    useradd -m ` + lgUser + ` && ` + lgRockyAccount + ` && \
     echo '` + lgUser + ` ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/` + lgUser + `
 CMD ["/usr/sbin/sshd", "-D", "-e"]`,
 	// rocky-systemd boots systemd (sshd as a unit) for the service,
@@ -62,7 +69,7 @@ RUN dnf -y upgrade && \
       python3-libselinux selinux-policy-targeted policycoreutils && \
     ssh-keygen -A && systemctl enable sshd firewalld && \
     sed -i 's/^IPv6_rpfilter=.*/IPv6_rpfilter=no/' /etc/firewalld/firewalld.conf && \
-    useradd -m ` + lgUser + ` && \
+    useradd -m ` + lgUser + ` && ` + lgRockyAccount + ` && \
     echo '` + lgUser + ` ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/` + lgUser + `
 STOPSIGNAL SIGRTMIN+3
 CMD ["/usr/sbin/init"]`,
