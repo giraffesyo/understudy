@@ -430,7 +430,7 @@ Fidelity is anchored by differential testing: the YAML parser and template
 engine are checked against real PyYAML and Jinja2; a golden corpus runs
 through both `ansible-playbook` and understudy and must produce identical
 per-task decisions, recaps, and byte-for-byte stdout (reference:
-ansible-core 2.21); and end-to-end module behavior is verified against real
+ansible-core 2.21.4 on a CPython 3.14 controller); and end-to-end module behavior is verified against real
 Linux hosts (Ubuntu, Alpine, and a systemd Rocky Linux container) with
 idempotence re-runs.
 
@@ -450,9 +450,17 @@ than silently diverging. Known boundaries:
   `timer` and `profile_tasks` callbacks and the `minimal` stdout callback —
   and anything else is reported (`Skipping callback plugin ..., unable to
   load`, `couldn't resolve module/action ...`), never silently skipped.
-- **Output reference**: output is byte-compared against ansible-core 2.21.
-  Older ansible-core releases word some messages differently (for example
-  2.14's `non-zero return code`); task outcomes are the same.
+- **Output reference**: output is byte-compared against ansible-core 2.21
+  (the golden suite pins 2.21.4) running on CPython 3.14. Text that comes
+  from Python itself follows 3.14: exception messages (`division by zero`,
+  `argument of type 'int' is not a container or iterable`, `cannot use
+  'list' as a dict key (unhashable type: 'list')`, `expected a positive
+  input`), the recursion error's display, and argparse's colored help. An
+  ansible-core on an older controller Python words those as that Python
+  does (3.13: `integer division or modulo by zero`, `... is not
+  iterable`, `math domain error`). Older ansible-core releases word some
+  messages differently too (2.14's `non-zero return code`; before 2.21.4,
+  URLs with credentials were shown unmasked); task outcomes are the same.
 - **Deprecation warnings**: reading a value ansible-core 2.21 deprecates
   (a registered empty loop's `skipped_reason`, a timed-out task's
   `timedout.frame`, `play_hosts`, `vars`, facts injected as top-level
@@ -855,8 +863,11 @@ recaps, and stdout byte for byte at the default verbosity, `-v`, `-vv` and
 `-vvv` (the version banner masked at `-vv`, and at `-vvv` the lines listed
 under **Verbose output** left out). It
 needs the `ansible` package (the corpus uses a few `community.general`
-plugins) and `passlib`, e.g. `pip install ansible passlib`, with the
-matching `ansible-core` release. Set `ANSIBLE_PYTHON_INTERPRETER` to that
+plugins), `passlib`, `bcrypt` and `dnspython`, on Python 3.14 with the
+ansible-core release `.github/golden/requirements.in` pins (CI installs
+its hash-checked lock: `pip install --require-hashes --no-deps -r
+.github/golden/requirements.txt`). Another controller Python changes the
+Python-worded messages (see **Output reference**). Set `ANSIBLE_PYTHON_INTERPRETER` to that
 Python (CI does): the harnesses pin it so most output does not depend on
 which Python discovery finds (`interpreter_discovery.yml` sets
 `ansible_python_interpreter: auto` to cover discovery itself).
@@ -881,9 +892,11 @@ CI (`.github/workflows/ci.yml`) runs gofmt, `go mod verify`, `go vet`,
 staticcheck, govulncheck, `make depcheck`, the unit suite on Linux and macOS
 (and on the minimum Go `go.mod` declares), the unit suite under the race
 detector, the cross-compile check, `goreleaser check` and a snapshot release
-build (archives, packages, SBOMs and images, nothing published), the golden suite against the latest
-ansible-core (pinned in one place: `.github/golden/requirements.in`,
-installed from its hash-checked lock), and the Docker end-to-end suite.
+build (archives, packages, SBOMs and images, nothing published), the golden
+suite against the latest ansible-core on Python 3.14 (pinned in one place:
+`.github/golden/requirements.in`, installed from its hash-checked lock;
+split by test function across parallel jobs), and the Docker end-to-end
+suite.
 The golden and Docker jobs set `UNDERSTUDY_REQUIRE_PREREQS=1`, which turns
 the harnesses' skips for a missing `ansible-playbook`, Docker or
 `bin/understudy` into failures. CodeQL and OpenSSF Scorecard run in their

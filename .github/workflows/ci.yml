@@ -178,7 +178,21 @@ jobs:
           docker run --rm "$img" version
 
   golden:
-    name: golden (vs ansible-playbook)
+    name: golden (vs ansible-playbook, ${{ matrix.shard }})
+    # The whole suite runs longer than one job's timeout, so it is split by
+    # test function; "rest" runs everything the other shards do not, so a
+    # new test lands there.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { shard: differential, run: "^TestGoldenDifferential$", skip: "" }
+          - { shard: output, run: "^(TestGoldenOutput|TestGoldenOutputVerbose)$", skip: "" }
+          - { shard: output-vv, run: "^(TestGoldenOutputVV|TestGoldenOutputVVV)$", skip: "" }
+          - { shard: containers, run: "^(TestLinuxGoldenOutput|TestRHELGoldenDifferential)$", skip: "" }
+          - shard: rest
+            run: ""
+            skip: "^(TestGoldenDifferential|TestGoldenOutput|TestGoldenOutputVerbose|TestGoldenOutputVV|TestGoldenOutputVVV|TestLinuxGoldenOutput|TestRHELGoldenDifferential)$"
     runs-on: ubuntu-latest
     timeout-minutes: 75
     env:
@@ -195,9 +209,13 @@ jobs:
       - uses: ./.github/actions/setup-go
         with:
           cache-key: golden
+      # The reference controller Python: understudy reproduces CPython
+      # 3.14's wording (error messages, argparse's colored help), so the
+      # golden suite only matches on 3.14. An exact patch keeps the
+      # reference fixed; bump it with .github/golden/requirements.in.
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          python-version: "3.14.8"
       - name: install ansible-core (pinned, hash-checked; .github/golden/requirements.in)
         run: |
           python -m pip install --require-hashes --no-deps -r .github/golden/requirements.txt
@@ -213,10 +231,13 @@ jobs:
         # The harness runs ansible-playbook on pipes (it refuses non-blocking
         # stdio) with an explicit interpreter, so interpreter discovery (a
         # Python-only artifact) stays out of the compared output.
+        env:
+          RUN: ${{ matrix.run }}
+          SKIP: ${{ matrix.skip }}
         run: |
           ANSIBLE_PYTHON_INTERPRETER="$(command -v python3)"
           export ANSIBLE_PYTHON_INTERPRETER
-          go test -count=1 -tags golden -timeout 60m ./test/e2e/
+          go test -count=1 -tags golden -timeout 60m -run "$RUN" -skip "$SKIP" ./test/e2e/
 
   e2e:
     name: e2e (Docker)
