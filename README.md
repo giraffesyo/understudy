@@ -199,6 +199,25 @@ other module. `Task.Block`/`Rescue`/`Always` express error handling. Rendered
 output is valid `ansible-playbook` input — the render and execution paths go
 through the same loader, so they can't disagree.
 
+Existing YAML playbooks run in-process too, as `ansible-playbook` would run
+them, so a Go program can ship its playbooks without needing Ansible or Python
+on the host:
+
+```go
+result, err := understudy.RunFiles(ctx, []string{"site.yml"}, understudy.Options{
+	Inventory:      []string{"hosts"},
+	ExtraVarsFiles: []string{"facts.json"},                        // -e @facts.json
+	Settings:       map[string]string{"ANSIBLE_GATHERING": "smart"}, // per run, env untouched
+	Output:         logFile,
+	OnEvent:        func(e understudy.Event) { /* per-task progress */ },
+})
+```
+
+Both `Run` and `RunFiles` read `ansible.cfg` and the `ANSIBLE_*` environment
+the way `ansible-playbook` does, so settings like fact gathering, fact caching,
+the roles path and callbacks apply. `Options.Settings` overrides them for a
+single run without touching the process environment.
+
 ## Callback plugins
 
 Callbacks are configured exactly as in Ansible (`stdout_callback`,

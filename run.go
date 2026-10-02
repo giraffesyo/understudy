@@ -7,13 +7,10 @@ import (
 	"os"
 
 	"github.com/giraffesyo/understudy/internal/callback"
-	"github.com/giraffesyo/understudy/internal/config"
-	"github.com/giraffesyo/understudy/internal/connection"
-	"github.com/giraffesyo/understudy/internal/executor"
+	"github.com/giraffesyo/understudy/internal/cli"
 	"github.com/giraffesyo/understudy/internal/inventory"
 	"github.com/giraffesyo/understudy/internal/modules"
 	"github.com/giraffesyo/understudy/internal/playbook"
-	"github.com/giraffesyo/understudy/internal/vault"
 )
 
 // A program embedding understudy doubles as the agent for become on local
@@ -27,14 +24,21 @@ func init() {
 }
 
 // Options configure a programmatic run. The zero value targets the
-// implicit localhost inventory with default settings.
+// implicit localhost inventory with default settings. As with
+// ansible-playbook, ansible.cfg and the ANSIBLE_* environment configure
+// everything the options leave unset (gathering, fact caching, roles
+// path, callbacks, timeouts, ...).
 type Options struct {
 	// Inventory sources: file/directory paths or literal host lists
-	// ("web1,web2,"). Empty means implicit localhost (local connection).
+	// ("web1,web2,"). Empty means implicit localhost (local connection),
+	// whatever ansible.cfg names.
 	Inventory []string
 	Limit     string // host pattern intersected with each play's hosts
 
-	ExtraVars map[string]any
+	// ExtraVarsFiles are YAML or JSON files of extra vars, loaded in order
+	// as -e @file; ExtraVars apply over them.
+	ExtraVarsFiles []string
+	ExtraVars      map[string]any
 
 	Forks     int
 	CheckMode bool
@@ -55,6 +59,11 @@ type Options struct {
 	Tags     []string
 	SkipTags []string
 
+	// Settings configure the run as ANSIBLE_* environment variables would
+	// ({"ANSIBLE_GATHERING": "smart"}), over the process environment and
+	// ansible.cfg, without changing either.
+	Settings map[string]string
+
 	// BaseDir anchors relative template/copy/vars_files sources.
 	// Defaults to the current working directory.
 	BaseDir string
@@ -64,7 +73,8 @@ type Options struct {
 	VaultPasswords []string
 
 	// Output receives playbook progress in ansible-playbook's format.
-	// Defaults to os.Stdout; use io.Discard to silence.
+	// Defaults to os.Stdout; use io.Discard to silence. Output that is
+	// not a terminal is uncolored. Warnings go to os.Stderr.
 	Output    io.Writer
 	NoColor   bool
 	Verbosity int
@@ -78,6 +88,12 @@ type Options struct {
 // hooks (v2_playbook_on_task_start, v2_runner_on_ok, v2_playbook_on_stats,
 // ...). Result holds the task result in its registered-variable form.
 type Event = callback.Event
+
+// EventPlay and EventTask are the play and task an Event names.
+type (
+	EventPlay = callback.EventPlay
+	EventTask = callback.EventTask
+)
 
 // HostResult is one host's recap counters.
 type HostResult struct {
@@ -105,85 +121,48 @@ func Run(ctx context.Context, pb Playbook, opts Options) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("internal rendering error: %w", err)
 	}
-	roleBase := opts.BaseDir
-	if roleBase == "" {
-		roleBase = "."
-	}
-	var secrets *vault.Secrets
-	if len(opts.VaultPasswords) > 0 {
-		secrets = vault.NewSecrets(opts.VaultPasswords...)
-		inventory.Decrypt = secrets.MaybeDecryptFile
-		defer func() { inventory.Decrypt = nil }()
-	}
-	if err := playbook.ResolveRoles(plays, roleBase, nil); err != nil {
-		return nil, err
-	}
+	return execute(ctx, cli.Request{Plays: plays}, opts)
+}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, err
-	}
-	hostKeyChecking := cfg.HostKeyChecking
-	if opts.HostKeyChecking != nil {
-		hostKeyChecking = *opts.HostKeyChecking
-	}
-	forks := opts.Forks
-	if forks <= 0 {
-		forks = cfg.Forks
-	}
-	remoteUser := opts.RemoteUser
-	if remoteUser == "" {
-		remoteUser = cfg.RemoteUser
-	}
-	privateKey := opts.PrivateKey
-	if privateKey == "" {
-		privateKey = cfg.PrivateKeyFile
-	}
-	baseDir := opts.BaseDir
-	if baseDir == "" {
-		baseDir = "."
-	}
+// RunFiles runs playbook files as ansible-playbook does, one run with a
+// single recap. Relative template, copy and vars_files sources resolve
+// against each playbook's directory, and roles against the playbook's
+// roles/ directory and the configured roles path; BaseDir is unused.
+func RunFiles(ctx context.Context, playbooks []string, opts Options) (*Result, error) {
+	return execute(ctx, cli.Request{Playbooks: playbooks}, opts)
+}
 
-	inv, err := inventory.Load(opts.Inventory, []string{baseDir})
-	if err != nil {
-		return nil, err
-	}
-
-	out := opts.Output
-	if out == nil {
-		out = os.Stdout
-	}
-	var cb executor.Callback = &callback.Default{Out: out, Verbosity: opts.Verbosity, NoColor: opts.NoColor}
+// execute runs a request with the options, configured by ansible.cfg and
+// the ANSIBLE_* environment as ansible-playbook would be.
+func execute(ctx context.Context, req cli.Request, opts Options) (*Result, error) {
+	req.BaseDir = opts.BaseDir
+	req.Inventory = opts.Inventory
+	req.Limit = opts.Limit
+	req.ExtraVarsFiles = opts.ExtraVarsFiles
+	req.ExtraVars = opts.ExtraVars
+	req.Forks = opts.Forks
+	req.CheckMode = opts.CheckMode
+	req.Diff = opts.Diff
+	req.Verbosity = opts.Verbosity
+	req.Become = opts.Become
+	req.BecomeUser = opts.BecomeUser
+	req.BecomeMethod = opts.BecomeMethod
+	req.BecomePassword = opts.BecomePassword
+	req.Connection = opts.Connection
+	req.RemoteUser = opts.RemoteUser
+	req.PrivateKey = opts.PrivateKey
+	req.HostKeyChecking = opts.HostKeyChecking
+	req.Tags = opts.Tags
+	req.SkipTags = opts.SkipTags
+	req.VaultPasswords = opts.VaultPasswords
+	req.Settings = opts.Settings
+	req.Output = opts.Output
+	req.NoColor = opts.NoColor
 	if opts.OnEvent != nil {
-		cb = callback.Fanout(cb, callback.NewEventCallback(opts.OnEvent))
+		req.Callbacks = append(req.Callbacks, callback.NewEventCallback(opts.OnEvent))
 	}
-
-	runner := executor.NewRunner(inv, cb, executor.Options{
-		Forks:        forks,
-		CheckMode:    opts.CheckMode,
-		Diff:         opts.Diff,
-		Verbosity:    opts.Verbosity,
-		ExtraVars:    opts.ExtraVars,
-		Become:       opts.Become,
-		BecomeUser:   opts.BecomeUser,
-		BecomeMethod: opts.BecomeMethod,
-		BecomePass:   opts.BecomePassword,
-		Connection:   opts.Connection,
-		BaseDir:      baseDir,
-		Tags:         opts.Tags,
-		SkipTags:     opts.SkipTags,
-		Vault:        secrets,
-		ConnOpts: connection.ManagerOptions{
-			RemoteUser:      remoteUser,
-			PrivateKey:      privateKey,
-			HostKeyChecking: hostKeyChecking,
-			Timeout:         cfg.Timeout,
-			RemoteTmp:       cfg.RemoteTmp,
-		},
-	})
-	runner.Limit = opts.Limit
-
-	code, err := runner.Run(ctx, plays)
+	defer func() { inventory.Decrypt = nil }()
+	code, runner, err := cli.Execute(ctx, req)
 	if err != nil {
 		return nil, err
 	}

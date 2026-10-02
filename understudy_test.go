@@ -186,3 +186,63 @@ func TestRunOnEvent(t *testing.T) {
 		}
 	}
 }
+
+// RunFiles runs YAML playbooks as ansible-playbook does: roles beside the
+// playbook, -e @file extra vars under the Go ones, and the ANSIBLE_*
+// environment configuring the run.
+func TestRunFiles(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, content string) {
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("roles/greet/tasks/main.yml", "- name: greet\n  copy:\n    content: \"{{ greeting }} {{ target }}\\n\"\n    dest: \"{{ out_dir }}/greeting.txt\"\n")
+	write("site.yml", "- hosts: localhost\n  roles: [greet]\n  tasks:\n    - name: extra vars\n      assert:\n        that: target == 'go'\n")
+	write("vars.json", `{"greeting": "hello", "target": "file"}`)
+
+	var buf bytes.Buffer
+	var actions []string
+	res, err := understudy.RunFiles(t.Context(), []string{filepath.Join(dir, "site.yml")}, understudy.Options{
+		ExtraVarsFiles: []string{filepath.Join(dir, "vars.json")},
+		ExtraVars:      map[string]any{"target": "go", "out_dir": dir},
+		Settings:       map[string]string{"ANSIBLE_GATHERING": "explicit"},
+		Output:         &buf,
+		OnEvent: func(e understudy.Event) {
+			if e.Event == "v2_playbook_on_task_start" {
+				actions = append(actions, e.Task.Action)
+			}
+		},
+	})
+	if err != nil || res.Failed() {
+		t.Fatalf("res=%+v err=%v\n%s", res, err, buf.String())
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "greeting.txt")); string(data) != "hello go\n" {
+		t.Errorf("greeting.txt = %q, want the file's greeting and the Go target", data)
+	}
+	if got := strings.Join(actions, " "); got != "copy assert" {
+		t.Errorf("task actions = %q, want no fact gathering with the ANSIBLE_GATHERING=explicit setting", got)
+	}
+	if strings.Contains(buf.String(), "\x1b[") {
+		t.Errorf("output to a buffer is colored:\n%q", buf.String())
+	}
+}
+
+func TestRunFilesErrors(t *testing.T) {
+	_, err := understudy.RunFiles(t.Context(), []string{filepath.Join(t.TempDir(), "missing.yml")}, understudy.Options{Output: io.Discard})
+	if err == nil || !strings.Contains(err.Error(), "could not be found") {
+		t.Errorf("missing playbook: err = %v", err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.yml")
+	if err := os.WriteFile(path, []byte("- hosts: localhost\n  tasks:\n    - nosuchmodule_xyz: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := understudy.RunFiles(t.Context(), []string{path}, understudy.Options{Output: io.Discard}); err == nil {
+		t.Error("unknown module: no error")
+	}
+}

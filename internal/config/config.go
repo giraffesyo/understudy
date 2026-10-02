@@ -105,7 +105,7 @@ type Config struct {
 // the file. origin is "env: NAME" or the file's path.
 func (c *Config) PluginOption(env []string, ini []string) (value, origin string, ok bool) {
 	for _, e := range env {
-		if v, set := os.LookupEnv(e); set {
+		if v, set := lookupEnv(e); set {
 			value, origin, ok = v, "env: "+e, true
 		}
 	}
@@ -218,7 +218,7 @@ func Load() (*Config, error) {
 // ansible.cfg, skipped.
 func findConfigFile() (string, []string) {
 	var candidates []string
-	fromEnv, envSet := os.LookupEnv("ANSIBLE_CONFIG")
+	fromEnv, envSet := lookupEnv("ANSIBLE_CONFIG")
 	if envSet {
 		fromEnv = unfrackPath(fromEnv)
 		if st, err := os.Stat(fromEnv); err == nil && st.IsDir() {
@@ -399,12 +399,12 @@ func splitPathspec(s string) []string {
 func applyEnvOverrides(cfg *Config) {
 	def := Defaults()
 	envBool := func(name string, dst *bool) {
-		if v, ok := os.LookupEnv(name); ok {
+		if v, ok := lookupEnv(name); ok {
 			*dst = pyBoolean(v)
 		}
 	}
 	envInt := func(name string, set func(int), dflt int) {
-		v, ok := os.LookupEnv(name)
+		v, ok := lookupEnv(name)
 		if !ok {
 			return
 		}
@@ -414,7 +414,7 @@ func applyEnvOverrides(cfg *Config) {
 			set(dflt)
 		}
 	}
-	if v := os.Getenv("ANSIBLE_ROLES_PATH"); v != "" {
+	if v := getenv("ANSIBLE_ROLES_PATH"); v != "" {
 		cfg.RolesPath = nil
 		for _, p := range splitPathspec(v) {
 			if abs, err := filepath.Abs(p); err == nil {
@@ -423,16 +423,16 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.RolesPath = append(cfg.RolesPath, p)
 		}
 	}
-	if v := os.Getenv("ANSIBLE_INVENTORY"); v != "" {
+	if v := getenv("ANSIBLE_INVENTORY"); v != "" {
 		cfg.Inventory = splitPathList(v)
 	}
-	if v, ok := os.LookupEnv("ANSIBLE_REMOTE_USER"); ok {
+	if v, ok := lookupEnv("ANSIBLE_REMOTE_USER"); ok {
 		cfg.RemoteUser = v
 	}
 	for env, dst := range map[string]*string{
 		"ANSIBLE_TRANSPORT": &cfg.Transport, "ANSIBLE_BECOME_METHOD": &cfg.BecomeMethod, "ANSIBLE_BECOME_USER": &cfg.BecomeUser,
 	} {
-		if v := os.Getenv(env); v != "" {
+		if v := getenv(env); v != "" {
 			*dst = v
 		}
 	}
@@ -440,7 +440,7 @@ func applyEnvOverrides(cfg *Config) {
 	envInt("ANSIBLE_POLL_INTERVAL", func(n int) { cfg.PollInterval = n }, def.PollInterval)
 	envInt("ANSIBLE_FORKS", func(n int) { cfg.Forks = n }, def.Forks) // the command line rejects one below 1
 	envBool("ANSIBLE_HOST_KEY_CHECKING", &cfg.HostKeyChecking)
-	if v := os.Getenv("ANSIBLE_PRIVATE_KEY_FILE"); v != "" {
+	if v := getenv("ANSIBLE_PRIVATE_KEY_FILE"); v != "" {
 		cfg.PrivateKeyFile = expandUser(v)
 	}
 	envInt("ANSIBLE_TIMEOUT", func(n int) {
@@ -448,36 +448,36 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Timeout = time.Duration(n) * time.Second
 		}
 	}, int(def.Timeout/time.Second))
-	if v := os.Getenv("ANSIBLE_REMOTE_TMP"); v != "" {
+	if v := getenv("ANSIBLE_REMOTE_TMP"); v != "" {
 		cfg.RemoteTmp = v
 	}
-	if v := os.Getenv("ANSIBLE_ADMIN_USERS"); v != "" {
+	if v := getenv("ANSIBLE_ADMIN_USERS"); v != "" {
 		cfg.AdminUsers = splitList(v)
 	}
-	if v := os.Getenv("ANSIBLE_SYSTEM_TMPDIRS"); v != "" {
+	if v := getenv("ANSIBLE_SYSTEM_TMPDIRS"); v != "" {
 		cfg.SystemTmpdirs = splitList(v)
 	}
-	if v := os.Getenv("ANSIBLE_COMMON_REMOTE_GROUP"); v != "" {
+	if v := getenv("ANSIBLE_COMMON_REMOTE_GROUP"); v != "" {
 		cfg.CommonRemoteGroup = v
 	}
 	envBool("ANSIBLE_SHELL_ALLOW_WORLD_READABLE_TEMP", &cfg.WorldReadableTemp)
-	if v := os.Getenv("ANSIBLE_CALLBACK_PLUGINS"); v != "" {
+	if v := getenv("ANSIBLE_CALLBACK_PLUGINS"); v != "" {
 		cfg.CallbackPlugins = splitColonList(v)
 	}
-	if v := os.Getenv("ANSIBLE_STDOUT_CALLBACK"); v != "" {
+	if v := getenv("ANSIBLE_STDOUT_CALLBACK"); v != "" {
 		cfg.StdoutCallback = v
 	}
 	for _, k := range []string{"ANSIBLE_CALLBACKS_ENABLED", "ANSIBLE_CALLBACK_WHITELIST"} {
-		if v := os.Getenv(k); v != "" {
+		if v := getenv(k); v != "" {
 			cfg.CallbacksEnabled = splitList(v)
 		}
 	}
 	envBool("ANSIBLE_DISPLAY_OK_HOSTS", &cfg.DisplayOkHosts)
-	if v := os.Getenv("ANSIBLE_DUPLICATE_YAML_DICT_KEY"); v != "" {
+	if v := getenv("ANSIBLE_DUPLICATE_YAML_DICT_KEY"); v != "" {
 		cfg.DuplicateDictKey = strings.ToLower(strings.TrimSpace(v))
 	}
 	envBool("ANSIBLE_DEPRECATION_WARNINGS", &cfg.DeprecationWarnings)
-	if _, ok := os.LookupEnv("ANSIBLE_INJECT_FACT_VARS"); ok {
+	if _, ok := lookupEnv("ANSIBLE_INJECT_FACT_VARS"); ok {
 		cfg.InjectFactsSet = true
 	}
 	envBool("ANSIBLE_ALLOW_BROKEN_CONDITIONALS", &cfg.AllowBrokenConditionals)
@@ -492,32 +492,32 @@ func applyEnvOverrides(cfg *Config) {
 	} {
 		envBool(env, dst)
 	}
-	if v := os.Getenv("ANSIBLE_INVENTORY_ENABLED"); v != "" {
+	if v := getenv("ANSIBLE_INVENTORY_ENABLED"); v != "" {
 		cfg.InventoryEnabled = splitList(v)
 	}
-	if v := os.Getenv("ANSIBLE_INVENTORY_IGNORE"); v != "" {
+	if v := getenv("ANSIBLE_INVENTORY_IGNORE"); v != "" {
 		cfg.InventoryIgnoreExts = splitList(v)
 	}
-	if v := os.Getenv("ANSIBLE_INVENTORY_IGNORE_REGEX"); v != "" {
+	if v := getenv("ANSIBLE_INVENTORY_IGNORE_REGEX"); v != "" {
 		cfg.InventoryIgnorePatterns = splitList(v)
 	}
-	if v := os.Getenv("ANSIBLE_HOST_PATTERN_MISMATCH"); v != "" {
+	if v := getenv("ANSIBLE_HOST_PATTERN_MISMATCH"); v != "" {
 		cfg.HostPatternMismatch = strings.ToLower(strings.TrimSpace(v))
 	}
-	if v := os.Getenv("ANSIBLE_TRANSFORM_INVALID_GROUP_CHARS"); v != "" {
+	if v := getenv("ANSIBLE_TRANSFORM_INVALID_GROUP_CHARS"); v != "" {
 		cfg.TransformInvalidGroupChars = strings.ToLower(strings.TrimSpace(v))
 	}
-	if v, ok := os.LookupEnv("ANSIBLE_CACHE_PLUGIN"); ok {
+	if v, ok := lookupEnv("ANSIBLE_CACHE_PLUGIN"); ok {
 		cfg.FactCaching = v
 	}
-	if v, ok := os.LookupEnv("ANSIBLE_CACHE_PLUGIN_CONNECTION"); ok {
+	if v, ok := lookupEnv("ANSIBLE_CACHE_PLUGIN_CONNECTION"); ok {
 		cfg.FactCachingConnection = resolvePath(v, "")
 	}
-	if v, ok := os.LookupEnv("ANSIBLE_CACHE_PLUGIN_PREFIX"); ok {
+	if v, ok := lookupEnv("ANSIBLE_CACHE_PLUGIN_PREFIX"); ok {
 		cfg.FactCachingPrefix = v
 	}
 	envInt("ANSIBLE_CACHE_PLUGIN_TIMEOUT", func(n int) { cfg.FactCachingTimeout = n }, def.FactCachingTimeout)
-	if v := os.Getenv("ANSIBLE_GATHERING"); v != "" {
+	if v := getenv("ANSIBLE_GATHERING"); v != "" {
 		cfg.Gathering = v
 	}
 }

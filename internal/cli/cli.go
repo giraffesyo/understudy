@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -183,6 +184,17 @@ type parsedArgs struct {
 	taskTimeoutSet bool
 	oneLine        bool   // -o: the oneline callback
 	tree           string // -t: the tree callback's directory
+
+	// Go API only (cli.Execute).
+	plays             []*playbook.Play // playbook structs, run after any files
+	implicitInventory bool             // no inventory: just the implicit localhost
+	extraVarsGo       map[string]any   // applied over the -e options
+	becomePass        string
+	hostKeyChecking   *bool
+	vaultPasswords    []string
+	out               io.Writer
+	noColor           bool
+	callbacks         []executor.Callback
 }
 
 // cliFlag is one ansible-playbook/ansible option: its spellings, whether it
@@ -357,7 +369,7 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		Tags:     splitCSV(p.tags),
 		SkipTags: splitCSV(p.skipTags),
 
-		NoColor:                 callback.NoColor(),
+		NoColor:                 callback.NoColor() || p.noColor,
 		NoDeprecationWarnings:   !cfg.DeprecationWarnings,
 		InjectFactsSet:          cfg.InjectFactsSet,
 		AllowBrokenConditionals: cfg.AllowBrokenConditionals,
@@ -371,10 +383,14 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 			opts.ConfigFile = abs
 		}
 	}
+	hostKeyChecking := cfg.HostKeyChecking
+	if p.hostKeyChecking != nil {
+		hostKeyChecking = *p.hostKeyChecking
+	}
 	opts.ConnOpts = connection.ManagerOptions{
 		RemoteUser:      remoteUser,
 		PrivateKey:      privateKey,
-		HostKeyChecking: cfg.HostKeyChecking,
+		HostKeyChecking: hostKeyChecking,
 		Timeout:         timeout,
 		RemoteTmp:       cfg.RemoteTmp,
 		Pipelining:      configPipelining(cfg),
@@ -392,6 +408,9 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 		KeyPassphrase: func() (string, error) {
 			return promptSecret("SSH key passphrase")
 		},
+	}
+	if p.becomePass != "" {
+		opts.BecomePass = p.becomePass
 	}
 	if p.connPassFile != "" {
 		pw, err := readPasswordFile(p.connPassFile)
@@ -429,7 +448,7 @@ func buildOptions(p *parsedArgs, baseDir string, secrets *vault.Secrets) (execut
 // buildVaultSecrets assembles vault passwords from --vault-password-file,
 // --ask-vault-pass, and the ANSIBLE_VAULT_PASSWORD_FILE env var.
 func buildVaultSecrets(p *parsedArgs) (*vault.Secrets, error) {
-	secrets := vault.NewSecrets()
+	secrets := vault.NewSecrets(p.vaultPasswords...)
 	files := p.vaultFiles
 	if len(files) == 0 {
 		if env := os.Getenv("ANSIBLE_VAULT_PASSWORD_FILE"); env != "" {
@@ -496,6 +515,13 @@ func (p *parsedArgs) loadExtraVars() {
 	for _, v := range p.extraVarArgs {
 		if p.extraVarsErr = parseExtraVars(v, p.extraVars, &p.extraVarOrigins, p.extraVarValues); p.extraVarsErr != nil {
 			return
+		}
+	}
+	for k, v := range p.extraVarsGo {
+		p.extraVars[k] = v
+		p.extraVarValues[k] = template.Position{File: "<Go extra vars>"}
+		if template.IsReservedName(k) {
+			p.extraVarOrigins = append(p.extraVarOrigins, template.KeyOrigin{Name: k, Label: "<Go extra vars>"})
 		}
 	}
 }
@@ -653,7 +679,7 @@ func loadInventory(p *parsedArgs, playbookDir string) (*inventory.Inventory, err
 		cfg = config.Defaults()
 	}
 	sources := p.inventory
-	if len(sources) == 0 {
+	if len(sources) == 0 && !p.implicitInventory {
 		sources = cfg.Inventory
 		if len(sources) == 0 {
 			sources = []string{inventory.DefaultSource}
@@ -720,14 +746,14 @@ func factCacheSettings(cfg *config.Config) factcache.Settings {
 // checkHostList is CLI.get_host_list: an inventory with no hosts warns
 // that only the implicit localhost is left, and a --limit leaving no
 // hosts of a non-empty inventory is an error.
-func checkHostList(inv *inventory.Inventory, limit, pattern string) error {
+func checkHostList(inv *inventory.Inventory, limit, pattern string, implicit bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		cfg = config.Defaults()
 	}
 	noHosts := false
 	if len(inv.ListHosts()) == 0 {
-		if cfg.LocalhostWarning && pattern != "localhost" && pattern != "127.0.0.1" && pattern != "::1" {
+		if cfg.LocalhostWarning && !implicit && pattern != "localhost" && pattern != "127.0.0.1" && pattern != "::1" {
 			warnOnce("provided hosts list is empty, only localhost is available. Note that the implicit localhost does not match 'all'\n")
 		}
 		noHosts = true
@@ -787,87 +813,12 @@ func playbookCmd(args []string) int {
 	}
 	announceConfig(p)
 
-	// All playbooks load first and then run as one run with a single
-	// recap, like ansible-playbook a.yml b.yml.
-	type book struct {
-		path  string
-		plays []*playbook.Play
-	}
-	var books []book
-	var rolesPath []string
-	if cfg, err := config.Load(); err == nil {
-		rolesPath = cfg.RolesPath
-		configureYAML(cfg)
-	}
-	for _, path := range p.positional {
-		info, err := os.Stat(path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[ERROR]: the playbook: %s could not be found\n", path)
-			return 1
-		}
-		if !info.Mode().IsRegular() && info.Mode()&os.ModeNamedPipe == 0 {
-			fmt.Fprintf(os.Stderr, "[ERROR]: the playbook: %s does not appear to be a file\n", path)
-			return 1
-		}
-	}
-	// As ansible-playbook, vault secrets and the inventory load before
-	// the playbooks, whatever the mode.
-	secrets, err := setupVault(p)
+	l, err := loadPlaybooks(p)
 	if err != nil {
 		printError(err)
-		return 1
+		return exitCode(err, 1)
 	}
-	inv, err := loadInventory(p, filepath.Dir(p.positional[0]))
-	if err != nil {
-		printError(err)
-		var ce interface{ ExitCode() int }
-		if errors.As(err, &ce) {
-			return ce.ExitCode()
-		}
-		return 1
-	}
-	if err := checkHostList(inv, p.limit, "all"); err != nil {
-		printError(err)
-		return 1
-	}
-	for _, path := range p.positional {
-		// Load by absolute path: error origins show it, as in Ansible.
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			absPath = path
-		}
-		plays, loaded, err := playbook.LoadFileTasks(absPath)
-		if err != nil {
-			// The tasks loaded before the error report their
-			// deprecations as they load.
-			if cfg, cerr := config.Load(); cerr != nil || cfg.DeprecationWarnings {
-				for _, w := range executor.TaskDeprecationWarnings(loaded) {
-					fmt.Fprint(os.Stderr, w)
-				}
-			}
-			printError(err)
-			return loadErrorCode(err)
-		}
-		if err := playbook.ResolveRoles(plays, filepath.Dir(absPath), rolesPath); err != nil {
-			printError(err)
-			return loadErrorCode(err)
-		}
-		dir, _ := filepath.Abs(filepath.Dir(path))
-		for _, pl := range plays {
-			pl.Dir = dir
-		}
-		books = append(books, book{path, plays})
-	}
-	// Module routing deprecations print as the tasks are resolved.
-	if cfg, err := config.Load(); err != nil || cfg.DeprecationWarnings {
-		var all []*playbook.Play
-		for _, b := range books {
-			all = append(all, b.plays...)
-		}
-		for _, w := range executor.RoutingDeprecationWarnings(all) {
-			fmt.Fprint(os.Stderr, w)
-		}
-	}
+	books, inv := l.books, l.inv
 
 	if p.verbosity > 1 && (p.syntax || p.listTasks || p.listTags || p.listHosts) {
 		// PlaybookExecutor loads each playbook as a run would, before
@@ -929,40 +880,157 @@ func playbookCmd(args []string) int {
 		return 0
 	}
 
-	opts, err := buildOptions(p, filepath.Dir(p.positional[0]), secrets)
-	if err != nil {
-		printError(err)
-		return 1
-	}
-	var all [][]*playbook.Play
-	var paths []string
-	for _, b := range books {
-		all = append(all, b.plays)
-		paths = append(paths, b.path)
-	}
-	cb, cbNotes, err := buildCallback(p.verbosity, false, filepath.Dir(p.positional[0]))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[ERROR]: %v\n", err)
-		return 1
-	}
-	runner := executor.NewRunner(inv, cb, opts)
-	runner.Limit = p.limit
-	runner.BookPaths = paths
-	runner.CallbackNotes = cbNotes
-	code, err = runner.RunPlaybooks(context.Background(), all)
+	code, _, err = l.run(context.Background(), p)
 	if err != nil {
 		printError(err)
 		var ye *yaml.Error
 		if errors.As(err, &ye) {
 			return 4 // a parser error, as at load
 		}
-		var ce interface{ ExitCode() int }
-		if errors.As(err, &ce) {
-			return ce.ExitCode()
-		}
-		return 1
+		return exitCode(err, 1)
 	}
 	return code
+}
+
+// book is one loaded playbook.
+type book struct {
+	path  string
+	plays []*playbook.Play
+}
+
+// loaded is a run's playbooks with the inventory and vault secrets
+// loaded for them.
+type loaded struct {
+	books   []book
+	inv     *inventory.Inventory
+	secrets *vault.Secrets
+	baseDir string // the first playbook's directory
+}
+
+// codedError is an error with ansible-playbook's exit status for it.
+type codedError struct {
+	err  error
+	code int
+}
+
+func (e *codedError) Error() string { return e.err.Error() }
+func (e *codedError) Unwrap() error { return e.err }
+func (e *codedError) ExitCode() int { return e.code }
+
+// exitCode is the exit status an error carries, else def.
+func exitCode(err error, def int) int {
+	var ce interface{ ExitCode() int }
+	if errors.As(err, &ce) {
+		return ce.ExitCode()
+	}
+	return def
+}
+
+// loadPlaybooks loads every playbook before any runs, as ansible-playbook
+// a.yml b.yml runs them as one run with a single recap. Vault secrets and
+// the inventory load first, whatever the mode. p.plays, when set, stands
+// in for the files (the Go API's playbook structs).
+func loadPlaybooks(p *parsedArgs) (*loaded, error) {
+	var rolesPath []string
+	if cfg, err := config.Load(); err == nil {
+		rolesPath = cfg.RolesPath
+		configureYAML(cfg)
+	}
+	for _, path := range p.positional {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("the playbook: %s could not be found", path)
+		}
+		if !info.Mode().IsRegular() && info.Mode()&os.ModeNamedPipe == 0 {
+			return nil, fmt.Errorf("the playbook: %s does not appear to be a file", path)
+		}
+	}
+	l := &loaded{baseDir: p.playbookDir}
+	if len(p.positional) > 0 {
+		l.baseDir = filepath.Dir(p.positional[0])
+	}
+	var err error
+	if l.secrets, err = setupVault(p); err != nil {
+		return nil, err
+	}
+	if l.inv, err = loadInventory(p, l.baseDir); err != nil {
+		return nil, err
+	}
+	if err := checkHostList(l.inv, p.limit, "all", p.implicitInventory); err != nil {
+		return nil, err
+	}
+	for _, path := range p.positional {
+		// Load by absolute path: error origins show it, as in Ansible.
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			absPath = path
+		}
+		plays, loadedTasks, err := playbook.LoadFileTasks(absPath)
+		if err != nil {
+			// The tasks loaded before the error report their
+			// deprecations as they load.
+			if cfg, cerr := config.Load(); cerr != nil || cfg.DeprecationWarnings {
+				for _, w := range executor.TaskDeprecationWarnings(loadedTasks) {
+					fmt.Fprint(os.Stderr, w)
+				}
+			}
+			return nil, &codedError{err, loadErrorCode(err)}
+		}
+		if err := playbook.ResolveRoles(plays, filepath.Dir(absPath), rolesPath); err != nil {
+			return nil, &codedError{err, loadErrorCode(err)}
+		}
+		dir, _ := filepath.Abs(filepath.Dir(path))
+		for _, pl := range plays {
+			pl.Dir = dir
+		}
+		l.books = append(l.books, book{path, plays})
+	}
+	if p.plays != nil {
+		if err := playbook.ResolveRoles(p.plays, l.baseDir, rolesPath); err != nil {
+			return nil, &codedError{err, loadErrorCode(err)}
+		}
+		dir, _ := filepath.Abs(l.baseDir)
+		for _, pl := range p.plays {
+			pl.Dir = dir
+		}
+		l.books = append(l.books, book{"<go-playbook>", p.plays})
+	}
+	// Module routing deprecations print as the tasks are resolved.
+	if cfg, err := config.Load(); err != nil || cfg.DeprecationWarnings {
+		var all []*playbook.Play
+		for _, b := range l.books {
+			all = append(all, b.plays...)
+		}
+		for _, w := range executor.RoutingDeprecationWarnings(all) {
+			fmt.Fprint(os.Stderr, w)
+		}
+	}
+	return l, nil
+}
+
+// run runs the loaded playbooks: the exit status, and the runner for its
+// stats.
+func (l *loaded) run(ctx context.Context, p *parsedArgs) (int, *executor.Runner, error) {
+	opts, err := buildOptions(p, l.baseDir, l.secrets)
+	if err != nil {
+		return 0, nil, err
+	}
+	var all [][]*playbook.Play
+	var paths []string
+	for _, b := range l.books {
+		all = append(all, b.plays)
+		paths = append(paths, b.path)
+	}
+	cb, cbNotes, err := buildCallback(p, false, l.baseDir)
+	if err != nil {
+		return 0, nil, err
+	}
+	runner := executor.NewRunner(l.inv, cb, opts)
+	runner.Limit = p.limit
+	runner.BookPaths = paths
+	runner.CallbackNotes = cbNotes
+	code, err := runner.RunPlaybooks(ctx, all)
+	return code, runner, err
 }
 
 // playHeader is the list modes' "play #N (pattern): name\tTAGS: [...]".
@@ -1141,7 +1209,7 @@ func adhocCmd(args []string) int {
 	// AdHocCLI.run: the hosts (none matching is a warning, unless --limit
 	// left none), --list-hosts, then the checks of the module.
 	var hosts []*inventory.Host
-	if err := checkHostList(inv, p.limit, pattern); err != nil {
+	if err := checkHostList(inv, p.limit, pattern, false); err != nil {
 		if p.limit != "" {
 			printError(err)
 			return 1
@@ -1185,7 +1253,7 @@ func adhocCmd(args []string) int {
 		printError(err)
 		return 1
 	}
-	cb, cbNotes, err := buildCallback(p.verbosity, true, "")
+	cb, cbNotes, err := buildCallback(p, true, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR]: %v\n", err)
 		return 1
@@ -1316,7 +1384,8 @@ func expandImports(play *playbook.Play, tasks []*playbook.Task) []*playbook.Task
 }
 
 // buildCallback loads the configured stdout and aggregate callbacks.
-func buildCallback(verbosity int, adhoc bool, playbookDir string) (executor.Callback, []string, error) {
+func buildCallback(p *parsedArgs, adhoc bool, playbookDir string) (executor.Callback, []string, error) {
+	verbosity := p.verbosity
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, nil, err
@@ -1330,6 +1399,9 @@ func buildCallback(verbosity int, adhoc bool, playbookDir string) (executor.Call
 		Verbosity:           verbosity,
 		Adhoc:               adhoc,
 		PluginDirs:          callback.PluginDirs(cfg.CallbackPlugins, playbookDir),
+		Extra:               p.callbacks,
+		Out:                 p.out,
+		NoColor:             p.noColor,
 	}
 	if adhoc {
 		// The ad-hoc command uses minimal and ignores stdout_callback unless

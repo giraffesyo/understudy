@@ -79,10 +79,13 @@ func New(verbosity int) *Default {
 // NO_COLOR/ANSIBLE_NOCOLOR set, unless ANSIBLE_FORCE_COLOR is.
 func NoColor() bool {
 	noColor := os.Getenv("NO_COLOR") != "" || os.Getenv("ANSIBLE_NOCOLOR") != "" || !term.IsTerminal(int(os.Stdout.Fd()))
-	if v := os.Getenv("ANSIBLE_FORCE_COLOR"); v != "" && v != "0" && !strings.EqualFold(v, "false") {
-		noColor = false
-	}
-	return noColor
+	return noColor && !forceColor()
+}
+
+// forceColor reports whether ANSIBLE_FORCE_COLOR asks for color anyway.
+func forceColor() bool {
+	v := os.Getenv("ANSIBLE_FORCE_COLOR")
+	return v != "" && v != "0" && !strings.EqualFold(v, "false")
 }
 
 func (d *Default) paint(c color, s string) string {

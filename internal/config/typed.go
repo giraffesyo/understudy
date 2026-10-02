@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"math/big"
-	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -70,7 +69,7 @@ func checkTypedSettings(f *iniFile, path string) error {
 	for _, s := range typedSettings {
 		val, origin, found, fromINI := "", "", false, false
 		for _, e := range s.env {
-			if v, ok := os.LookupEnv(e); ok {
+			if v, ok := lookupEnv(e); ok {
 				val, origin, found = v, "env: "+e, true
 			}
 		}

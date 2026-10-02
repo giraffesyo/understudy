@@ -13,6 +13,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/executor"
 	"github.com/giraffesyo/understudy/internal/playbook"
 	"github.com/giraffesyo/understudy/internal/yaml"
+	"golang.org/x/term"
 )
 
 // Settings are the ansible.cfg / ANSIBLE_* callback settings.
@@ -26,6 +27,11 @@ type Settings struct {
 	Adhoc               bool                // the ad-hoc command's default is minimal
 	PluginDirs          []string            // where external (executable) callback plugins live
 	Extra               []executor.Callback // additional callbacks (Go API OnEvent)
+
+	// Out, when set, takes the stdout callback's output in place of
+	// os.Stdout (Go API Options.Output), colored only when a terminal.
+	Out     io.Writer
+	NoColor bool
 }
 
 // Build assembles the output callback chain the way ansible-core loads
@@ -40,9 +46,11 @@ func Build(s Settings, warn func(string)) (executor.Callback, error) {
 	switch {
 	case name == "" && s.Adhoc, name == "minimal":
 		m := NewMinimal(s.Verbosity)
+		s.redirect(&m.Default)
 		stdout, out = m, m.writer()
 	case name == "", name == "default":
 		d := New(s.Verbosity)
+		s.redirect(d)
 		d.ShowCustomStats = s.ShowCustomStats
 		stdout, out = d, d.writer()
 	default:
@@ -90,6 +98,18 @@ func Build(s Settings, warn func(string)) (executor.Callback, error) {
 }
 
 func (d *Default) writer() io.Writer { return d.Out }
+
+// redirect points a stdout callback at Settings.Out.
+func (s Settings) redirect(d *Default) {
+	if s.Out != nil {
+		d.Out = &utf8Display{w: s.Out, warn: os.Stderr, once: &nonUTF8Once}
+		if f, ok := s.Out.(*os.File); !ok || !term.IsTerminal(int(f.Fd())) {
+			d.Columns = 79
+			d.NoColor = !forceColor()
+		}
+	}
+	d.NoColor = d.NoColor || s.NoColor
+}
 
 // filtered implements display_ok_hosts / display_skipped_hosts: hidden
 // results print nothing, and a task's banner waits for its first shown
