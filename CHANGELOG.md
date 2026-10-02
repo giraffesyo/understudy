@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/giraffesyo/understudy/compare/v0.1.2...v0.2.0) (2026-10-02)
+
+
+### Features
+
+* **api:** RunFiles runs YAML playbooks in-process, configured like ansible-playbook ([6438226](https://github.com/giraffesyo/understudy/commit/64382261b290cdd53b69ae68cf958e3485ff52d6))
+
 ## [0.1.2](https://github.com/giraffesyo/understudy/compare/v0.1.1...v0.1.2) (2026-10-02)
 
 
