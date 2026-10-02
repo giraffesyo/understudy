@@ -26,6 +26,28 @@ func Musl() bool {
 	return musl
 }
 
+// GaiError is str(socket.gaierror) for a lookup that failed with err, as
+// getaddrinfo reports it through the C library (glibc's or musl's codes
+// and gai_strerror text). NXDOMAIN is EAI_NONAME. A NOERROR answer with
+// no records and neither the AA nor the RA bit (what Go calls a lame
+// referral; some DNS proxies answer every unknown name so) is a server
+// failure to glibc, which tries the next server and ends in EAI_AGAIN,
+// and an empty answer, EAI_NODATA, to musl. Everything else (SERVFAIL,
+// timeouts, unreadable answers) is EAI_AGAIN.
+func GaiError(err *net.DNSError) string {
+	switch {
+	case err.IsNotFound && Musl():
+		return "[Errno -2] Name does not resolve"
+	case err.IsNotFound:
+		return "[Errno -2] Name or service not known"
+	case err.Err == "lame referral" && Musl():
+		return "[Errno -5] Name has no usable address"
+	case Musl():
+		return "[Errno -3] Try again"
+	}
+	return "[Errno -3] Temporary failure in name resolution"
+}
+
 // Addr is a "host:port" address to dial as the C library would look its
 // host up. musl applies no search domains to a name with at least ndots
 // dots (name_from_dns_search), where Go's resolver, as glibc's, tries

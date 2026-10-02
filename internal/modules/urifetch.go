@@ -20,7 +20,6 @@ import (
 	"net/http/httptrace"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
@@ -920,25 +919,10 @@ func (c *uriClient) dial(ctx context.Context, network, addr string) (net.Conn, e
 // code and the C library's gai_strerror text (glibc's, musl's or macOS's,
 // whichever the target's Python is linked with).
 func pyGaiError(dnsErr *net.DNSError) string {
-	temporary := dnsErr.IsTemporary && !dnsErr.IsNotFound
-	switch {
-	case runtime.GOOS == "darwin":
+	if runtime.GOOS == "darwin" {
 		return "[Errno 8] nodename nor servname provided, or not known"
-	case libcIsMusl():
-		if temporary {
-			return "[Errno -3] Try again"
-		}
-		return "[Errno -2] Name does not resolve"
-	case temporary:
-		return "[Errno -3] Temporary failure in name resolution"
 	}
-	return "[Errno -2] Name or service not known"
-}
-
-// libcIsMusl reports whether the system C library is musl (Alpine).
-func libcIsMusl() bool {
-	m, _ := filepath.Glob("/lib/ld-musl-*.so.1")
-	return len(m) > 0
+	return resolv.GaiError(dnsErr)
 }
 
 // pyNetErr renders a socket error like str(OSError).
