@@ -111,6 +111,11 @@ var (
 	// messages show at any verbosity.
 	stagingDirRe  = regexp.MustCompile(`/ansible-tmp-[0-9.]+-[0-9]+-[0-9]+/`)
 	stagingFileRe = regexp.MustCompile(`/ansible-tmp-X/tmp[a-z0-9_]{8}`)
+	// stat's "version" on Linux: lsattr -v's inode generation number,
+	// which ext4 picks at random for each new inode (ansible's and
+	// understudy's runs stat different files). Keyed on its sorted
+	// neighbor so other "version" keys are still compared.
+	statVersionRe = regexp.MustCompile(`"version": "[0-9]+"(,\s*"wgrp": )`)
 )
 
 func normalizeOutput(s, work string) string {
@@ -119,6 +124,7 @@ func normalizeOutput(s, work string) string {
 	s = asyncJIDRe.ReplaceAllString(s, "JID")
 	s = stagingDirRe.ReplaceAllString(s, "/ansible-tmp-X/")
 	s = stagingFileRe.ReplaceAllString(s, "/ansible-tmp-X/tmpX")
+	s = statVersionRe.ReplaceAllString(s, `"version": "V"$1`)
 	return timingRe.ReplaceAllString(s, `"$1": "T"`)
 }
 
