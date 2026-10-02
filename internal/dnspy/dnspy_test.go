@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -228,10 +229,9 @@ func TestResolverTruncationRetriesOverTCP(t *testing.T) {
 }
 
 func TestResolverServfail(t *testing.T) {
-	calls := 0
+	var calls atomic.Int32 // the server answers on its own goroutines
 	port := testServer(t, func(q []byte, tcp bool) []byte {
-		calls++
-		if calls%2 == 1 {
+		if calls.Add(1)%2 == 1 {
 			return reply(q, 2, false)
 		}
 		return reply(q, 0, false, []byte{192, 0, 2, 7})
@@ -243,7 +243,7 @@ func TestResolverServfail(t *testing.T) {
 		t.Errorf("without retry_servfail: %v, want %q", err, want)
 	}
 	r.RetryServfail = true
-	calls = 0
+	calls.Store(0)
 	if _, err := r.Query("flaky.test.", "A", ClassIN, false); err != nil {
 		t.Errorf("with retry_servfail: %v", err)
 	}
