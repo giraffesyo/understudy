@@ -119,8 +119,10 @@ func (c *AgentClient) Run(ctx context.Context, req *agentproto.TaskRequest, payl
 	}
 	if res.RC != 0 {
 		// Nonzero agent exit = infrastructure error, not a module failure.
+		// sudo prompted with no password to give: the connection raises
+		// it as ansible-core's ssh plugin does ("Missing sudo password").
 		if become != nil && become.method() == "sudo" && IsSudoPasswordError(res.Stderr) {
-			return nil, fmt.Errorf("Missing sudo password (configure NOPASSWD or use --ask-become-pass)")
+			return nil, &BecomeError{Msg: "Missing sudo password"}
 		}
 		return nil, fmt.Errorf("agent exited with rc=%d: %s", res.RC, strings.TrimSpace(string(res.Stderr)))
 	}
