@@ -867,7 +867,9 @@ plugins), `passlib`, `bcrypt` and `dnspython`, on Python 3.14 with the
 ansible-core release `.github/golden/requirements.in` pins (CI installs
 its hash-checked lock: `pip install --require-hashes --no-deps -r
 .github/golden/requirements.txt`). Another controller Python changes the
-Python-worded messages (see **Output reference**). Set `ANSIBLE_PYTHON_INTERPRETER` to that
+Python-worded messages (see **Output reference**), and ansible-core
+2.21.3 does not yet mask URL credentials (`mask_url.yml` and one
+`results_uri.yml` line differ there). Set `ANSIBLE_PYTHON_INTERPRETER` to that
 Python (CI does): the harnesses pin it so most output does not depend on
 which Python discovery finds (`interpreter_discovery.yml` sets
 `ansible_python_interpreter: auto` to cover discovery itself).
