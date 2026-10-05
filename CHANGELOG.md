@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/giraffesyo/understudy/compare/v0.2.0...v0.2.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **connection:** preserve immediate privilege escalation replies ([8dc414f](https://github.com/giraffesyo/understudy/commit/8dc414fdb8170e24dcaccd8008454b49329a6442))
+* **modules:** resolve NSS users and groups without cgo ([5a3b59f](https://github.com/giraffesyo/understudy/commit/5a3b59f8bf50d85f75e489cf75942e36a82ba6ce))
+
 ## [0.2.0](https://github.com/giraffesyo/understudy/compare/v0.1.2...v0.2.0) (2026-10-02)
 
 
