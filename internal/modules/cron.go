@@ -3,7 +3,6 @@ package modules
 import (
 	"fmt"
 	"os"
-	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
 	"github.com/giraffesyo/understudy/internal/modules/pyre"
+	user "github.com/giraffesyo/understudy/internal/userlookup"
 )
 
 func init() {

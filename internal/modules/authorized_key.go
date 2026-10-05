@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/user"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -18,6 +17,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
 	"github.com/giraffesyo/understudy/internal/modules/fsutil"
+	user "github.com/giraffesyo/understudy/internal/userlookup"
 )
 
 // This file ports ansible.posix.authorized_key: the key file is parsed

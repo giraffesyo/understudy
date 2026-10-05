@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/user"
 	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/fsutil"
+	user "github.com/giraffesyo/understudy/internal/userlookup"
 )
 
 // pathInfoModules are the modules whose Ansible counterparts return a

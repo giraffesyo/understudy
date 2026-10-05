@@ -1,3 +1,5 @@
+export CGO_ENABLED := 0
+
 GO       ?= go
 BIN      := bin
 DIST     := dist

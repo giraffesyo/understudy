@@ -10,13 +10,13 @@ import (
 	"math/big"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/giraffesyo/understudy/internal/agentproto"
+	user "github.com/giraffesyo/understudy/internal/userlookup"
 )
 
 // Async jobs (async: N with poll: 0, or the job behind a poll > 0 wait)

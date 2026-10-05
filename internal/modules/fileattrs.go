@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
 	"github.com/giraffesyo/understudy/internal/modules/fsutil"
+	user "github.com/giraffesyo/understudy/internal/userlookup"
 )
 
 // This file ports the file-attribute half of Ansible's AnsibleModule

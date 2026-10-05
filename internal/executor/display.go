@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/user"
 
 	"github.com/giraffesyo/understudy/internal/playbook"
+	user "github.com/giraffesyo/understudy/internal/userlookup"
 	"github.com/giraffesyo/understudy/internal/vars"
 	"github.com/giraffesyo/understudy/internal/yaml"
 )

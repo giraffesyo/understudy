@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/user"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -20,6 +19,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/modules/args"
 	"github.com/giraffesyo/understudy/internal/modules/fsutil"
 	"github.com/giraffesyo/understudy/internal/modules/pyre"
+	user "github.com/giraffesyo/understudy/internal/userlookup"
 )
 
 // This file ports ansible.builtin.unarchive (the module half). The

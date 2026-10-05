@@ -871,10 +871,12 @@ make test-golden  # differential tests vs. ansible-playbook (see below)
 make cross        # build-check the control binary for every release platform
 ```
 
-The two-stage build cross-compiles the agents first (`CGO_ENABLED=0`,
-stripped), embeds them, then builds the control binary. A dependency check
-(`make depcheck`) enforces that the agent imports only the module and
-protocol packages, so it stays small.
+Builds and tests default to `CGO_ENABLED=0`. The two-stage build
+cross-compiles the stripped agents first, embeds them, then builds the
+control binary. Linux account lookups use `getent` to honor NSS without
+cgo, falling back to local account files when `getent` is unavailable. A
+dependency check (`make depcheck`) enforces that the agent imports only
+the module and protocol packages, so it stays small.
 
 The golden suite runs every `test/e2e/golden/*.yml` through the installed
 `ansible-playbook` and through understudy, comparing per-task statuses and

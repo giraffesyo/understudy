@@ -9,10 +9,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	user "github.com/giraffesyo/understudy/internal/userlookup"
 )
 
 // AtomicWrite writes content to path via a temp file in the SAME directory

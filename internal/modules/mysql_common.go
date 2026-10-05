@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/user"
 	"regexp"
 	"sort"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 	"github.com/giraffesyo/understudy/internal/agentproto"
 	"github.com/giraffesyo/understudy/internal/modules/args"
 	"github.com/giraffesyo/understudy/internal/modules/mysqlclient"
+	user "github.com/giraffesyo/understudy/internal/userlookup"
 )
 
 // The community.mysql modules (now ansible.mysql) talk to the server with
