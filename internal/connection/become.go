@@ -301,13 +301,13 @@ func runPTYDialog(ctx context.Context, start startPTY, b *BecomeSpec, command, m
 			if b.Password == "" {
 				return fail(&BecomeError{Msg: fmt.Sprintf("Missing %s password", method)})
 			}
+			mu.Lock()
+			buf = buf[len(out):]
+			mu.Unlock()
 			if _, err := io.WriteString(proc, b.Password+"\n"); err != nil {
 				return fail(err)
 			}
 			sent = true
-			mu.Lock()
-			buf = nil
-			mu.Unlock()
 			timer.Reset(becomeTimeout)
 			continue
 		}
