@@ -866,6 +866,7 @@ than silently diverging. Known boundaries:
 ```sh
 make build        # agents + control binary
 make test         # unit + local end-to-end tests
+make test-fips    # certified Go crypto module, including embedded agents
 make test-e2e     # SSH/container end-to-end tests (requires Docker)
 make test-golden  # differential tests vs. ansible-playbook (see below)
 make cross        # build-check the control binary for every release platform
@@ -877,6 +878,25 @@ control binary. Linux account lookups use `getent` to honor NSS without
 cgo, falling back to local account files when `getent` is unavailable. A
 dependency check (`make depcheck`) enforces that the agent imports only
 the module and protocol packages, so it stays small.
+
+To opt into Go's FIPS mode without cgo, build the controller and its
+embedded agents together:
+
+```sh
+GOFIPS140=certified make build
+make test-fips
+```
+
+`make test-fips` rebuilds both agents and the controller, runs the unit and
+local end-to-end suites in FIPS mode, and checks that all three binaries
+use the same frozen Go Cryptographic Module with cgo disabled. CI also
+runs an SSH smoke test with that controller and its embedded agent.
+Building a consuming application with `GOFIPS140=certified` alone does
+not rebuild the agent binaries embedded in its dependencies.
+
+This checks compatibility with Go's FIPS mode, not that every supported
+operation is FIPS-approved. Algorithm selection and deployment requirements
+remain the caller's responsibility; see [Go's FIPS documentation](https://go.dev/doc/security/fips140).
 
 The golden suite runs every `test/e2e/golden/*.yml` through the installed
 `ansible-playbook` and through understudy, comparing per-task statuses and

@@ -16,7 +16,7 @@ VERSION_LDFLAGS := -X github.com/giraffesyo/understudy/internal/cli.version=$(VE
 # keep in step with `builds` in .goreleaser.yaml.
 RELEASE_PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
-.PHONY: build agents test test-e2e test-golden depcheck cross clean
+.PHONY: build agents test test-fips test-e2e test-golden depcheck cross clean
 
 build: agents
 	$(GO) build -trimpath -ldflags="$(VERSION_LDFLAGS)" -o $(BIN)/understudy ./cmd/understudy
@@ -33,6 +33,10 @@ depcheck:
 
 test:
 	$(GO) test ./...
+
+test-fips:
+	GOFIPS140=certified $(MAKE) build
+	GOFIPS140=certified $(GO) test -tags fips ./...
 
 test-e2e:
 	$(GO) test -tags e2e -timeout 45m ./test/e2e/...

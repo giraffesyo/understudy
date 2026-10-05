@@ -110,6 +110,27 @@ jobs:
       - run: make build
       - run: make test
 
+  fips:
+    name: FIPS compatibility (controller + embedded agents, cgo disabled)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GOFIPS140: certified
+      UNDERSTUDY_REQUIRE_PREREQS: "1"
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        with:
+          cache-key: fips
+      - run: make test-fips
+      - name: SSH execution with the embedded FIPS agent
+        run: go test -tags e2e -run '^TestSSHPingCommandFacts$' ./test/e2e/
+
   race:
     env:
       CGO_ENABLED: "1" # The Go race detector requires cgo.
