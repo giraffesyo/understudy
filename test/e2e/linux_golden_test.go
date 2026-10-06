@@ -195,11 +195,12 @@ func TestLinuxGoldenOutput(t *testing.T) {
 		}
 		for _, distro := range distros {
 			t.Run(filepath.Base(pb)+"/"+distro, func(t *testing.T) {
+				t.Parallel()
 				image := lgImage(t, distro)
 				abs, _ := filepath.Abs(pb)
 				var lastStderr, lastName string
 				run := func(tool string, bin string, pre ...string) string {
-					name, port := lgBoot(t, image, "understudy-lg-"+distro+"-"+tool, strings.TrimSpace(string(pub)), lgRunArgs[distro]...)
+					name, port := lgBoot(t, image, "understudy-lg-"+strings.TrimSuffix(filepath.Base(pb), ".yml")+"-"+distro+"-"+tool, strings.TrimSpace(string(pub)), lgRunArgs[distro]...)
 					if ready := lgReady[distro]; ready != "" {
 						ok := false
 						for i := 0; i < 60 && !ok; i++ {

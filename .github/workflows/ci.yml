@@ -210,11 +210,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { shard: differential, run: "^TestGoldenDifferential$", skip: "" }
-          - { shard: output, run: "^(TestGoldenOutput|TestGoldenOutputVerbose)$", skip: "" }
-          - { shard: output-vv, run: "^(TestGoldenOutputVV|TestGoldenOutputVVV)$", skip: "" }
-          - { shard: containers, run: "^(TestLinuxGoldenOutput|TestRHELGoldenDifferential)$", skip: "" }
+          - { shard: differential, parallel: 4, run: "^TestGoldenDifferential$", skip: "" }
+          - { shard: output, parallel: 4, run: "^(TestGoldenOutput|TestGoldenOutputVerbose)$", skip: "" }
+          - { shard: output-vv, parallel: 4, run: "^(TestGoldenOutputVV|TestGoldenOutputVVV)$", skip: "" }
+          - { shard: containers, parallel: 2, run: "^(TestLinuxGoldenOutput|TestRHELGoldenDifferential)$", skip: "" }
           - shard: rest
+            parallel: 4
             run: ""
             skip: "^(TestGoldenDifferential|TestGoldenOutput|TestGoldenOutputVerbose|TestGoldenOutputVV|TestGoldenOutputVVV|TestLinuxGoldenOutput|TestRHELGoldenDifferential)$"
     runs-on: ubuntu-latest
@@ -240,6 +241,8 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14.8"
+          cache: pip
+          cache-dependency-path: .github/golden/requirements.txt
       - name: install ansible-core (pinned, hash-checked; .github/golden/requirements.in)
         run: |
           python -m pip install --require-hashes --no-deps -r .github/golden/requirements.txt
@@ -256,12 +259,13 @@ jobs:
         # stdio) with an explicit interpreter, so interpreter discovery (a
         # Python-only artifact) stays out of the compared output.
         env:
+          PARALLEL: ${{ matrix.parallel }}
           RUN: ${{ matrix.run }}
           SKIP: ${{ matrix.skip }}
         run: |
           ANSIBLE_PYTHON_INTERPRETER="$(command -v python3)"
           export ANSIBLE_PYTHON_INTERPRETER
-          go test -count=1 -tags golden -timeout 60m -run "$RUN" -skip "$SKIP" ./test/e2e/
+          go test -v -count=1 -tags golden -parallel "$PARALLEL" -timeout 60m -run "$RUN" -skip "$SKIP" ./test/e2e/
 
   e2e:
     name: e2e (Docker)

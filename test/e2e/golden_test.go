@@ -215,6 +215,14 @@ func compareRuns(t *testing.T, a, u toolRun, work ...string) {
 	}
 }
 
+func parallelGoldenCase(t *testing.T, playbook string) {
+	t.Helper()
+	// One-second task deadlines must run without competing playbooks.
+	if filepath.Base(playbook) != "task_timeout.yml" {
+		t.Parallel()
+	}
+}
+
 func TestGoldenDifferential(t *testing.T) {
 	ansible := ansiblePlaybookBin(t)
 	understudy := understudyBin(t)
@@ -226,6 +234,7 @@ func TestGoldenDifferential(t *testing.T) {
 
 	for _, pb := range corpus {
 		t.Run(filepath.Base(pb), func(t *testing.T) {
+			parallelGoldenCase(t, pb)
 			workA := t.TempDir()
 			workB := t.TempDir()
 			// A sibling "<name>.inventory" file (multi-host / groups) is used
