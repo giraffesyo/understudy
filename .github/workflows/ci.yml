@@ -203,17 +203,18 @@ jobs:
 
   golden:
     name: golden (vs ansible-playbook, ${{ matrix.shard }})
-    # The whole suite runs longer than one job's timeout, so it is split by
-    # test function; "rest" runs everything the other shards do not, so a
-    # new test lands there.
+    # "rest" catches test functions not assigned to an explicit shard.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { shard: differential, parallel: 4, run: "^TestGoldenDifferential$", skip: "" }
-          - { shard: output, parallel: 4, run: "^(TestGoldenOutput|TestGoldenOutputVerbose)$", skip: "" }
-          - { shard: output-vv, parallel: 4, run: "^(TestGoldenOutputVV|TestGoldenOutputVVV)$", skip: "" }
-          - { shard: containers, parallel: 2, run: "^(TestLinuxGoldenOutput|TestRHELGoldenDifferential)$", skip: "" }
+          - { shard: differential-1, partition: 1, parallel: 4, run: "^TestGoldenDifferential$", skip: "" }
+          - { shard: differential-2, partition: 2, parallel: 4, run: "^TestGoldenDifferential$", skip: "" }
+          - { shard: output, parallel: 4, run: "^TestGoldenOutput$", skip: "" }
+          - { shard: output-v, parallel: 4, run: "^TestGoldenOutputVerbose$", skip: "" }
+          - { shard: output-vv, parallel: 4, run: "^TestGoldenOutputVV$", skip: "" }
+          - { shard: output-vvv, parallel: 4, run: "^TestGoldenOutputVVV$", skip: "" }
+          - { shard: containers, parallel: 4, run: "^(TestLinuxGoldenOutput|TestRHELGoldenDifferential)$", skip: "" }
           - shard: rest
             parallel: 4
             run: ""
@@ -260,11 +261,15 @@ jobs:
         # Python-only artifact) stays out of the compared output.
         env:
           PARALLEL: ${{ matrix.parallel }}
+          PARTITION: ${{ matrix.partition }}
           RUN: ${{ matrix.run }}
           SKIP: ${{ matrix.skip }}
         run: |
           ANSIBLE_PYTHON_INTERPRETER="$(command -v python3)"
           export ANSIBLE_PYTHON_INTERPRETER
+          if [ -n "$PARTITION" ]; then
+            RUN="$RUN/$(python3 .github/scripts/golden-shard.py "$PARTITION" 2)"
+          fi
           go test -v -count=1 -tags golden -parallel "$PARALLEL" -timeout 60m -run "$RUN" -skip "$SKIP" ./test/e2e/
 
   e2e:
