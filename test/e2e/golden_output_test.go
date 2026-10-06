@@ -63,6 +63,7 @@ func testGoldenOutput(t *testing.T, flags ...string) {
 			if reason, ok := outputSkip[filepath.Base(pb)]; ok {
 				t.Skip(reason)
 			}
+			parallelGoldenCase(t, pb)
 			abs, _ := filepath.Abs(pb)
 			base := filepath.Base(pb)
 			var extra []string

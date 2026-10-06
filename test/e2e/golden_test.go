@@ -156,15 +156,23 @@ func runTool(t *testing.T, bin string, args, env []string, runs int) toolRun {
 	return run
 }
 
-// taskBanners is the sequence of task and handler names a run printed.
-func taskBanners(output string) []string {
+// taskOrder retains every banner and each host's order, independent of host scheduling.
+func taskOrder(output string) ([]string, map[string][]string) {
 	var names []string
+	byHost := map[string][]string{}
+	current := ""
 	for _, raw := range strings.Split(output, "\n") {
-		if m := taskBanner.FindStringSubmatch(stripANSI(strings.TrimRight(raw, "\r"))); m != nil {
-			names = append(names, m[1])
+		line := stripANSI(strings.TrimRight(raw, "\r"))
+		if m := taskBanner.FindStringSubmatch(line); m != nil {
+			current = m[1]
+			names = append(names, current)
+		}
+		if m := statusLine.FindStringSubmatch(line); m != nil {
+			byHost[m[2]] = append(byHost[m[2]], current)
 		}
 	}
-	return names
+	sort.Strings(names)
+	return names, byHost
 }
 
 // errorLines are the "[ERROR]: ..." headlines of a run (the first line of
@@ -184,7 +192,7 @@ func errorLines(output string, work ...string) []string {
 }
 
 // compareRuns asserts that understudy made the same decisions as
-// ansible-playbook: exit code, the task banners in order, per-task status
+// ansible-playbook: exit code, task counts and order per host, per-task status
 // and the recap. A playbook either tool failed to run (no task results: a
 // parse or load error) fails the comparison, after checking that the two
 // errors read the same, so an error in both tools never passes as a match.
@@ -203,8 +211,13 @@ func compareRuns(t *testing.T, a, u toolRun, work ...string) {
 	if a.rc != u.rc {
 		t.Errorf("exit code differs: ansible %d, understudy %d%s", a.rc, u.rc, dump)
 	}
-	if ab, ub := taskBanners(a.out), taskBanners(u.out); !reflect.DeepEqual(ab, ub) {
-		t.Errorf("task sequence differs\n ansible:    %q\n understudy: %q%s", ab, ub, dump)
+	ab, ah := taskOrder(a.out)
+	ub, uh := taskOrder(u.out)
+	if !reflect.DeepEqual(ab, ub) {
+		t.Errorf("task banners differ\n ansible:    %q\n understudy: %q%s", ab, ub, dump)
+	}
+	if !reflect.DeepEqual(ah, uh) {
+		t.Errorf("per-host task sequence differs\n ansible:    %q\n understudy: %q%s", ah, uh, dump)
 	}
 	if !reflect.DeepEqual(aRecap, uRecap) {
 		t.Errorf("PLAY RECAP differs\n ansible:    %v\n understudy: %v%s",
@@ -212,6 +225,14 @@ func compareRuns(t *testing.T, a, u toolRun, work ...string) {
 	}
 	if !reflect.DeepEqual(aStatus, uStatus) {
 		t.Errorf("per-task status differs\n%s%s", diffStatus(aStatus, uStatus), dump)
+	}
+}
+
+func parallelGoldenCase(t *testing.T, playbook string) {
+	t.Helper()
+	// One-second task deadlines must run without competing playbooks.
+	if filepath.Base(playbook) != "task_timeout.yml" {
+		t.Parallel()
 	}
 }
 
@@ -226,6 +247,7 @@ func TestGoldenDifferential(t *testing.T) {
 
 	for _, pb := range corpus {
 		t.Run(filepath.Base(pb), func(t *testing.T) {
+			parallelGoldenCase(t, pb)
 			workA := t.TempDir()
 			workB := t.TempDir()
 			// A sibling "<name>.inventory" file (multi-host / groups) is used
