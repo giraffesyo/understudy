@@ -66,6 +66,7 @@ git commit -q -m 'add sub'
 # short); the signature's time is fixed, so the commit hash is too.
 if command -v gpg >/dev/null 2>&1; then
   g=$(mktemp -d /tmp/gpgXXXXXX)
+  trap 'GNUPGHOME=$g gpgconf --kill all 2>/dev/null; rm -rf "$g"' EXIT
   GNUPGHOME=$g gpg --batch --quiet --import "$signer" 2>/dev/null
   printf '#!/bin/sh\nexec gpg --faked-system-time 20260101T000000! "$@"\n' > "$g/gpg.sh"
   chmod +x "$g/gpg.sh"
@@ -75,8 +76,8 @@ if command -v gpg >/dev/null 2>&1; then
   git add s.txt
   GNUPGHOME=$g git -c gpg.program="$g/gpg.sh" -c user.signingkey=golden@example.com commit -q -S -m signed 2>/dev/null
   mkdir -m 700 "$d/gnupg"
+  # gpg imports the key but exits 2 when <dir> is too long for an agent socket.
   GNUPGHOME=$g gpg --batch --armor --export golden@example.com |
-    GNUPGHOME="$d/gnupg" gpg --batch --quiet --import 2>/dev/null
-  GNUPGHOME=$g gpgconf --kill gpg-agent 2>/dev/null || true
-  rm -rf "$g"
+    GNUPGHOME="$d/gnupg" gpg --batch --quiet --no-autostart --import 2>/dev/null ||
+    GNUPGHOME="$d/gnupg" gpg --batch --no-autostart --list-keys golden@example.com >/dev/null 2>&1
 fi
