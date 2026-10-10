@@ -1,6 +1,6 @@
 module github.com/giraffesyo/understudy
 
-go 1.26.9
+go 1.27.2
 
 require (
 	golang.org/x/crypto v0.56.0
