@@ -21,7 +21,7 @@ env:
   CGO_ENABLED: "0"
   # CI-only tools, run with `go run <module>@<version>` so go.mod stays
   # free of them (dependabot does not bump these; do it by hand).
-  STATICCHECK: honnef.co/go/tools/cmd/staticcheck@v0.8.1 # 2026.2.1
+  STATICCHECK: honnef.co/go/tools/cmd/staticcheck@v0.7.0-0.dev.0.20261009230814-452d5bb86b45 # master: 2026.2.1 cannot read Go 1.27.2 export data
   GOVULNCHECK: golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
 jobs:
