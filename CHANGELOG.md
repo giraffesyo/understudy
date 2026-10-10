@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/giraffesyo/understudy/compare/v0.2.1...v0.2.2) (2026-10-10)
+
+
+### Bug Fixes
+
+* **deps:** build with Go 1.27.2 for the standard library security fixes ([#11](https://github.com/giraffesyo/understudy/issues/11)) ([7264ca5](https://github.com/giraffesyo/understudy/commit/7264ca54888222adf8f968f645b1ec84e4f348f4))
+
 ## [0.2.1](https://github.com/giraffesyo/understudy/compare/v0.2.0...v0.2.1) (2026-10-05)
 
 
