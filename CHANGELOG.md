@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.3](https://github.com/giraffesyo/understudy/compare/v0.2.2...v0.2.3) (2026-10-13)
+
+
+### Bug Fixes
+
+* **connection:** become to another user fails on hosts that mount the temp dirs noexec ([#14](https://github.com/giraffesyo/understudy/issues/14)) ([75d73b8](https://github.com/giraffesyo/understudy/commit/75d73b89397c1362e84f116c3a54e8bd0206aafd))
+* under the free strategy, a host could show a result after another host's add_host ended the run ([#15](https://github.com/giraffesyo/understudy/issues/15)) ([e44dcec](https://github.com/giraffesyo/understudy/commit/e44dcec18700446804fa446a963b1e6ff53a2d00))
+
 ## [0.2.2](https://github.com/giraffesyo/understudy/compare/v0.2.1...v0.2.2) (2026-10-13)
 
 
