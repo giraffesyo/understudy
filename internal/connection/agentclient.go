@@ -3,10 +3,13 @@ package connection
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -26,10 +29,21 @@ type AgentClient struct {
 	// Login is the login user (from the bootstrap probe), nil when
 	// unknown.
 	Login *LoginInfo
+	// AgentFile gives a become user its own copy of the agent when the
+	// system temp dirs do not allow execution (nil: none).
+	AgentFile AgentFile
 
 	tmpMu   sync.Mutex
 	tmpMade map[string]bool // remote_tmp values made (as _make_tmp_path does)
+
+	execMu       sync.Mutex
+	tmpRuns      map[string]bool   // per system temp dir: whether an agent staged there executes
+	becomeAgents map[string]string // per become user: the agent it runs when they do not
 }
+
+// AgentFile names a copy of the agent (checksum-named, so a new build
+// is a new file) and opens its content.
+type AgentFile func() (name string, content io.ReadCloser, err error)
 
 // stagingModules are the modules whose payload is a file the action
 // transfers next to the module (copy and template).
@@ -60,12 +74,22 @@ func (c *AgentClient) Run(ctx context.Context, req *agentproto.TaskRequest, payl
 		// A pipelined module needs no files made readable to the become
 		// user, but the agent must still run as it: from a copy no other
 		// file of the task's is next to (the frame comes on stdin).
-		dir, err := c.publicAgent(ctx)
-		if err != nil {
-			return nil, err
+		base := systemTmpBase(become.Shell)
+		staged := ""
+		if runs, known := c.stagedRuns(base); !known || runs {
+			dir, err := c.publicAgent(ctx, base)
+			if err != nil {
+				return nil, err
+			}
+			defer c.Conn.Exec(context.WithoutCancel(ctx), "rm -f -r "+ShellQuote(dir)+" > /dev/null 2>&1", ExecOptions{})
+			staged = dir + "/agent"
+			agentPath = ShellQuote(staged)
 		}
-		defer c.Conn.Exec(context.WithoutCancel(ctx), "rm -f -r "+ShellQuote(dir)+" > /dev/null 2>&1", ExecOptions{})
-		agentPath = ShellQuote(dir + "/agent")
+		if path, err := c.unstagedAgent(ctx, become, base, staged); err != nil {
+			return nil, err
+		} else if path != "" {
+			agentPath = ShellQuote(path)
+		}
 	} else if becomeUnprivileged(become) && !req.Pipelined {
 		// An unprivileged become user cannot reach the login user's
 		// files: like a module's AnsiballZ payload, the agent runs from a
@@ -77,9 +101,15 @@ func (c *AgentClient) Run(ctx context.Context, req *agentproto.TaskRequest, payl
 			return nil, err
 		}
 		defer c.Conn.Exec(context.WithoutCancel(ctx), "rm -f -r "+ShellQuote(dir)+" > /dev/null 2>&1", ExecOptions{})
+		base := filepath.Dir(dir)
 		mod := dir + "/AnsiballZ_" + moduleShortName(req.Module) + ".py"
-		prep := "cp " + ShellQuote(c.AgentPath) + " " + ShellQuote(mod)
-		paths := []string{dir + "/", mod}
+		var steps []string
+		paths := []string{dir + "/"}
+		runs, known := c.stagedRuns(base)
+		if !known || runs {
+			steps = append(steps, "cp "+ShellQuote(c.AgentPath)+" "+ShellQuote(mod))
+			paths = append(paths, mod)
+		}
 		var stage io.Reader
 		if payload != nil && req.PayloadLen > 0 && stagingModules[moduleShortName(req.Module)] {
 			data, err := io.ReadAll(io.LimitReader(payload, req.PayloadLen))
@@ -88,11 +118,11 @@ func (c *AgentClient) Run(ctx context.Context, req *agentproto.TaskRequest, payl
 			}
 			payload = bytes.NewReader(data)
 			staged := dir + "/" + agentproto.StagedPayload
-			prep += " && ( umask 77 && cat > " + ShellQuote(staged) + " )"
+			steps = append(steps, "( umask 77 && cat > "+ShellQuote(staged)+" )")
 			paths = append(paths, staged)
 			stage = bytes.NewReader(data)
 		}
-		if err := fixupPerms(ctx, c.Conn, prep, stage, paths, become); err != nil {
+		if err := fixupPerms(ctx, c.Conn, strings.Join(steps, " && "), stage, paths, become); err != nil {
 			return nil, err
 		}
 		req.StageDir = dir
@@ -101,6 +131,11 @@ func (c *AgentClient) Run(ctx context.Context, req *agentproto.TaskRequest, payl
 			req.ModuleRemoteTmp = "~/.ansible/tmp"
 		}
 		agentPath = ShellQuote(mod)
+		if path, err := c.unstagedAgent(ctx, become, base, mod); err != nil {
+			return nil, err
+		} else if path != "" {
+			agentPath = ShellQuote(path)
+		}
 	}
 	if c.AgentArg != "" {
 		agentPath += " " + c.AgentArg
@@ -159,10 +194,10 @@ func (c *AgentClient) agentReadableBy(b *BecomeSpec) bool {
 	return c.Login != nil && user == c.Login.User
 }
 
-// publicAgent copies the agent to a new directory any user can read
-// (the agent is no secret: the task comes on its stdin).
-func (c *AgentClient) publicAgent(ctx context.Context) (string, error) {
-	cmd := `d=$(mktemp -d "${TMPDIR:-/tmp}/understudy-XXXXXX") && chmod 755 "$d" && cp ` + ShellQuote(c.AgentPath) +
+// publicAgent copies the agent to a new directory under base any user
+// can read (the agent is no secret: the task comes on its stdin).
+func (c *AgentClient) publicAgent(ctx context.Context, base string) (string, error) {
+	cmd := `d=$(mktemp -d ` + ShellQuote(base+"/understudy-XXXXXX") + `) && chmod 755 "$d" && cp ` + ShellQuote(c.AgentPath) +
 		` "$d/agent" && chmod 755 "$d/agent" && echo "$d"`
 	res, err := c.Conn.Exec(ctx, cmd, ExecOptions{})
 	if err != nil {
@@ -173,6 +208,121 @@ func (c *AgentClient) publicAgent(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("could not stage the agent for the become user: %s", strings.TrimSpace(string(res.Stderr)))
 	}
 	return dir, nil
+}
+
+// stagedRuns reports whether an agent staged under the system temp dir
+// base executes, and whether that is known yet.
+func (c *AgentClient) stagedRuns(base string) (runs, known bool) {
+	c.execMu.Lock()
+	defer c.execMu.Unlock()
+	runs, known = c.tmpRuns[base]
+	return runs, known
+}
+
+// unstagedAgent checks, once per system temp dir, that the agent staged
+// at path executes: hardened hosts mount /tmp and /var/tmp noexec, which
+// test -x reports. When it does not, it returns the agent the become
+// user runs instead ("" when the staged one runs).
+func (c *AgentClient) unstagedAgent(ctx context.Context, b *BecomeSpec, base, path string) (string, error) {
+	runs, known := c.stagedRuns(base)
+	if !known {
+		res, err := c.Conn.Exec(ctx, "test -x "+ShellQuote(path), ExecOptions{})
+		if err != nil {
+			return "", err
+		}
+		runs = res.RC == 0
+		c.execMu.Lock()
+		if c.tmpRuns == nil {
+			c.tmpRuns = map[string]bool{}
+		}
+		c.tmpRuns[base] = runs
+		c.execMu.Unlock()
+	}
+	if runs {
+		return "", nil
+	}
+	return c.becomeAgent(ctx, b, base)
+}
+
+// becomeAgent is the agent the become user runs when the system temp
+// dir base does not allow execution: the cached agent where it is, when
+// the become user can run it, else a copy in the become user's home.
+func (c *AgentClient) becomeAgent(ctx context.Context, b *BecomeSpec, base string) (string, error) {
+	user := b.user()
+	c.execMu.Lock()
+	defer c.execMu.Unlock()
+	if path, ok := c.becomeAgents[user]; ok {
+		return path, nil
+	}
+	path, err := c.installBecomeAgent(ctx, b)
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return "", fmt.Errorf("the agent cannot run as %s: %s does not allow execution (mounted noexec?), %s cannot run %s, "+
+			"and %s's home does not allow execution either; set system_tmpdirs to a directory that does", user, base, user, c.AgentPath, user)
+	}
+	if c.becomeAgents == nil {
+		c.becomeAgents = map[string]string{}
+	}
+	c.becomeAgents[user] = path
+	return path, nil
+}
+
+// installBecomeAgent finds or places an agent the become user can run,
+// "" when there is none.
+func (c *AgentClient) installBecomeAgent(ctx context.Context, b *BecomeSpec) (string, error) {
+	res, err := c.Conn.Exec(ctx, "test -x "+ShellQuote(c.AgentPath), ExecOptions{Become: b})
+	if err != nil {
+		return "", err
+	}
+	if res.RC == 0 {
+		return c.AgentPath, nil
+	}
+	if c.AgentFile == nil {
+		return "", nil
+	}
+	name, content, err := c.AgentFile()
+	if err != nil {
+		return "", err
+	}
+	defer content.Close()
+	file := `f="$HOME/.understudy/"` + ShellQuote(name)
+	res, err = c.Conn.Exec(ctx, file+` && test -x "$f" && printf '%s\n' "$f"`, ExecOptions{Become: b})
+	if err != nil {
+		return "", err
+	}
+	if res.RC != 0 {
+		res, err = c.Conn.Exec(ctx, file+` && umask 077 && mkdir -p "$HOME/.understudy" && cat > "$f.upload" && chmod 700 "$f.upload" && `+
+			`mv -f "$f.upload" "$f" && test -x "$f" && printf '%s\n' "$f"`, ExecOptions{Stdin: content, Become: b})
+		if err != nil {
+			return "", err
+		}
+	}
+	if res.RC != 0 {
+		return "", nil
+	}
+	return strings.TrimSpace(string(res.Stdout)), nil
+}
+
+// FileAgent is the AgentFile of the agent binary at path on this machine.
+func FileAgent(path string) AgentFile {
+	return func() (string, io.ReadCloser, error) {
+		f, err := os.Open(path)
+		if err != nil {
+			return "", nil, err
+		}
+		h := sha256.New()
+		if _, err := io.Copy(h, f); err != nil {
+			f.Close()
+			return "", nil, err
+		}
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			f.Close()
+			return "", nil, err
+		}
+		return "agent-" + hex.EncodeToString(h.Sum(nil))[:12], f, nil
+	}
 }
 
 // unreadableAsAdmin is a become user listed in admin_users that is
