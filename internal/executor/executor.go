@@ -948,7 +948,7 @@ func (r *Runner) runTaskAcrossHosts(ctx context.Context, play *playbook.Play, ta
 		g.Go(func() error {
 			if r.freeSem != nil {
 				r.freeSem.acquire(host)
-				defer r.freeSem.release()
+				defer r.freeSem.release(host)
 			}
 			r.mu.Lock()
 			stopped := r.fatalErr != nil
@@ -3160,6 +3160,7 @@ func (r *Runner) runSection(ctx context.Context, play *playbook.Play, tasks []*p
 	g, gctx := errgroup.WithContext(ctx)
 	for _, host := range r.activeOf(playHosts) {
 		g.Go(func() error {
+			defer r.freeSem.walk(host)()
 			return r.runTaskList(gctx, play, tasks, playHosts, []string{host}, 0)
 		})
 	}
@@ -3244,17 +3245,22 @@ func (f *freeCallback) Included(task *playbook.Task, target string, hosts []stri
 // turnstile hands out forks slots to hosts in queue order. Hosts start
 // queued in inventory order and rejoin at the tail each time they want
 // their next task, so with forks=1 hosts take turns task by task exactly
-// like Ansible's free strategy.
+// like Ansible's free strategy. A host walking its own task list keeps
+// its slot until it asks for the next one or ends its walk: Ansible
+// decides a host's next task (and ends the run on one that bypasses the
+// host loop) before it shows the result of the next host's turn.
 type turnstile struct {
-	mu     sync.Mutex
-	cond   *sync.Cond
-	free   int
-	queue  []string
-	queued map[string]bool
+	mu      sync.Mutex
+	cond    *sync.Cond
+	free    int
+	queue   []string
+	queued  map[string]bool
+	walking map[string]bool
+	held    map[string]bool
 }
 
 func newTurnstile(slots int, hosts []string) *turnstile {
-	t := &turnstile{free: slots, queued: map[string]bool{}}
+	t := &turnstile{free: slots, queued: map[string]bool{}, walking: map[string]bool{}, held: map[string]bool{}}
 	t.cond = sync.NewCond(&t.mu)
 	for _, h := range hosts {
 		t.queue = append(t.queue, h)
@@ -3266,6 +3272,7 @@ func newTurnstile(slots int, hosts []string) *turnstile {
 func (t *turnstile) acquire(host string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.letGo(host)
 	if !t.queued[host] {
 		t.queue = append(t.queue, host)
 		t.queued[host] = true
@@ -3279,11 +3286,38 @@ func (t *turnstile) acquire(host string) {
 	t.cond.Broadcast()
 }
 
-func (t *turnstile) release() {
+func (t *turnstile) release(host string) {
 	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.walking[host] {
+		t.held[host] = true
+		return
+	}
 	t.free++
-	t.mu.Unlock()
 	t.cond.Broadcast()
+}
+
+// walk marks host as walking its own task list until the returned func
+// ends the walk.
+func (t *turnstile) walk(host string) func() {
+	t.mu.Lock()
+	t.walking[host] = true
+	t.mu.Unlock()
+	return func() {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		t.walking[host] = false
+		t.letGo(host)
+	}
+}
+
+// letGo frees the slot host held after its last task.
+func (t *turnstile) letGo(host string) {
+	if t.held[host] {
+		t.held[host] = false
+		t.free++
+		t.cond.Broadcast()
+	}
 }
 
 // argPos is where a module argument was written: its own value in the
