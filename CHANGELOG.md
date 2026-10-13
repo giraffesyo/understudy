@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2](https://github.com/giraffesyo/understudy/compare/v0.2.1...v0.2.2) (2026-10-13)
+
+
+### Bug Fixes
+
+* **deps:** build with Go 1.27.2 for the standard library security fixes ([#11](https://github.com/giraffesyo/understudy/issues/11)) ([7264ca5](https://github.com/giraffesyo/understudy/commit/7264ca54888222adf8f968f645b1ec84e4f348f4))
+* **modules:** script fails on hosts that mount /tmp noexec ([#13](https://github.com/giraffesyo/understudy/issues/13)) ([43999d9](https://github.com/giraffesyo/understudy/commit/43999d9bc93fd068f461e7b52477f584f3c70b61))
+
 ## [0.2.1](https://github.com/giraffesyo/understudy/compare/v0.2.0...v0.2.1) (2026-10-05)
 
 
