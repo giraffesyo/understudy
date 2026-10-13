@@ -2902,13 +2902,10 @@ func (r *Runner) runModule(ctx context.Context, host, target string, kw connecti
 		if !modules.LocalAgent {
 			return nil, fmt.Errorf("become on a local connection needs a binary that serves the understudy agent")
 		}
-		exe, err := os.Executable()
+		client, err := localAgentClient()
 		if err != nil {
 			return nil, err
 		}
-		login := &connection.LoginInfo{Path: os.Getenv("PATH"), UID: os.Getuid(), GID: os.Getgid()}
-		login.Home, _ = os.UserHomeDir()
-		client := &connection.AgentClient{Conn: connection.NewLocal(), AgentPath: exe, AgentArg: modules.LocalAgentArg, Login: login}
 		res, err := client.Run(ctx, req, payload, become)
 		if bf := actions.BecomeFailure(err); bf != nil {
 			return bf, nil
@@ -2935,6 +2932,19 @@ func (r *Runner) runModule(ctx context.Context, host, target string, kw connecti
 // moduleOrigin classifies a module result for the callback: a module that
 // crashed (an unhandled exception in Ansible) carries ansible-core's full
 // "Task failed: Module failed: ..." message, shown verbatim.
+// localAgentClient serves local become from this binary, one per process
+// so what it learns about the host's temp dirs lasts the run.
+var localAgentClient = sync.OnceValues(func() (*connection.AgentClient, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	login := &connection.LoginInfo{Path: os.Getenv("PATH"), UID: os.Getuid(), GID: os.Getgid()}
+	login.Home, _ = os.UserHomeDir()
+	return &connection.AgentClient{Conn: connection.NewLocal(), AgentPath: exe, AgentArg: modules.LocalAgentArg, Login: login,
+		AgentFile: connection.FileAgent(exe)}, nil
+})
+
 func moduleOrigin(res *agentproto.Result) string {
 	if res.Origin != "" {
 		return res.Origin

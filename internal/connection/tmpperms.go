@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -59,18 +60,7 @@ const privilegeLink = "https://docs.ansible.com/ansible-core/2.21/playbook_guide
 // system_tmpdirs, else the first of them), made by the login user with
 // the shell plugin's mkdtemp command.
 func systemTmp(ctx context.Context, conn Connection, sh *ShellOptions) (string, error) {
-	dirs := sh.SystemTmpdirs
-	if dirs == nil {
-		dirs = DefaultSystemTmpdirs
-	}
-	base := dirs[0]
-	if rt := strings.TrimRight(sh.RemoteTmp, "/"); rt != "" {
-		for _, d := range dirs {
-			if d == rt {
-				base = rt
-			}
-		}
-	}
+	base := systemTmpBase(sh)
 	name := fmt.Sprintf("ansible-tmp-%s-%d-%d", pyTime(time.Now()), os.Getpid(), rand.Int63n(1<<48))
 	full := base + "/" + name
 	cmd := fmt.Sprintf("( umask 77 && mkdir -p \"` echo %s `\"&& mkdir \"` echo %s `\" && echo %s=\"` echo %s `\" )",
@@ -97,6 +87,23 @@ func systemTmp(ctx context.Context, conn Connection, sh *ShellOptions) (string, 
 		return "", &BecomeError{Msg: msg, Unreachable: true}
 	}
 	return full, nil
+}
+
+// systemTmpBase is the system temp dir a become user's files go under:
+// remote_tmp when it is one of system_tmpdirs, else the first of them.
+func systemTmpBase(sh *ShellOptions) string {
+	dirs := DefaultSystemTmpdirs
+	rt := ""
+	if sh != nil {
+		if sh.SystemTmpdirs != nil {
+			dirs = sh.SystemTmpdirs
+		}
+		rt = strings.TrimRight(sh.RemoteTmp, "/")
+	}
+	if rt != "" && slices.Contains(dirs, rt) {
+		return rt
+	}
+	return dirs[0]
 }
 
 // pyTime is repr(time.time()).

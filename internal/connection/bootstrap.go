@@ -3,6 +3,7 @@ package connection
 import (
 	"context"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -18,24 +19,25 @@ type LoginInfo struct {
 }
 
 // Bootstrap detects the target platform and ensures the agent binary is
-// present, returning its remote path and the login user. Checksum-named
+// present, returning its remote path, the login user and the agent's
+// content. Checksum-named
 // paths make version handshakes unnecessary: a new build is a new
 // filename.
-func Bootstrap(ctx context.Context, conn Connection, remoteTmp string) (string, LoginInfo, error) {
+func Bootstrap(ctx context.Context, conn Connection, remoteTmp string) (string, LoginInfo, AgentFile, error) {
 	login := LoginInfo{UID: -1, GID: -1}
 	// One probe resolves platform and the concrete home/user (candidate
 	// paths must be literal so quoting is consistent everywhere).
 	res, err := conn.Exec(ctx, `uname -sm && echo "$HOME" && echo "$USER" && echo "$PATH" && id -u && id -g`, ExecOptions{})
 	if err != nil {
-		return "", login, err
+		return "", login, nil, err
 	}
 	lines := strings.Split(strings.TrimSpace(string(res.Stdout)), "\n")
 	if len(lines) < 3 {
-		return "", login, fmt.Errorf("unexpected platform-probe output %q", string(res.Stdout))
+		return "", login, nil, fmt.Errorf("unexpected platform-probe output %q", string(res.Stdout))
 	}
 	goos, goarch, err := parseUname(strings.TrimSpace(lines[0]))
 	if err != nil {
-		return "", login, err
+		return "", login, nil, err
 	}
 	home := strings.TrimSpace(lines[1])
 	user := strings.TrimSpace(lines[2])
@@ -51,10 +53,14 @@ func Bootstrap(ctx context.Context, conn Connection, remoteTmp string) (string, 
 	}
 	ag, err := embedded.Agent(goos, goarch)
 	if err != nil {
-		return "", login, err
+		return "", login, nil, err
 	}
 
 	name := fmt.Sprintf("agent-%s-%s-%s", ag.Sha12, goos, goarch)
+	file := func() (string, io.ReadCloser, error) {
+		r, err := embedded.GunzipReader(ag.GzData)
+		return name, r, err
+	}
 	var candidates []string
 	if remoteTmp != "" {
 		candidates = append(candidates, remoteTmp)
@@ -75,10 +81,10 @@ func Bootstrap(ctx context.Context, conn Connection, remoteTmp string) (string, 
 		// integrity (verified at upload time).
 		probe, err := conn.Exec(ctx, fmt.Sprintf(`test -x %s && %s version`, q, q), ExecOptions{})
 		if err != nil {
-			return "", login, err
+			return "", login, nil, err
 		}
 		if probe.RC == 0 && strings.Contains(string(probe.Stdout), "understudy-agent") {
-			return path, login, nil
+			return path, login, file, nil
 		}
 
 		if err := uploadAgent(ctx, conn, ag, dir, path); err != nil {
@@ -89,15 +95,15 @@ func Bootstrap(ctx context.Context, conn Connection, remoteTmp string) (string, 
 		// writes happily).
 		probe, err = conn.Exec(ctx, q+" version", ExecOptions{})
 		if err != nil {
-			return "", login, err
+			return "", login, nil, err
 		}
 		if probe.RC == 0 && strings.Contains(string(probe.Stdout), "understudy-agent") {
-			return path, login, nil
+			return path, login, file, nil
 		}
 		lastErr = fmt.Errorf("agent at %s does not execute (noexec mount?): rc=%d %s",
 			path, probe.RC, strings.TrimSpace(string(probe.Stderr)))
 	}
-	return "", login, fmt.Errorf("could not install the agent on the target: %v", lastErr)
+	return "", login, nil, fmt.Errorf("could not install the agent on the target: %v", lastErr)
 }
 
 func uploadAgent(ctx context.Context, conn Connection, ag *embedded.AgentBinary, dir, path string) error {

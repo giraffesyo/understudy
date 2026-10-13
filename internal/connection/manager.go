@@ -119,12 +119,12 @@ func (m *Manager) AgentWith(ctx context.Context, host string, kw Keywords) (*Age
 		if m.Opts.Pipelining {
 			cacheIn = ""
 		}
-		path, login, err := Bootstrap(ctx, conn, cacheIn)
+		path, login, file, err := Bootstrap(ctx, conn, cacheIn)
 		if err != nil {
 			hc.agentErr = fmt.Errorf("agent bootstrap on %s: %w", host, err)
 			return
 		}
-		hc.agent = &AgentClient{Conn: conn, AgentPath: path, Login: &login}
+		hc.agent = &AgentClient{Conn: conn, AgentPath: path, Login: &login, AgentFile: file}
 	})
 	return hc.agent, hc.agentErr
 }
