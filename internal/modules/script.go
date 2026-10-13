@@ -37,7 +37,18 @@ func scriptModule(env *RunEnv, rawArgs map[string]any) *agentproto.Result {
 		}
 	}
 
-	tmp, err := os.CreateTemp("", "understudy-script-*")
+	// Staged in remote_tmp like Ansible's script action: hardened hosts
+	// mount /tmp noexec.
+	dir := env.moduleTmpdir()
+	if dir == "" {
+		_, made, err := transferDir(env, "~/.ansible/tmp")
+		if err != nil {
+			return agentproto.Fail("script: %v", err)
+		}
+		defer os.RemoveAll(made)
+		dir = made
+	}
+	tmp, err := os.CreateTemp(dir, "understudy-script-*")
 	if err != nil {
 		return agentproto.Fail("script: %v", err)
 	}
