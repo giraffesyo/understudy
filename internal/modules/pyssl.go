@@ -39,6 +39,7 @@ var pySSLLines = map[string][3]int{
 	"rpm:3.9.18-1.el9_3":     {1129, 4044, 4293}, // Rocky Linux 9.3
 	"rpm:3.9.25-7.el9_8":     {1147, 4062, 4311}, // Rocky Linux 9.6
 	"rpm:3.9.25-7.el9_8.3":   {1147, 4062, 4313}, // Rocky Linux 9.6
+	"rpm:3.9.25-7.el9_8.6":   {1147, 4065, 4316}, // Rocky Linux 9.8
 }
 
 // sslSuffix is " (_ssl.c:N)" for the target's Python build, or "".
