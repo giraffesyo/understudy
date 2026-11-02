@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.4](https://github.com/giraffesyo/understudy/compare/v0.2.3...v0.2.4) (2026-11-02)
+
+
+### Bug Fixes
+
+* **deps:** build with Go 1.27.3, which distrusts eMudhra's compromised intermediate CAs ([#20](https://github.com/giraffesyo/understudy/issues/20)) ([f809e55](https://github.com/giraffesyo/understudy/commit/f809e559e8788fa2ecac787c2ac21a57679c5ade))
+* **deps:** update all dependencies ([#25](https://github.com/giraffesyo/understudy/issues/25)) ([6279c21](https://github.com/giraffesyo/understudy/commit/6279c21349705e96fd0075c1a2b7758e068180a0))
+
 ## [0.2.3](https://github.com/giraffesyo/understudy/compare/v0.2.2...v0.2.3) (2026-10-13)
 
 
