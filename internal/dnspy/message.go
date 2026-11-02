@@ -160,13 +160,20 @@ func (p *parser) rest() []byte {
 	return b
 }
 
-// name is dns.name.from_wire_parser.
-func (p *parser) name() (Name, error) {
+// maxPointerChain is dns.name.MAX_COMPRESSION_POINTER_CHAIN.
+const maxPointerChain = 16
+
+// name is dns.name.from_wire_parser(parser, decompress): a pointer is
+// DecompressionForbidden unless decompress, at most 16 are followed, and
+// each jump restricts reading to before the segment it left (so a target
+// cannot overlap the name).
+func (p *parser) name(decompress bool) (Name, error) {
 	var labels [][]byte
 	biggest := p.cur
-	cur, furthest := p.cur, -1
+	cur, end, start, furthest := p.cur, p.end, p.cur, -1
+	hops := 0
 	for {
-		if cur >= len(p.wire) || (furthest < 0 && cur >= p.end) {
+		if cur >= end {
 			return Name{}, errFormError
 		}
 		count := int(p.wire[cur])
@@ -176,13 +183,16 @@ func (p *parser) name() (Name, error) {
 		}
 		switch {
 		case count < 64:
-			if cur+count > len(p.wire) || (furthest < 0 && cur+count > p.end) {
+			if cur+count > end {
 				return Name{}, errFormError
 			}
 			labels = append(labels, append([]byte{}, p.wire[cur:cur+count]...))
 			cur += count
 		case count >= 192:
-			if cur >= len(p.wire) || (furthest < 0 && cur >= p.end) {
+			if !decompress {
+				return Name{}, errDecompressionForbidden
+			}
+			if cur >= end {
 				return Name{}, errFormError
 			}
 			ptr := (count&0x3F)*256 + int(p.wire[cur])
@@ -191,10 +201,14 @@ func (p *parser) name() (Name, error) {
 				return Name{}, errBadPointer
 			}
 			biggest = ptr
+			hops++
+			if hops > maxPointerChain {
+				return Name{}, errPointerChainTooLong
+			}
 			if furthest < 0 {
 				furthest = cur
 			}
-			cur = ptr
+			end, cur, start = start, ptr, ptr
 		default:
 			return Name{}, errBadLabelType
 		}
@@ -237,7 +251,7 @@ func parseMessage(wire []byte) (*message, error) {
 
 func (m *message) read(p *parser, counts [4]int) error {
 	for i := 0; i < counts[0]; i++ {
-		n, err := p.name()
+		n, err := p.name(true)
 		if err != nil {
 			return err
 		}
@@ -263,7 +277,7 @@ func (m *message) read(p *parser, counts [4]int) error {
 	optSeen := false
 	for section := 1; section <= 3; section++ {
 		for i := 0; i < counts[section]; i++ {
-			owner, err := p.name()
+			owner, err := p.name(true)
 			if err != nil {
 				return err
 			}
@@ -280,14 +294,26 @@ func (m *message) read(p *parser, counts [4]int) error {
 			}
 			if typ == TypeOPT {
 				if section != 3 || optSeen || !owner.Equal(Root) {
-					return &Error{Class: "BadEDNS", Msg: "An OPT record occurs somewhere other than the additional data section.", Form: true}
+					return &Error{Class: "BadEDNS", Msg: "An OPT record occurred somewhere other than\nthe additional data section.", Form: true}
 				}
 				optSeen = true
 				m.ednsFlags = ttl
+				sub := &parser{wire: p.wire, cur: p.cur, end: p.cur + rdlen}
+				if err := parseOptions(sub); err != nil {
+					return err
+				}
 				p.cur += rdlen
 				continue
 			}
-			if typ == 250 { // TSIG: no keyring to check it with
+			if typ == TypeTSIG {
+				if section != 3 || class != TypeANY || i != counts[section]-1 {
+					return &Error{Class: "BadTSIG", Msg: "A TSIG record occurred somewhere other than the end of\nthe additional data section or the class is not ANY.", Form: true}
+				}
+				sub := &parser{wire: p.wire, cur: p.cur, end: p.cur + rdlen}
+				if err := parseTSIG(sub); err != nil {
+					return err
+				}
+				// No keyring to check it with.
 				return &Error{Class: "UnknownTSIGKey", Msg: "got signed message without keyring"}
 			}
 			sub := &parser{wire: p.wire, cur: p.cur, end: p.cur + rdlen}

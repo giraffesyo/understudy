@@ -1,4 +1,4 @@
-// Package dnspy is a port of the parts of dnspython (2.8) the dig lookup
+// Package dnspy is a port of the parts of dnspython (2.9) the dig lookup
 // stands on: domain names, the stub resolver (resolv.conf, search list,
 // retries, UDP with TCP fallback, its errors) and the presentation (and
 // attribute) form of the record types dnspython knows.
@@ -108,6 +108,9 @@ var (
 	errNameTooLong  = &Error{Class: "NameTooLong", Msg: "A DNS name is > 255 octets long.", Form: true}
 	errBadPointer   = &Error{Class: "BadPointer", Msg: "A DNS compression pointer points forward instead of backward.", Form: true}
 	errBadLabelType = &Error{Class: "BadLabelType", Msg: "The label type in DNS name wire format is unknown.", Form: true}
+
+	errPointerChainTooLong    = &Error{Class: "PointerChainTooLong", Msg: "A DNS compression pointer chain was too long.", Form: true}
+	errDecompressionForbidden = &Error{Class: "DecompressionForbidden", Msg: "A name has a compression pointer but decompression is forbidden.", Form: true}
 )
 
 // ParseName is dns.name.from_text(text, origin): a name without a final
@@ -149,7 +152,7 @@ func ParseName(text string, origin *Name) (Name, error) {
 					if edigits == 3 {
 						escaping = false
 						if total > 255 {
-							return Name{}, &Error{Class: "error", Msg: "ubyte format requires 0 <= number <= 255", Python: true}
+							return Name{}, errBadEscape
 						}
 						label = append(label, byte(total))
 					}
@@ -231,6 +234,9 @@ func parseUnicodeName(text string, origin *Name) (Name, error) {
 				total = total*10 + int(c-'0')
 				edigits++
 				if edigits == 3 {
+					if total > 255 {
+						return Name{}, errBadEscape
+					}
 					escaping = false
 					label = append(label, rune(total))
 				}

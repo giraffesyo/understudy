@@ -30,6 +30,7 @@ const (
 	TypeNSEC3PARAM = 51
 	TypeTLSA       = 52
 	TypeSPF        = 99
+	TypeTSIG       = 250
 	TypeANY        = 255
 	TypeCAA        = 257
 
@@ -53,8 +54,8 @@ var typeNames = []struct {
 	{"NSEC", 47}, {"DNSKEY", 48}, {"DHCID", 49}, {"NSEC3", 50}, {"NSEC3PARAM", 51},
 	{"TLSA", 52}, {"SMIMEA", 53}, {"HIP", 55}, {"NINFO", 56}, {"CDS", 59}, {"CDNSKEY", 60},
 	{"OPENPGPKEY", 61}, {"CSYNC", 62}, {"ZONEMD", 63}, {"SVCB", 64}, {"HTTPS", 65},
-	{"DSYNC", 66}, {"SPF", 99}, {"UNSPEC", 103}, {"NID", 104}, {"L32", 105}, {"L64", 106},
-	{"LP", 107}, {"EUI48", 108}, {"EUI64", 109}, {"TKEY", 249}, {"TSIG", 250},
+	{"DSYNC", 66}, {"HHIT", 67}, {"BRID", 68}, {"SPF", 99}, {"UNSPEC", 103}, {"NID", 104}, {"L32", 105}, {"L64", 106},
+	{"LP", 107}, {"EUI48", 108}, {"EUI64", 109}, {"NXNAME", 128}, {"TKEY", 249}, {"TSIG", 250},
 	{"IXFR", 251}, {"AXFR", 252}, {"MAILB", 253}, {"MAILA", 254}, {"ANY", 255},
 	{"URI", 256}, {"CAA", 257}, {"AVC", 258}, {"AMTRELAY", 260}, {"RESINFO", 261},
 	{"WALLET", 262}, {"TA", 32768}, {"DLV", 32769},
