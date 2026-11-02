@@ -358,10 +358,7 @@ func lookupDig(_ *Runner, _ *template.EvalCtx, terms []any, kw map[string]any) (
 			continue
 		}
 		for _, rd := range answer.RRset.Rdatas {
-			s, err := rd.Text()
-			if err != nil {
-				return nil, digErr("%s", err)
-			}
+			s := rd.Text()
 			if strings.ToUpper(qtype) == "TXT" && len(s) >= 2 {
 				s = s[1 : len(s)-1]
 			} else if strings.ToUpper(qtype) == "TXT" {

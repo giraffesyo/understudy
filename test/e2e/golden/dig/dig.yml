@@ -47,6 +47,17 @@
         - a.test./NSEC3
         - a.test./SVCB
         - a.test./HTTPS
+        - a.test./HHIT
+        - a.test./BRID
+        - a.test./KEY
+        - a.test./SIG
+        - a.test./HIP
+        - a.test./APL
+        - svc.test./SVCB
+        - long.test./TYPE65282
+        - bin.test./URI
+        - ede.test.
+        - bad.test./SSHFP
         - _sip._tcp.test./SRV
         - _443._tcp.a.test./TLSA
         - naptr.test./NAPTR
@@ -196,6 +207,30 @@
         - a.test./ALL
         - nope
         - a..test
+        - a.test./NXNAME
+        - a\256.test.
+        - a.test./SIG
+      ignore_errors: true
+    - name: malformed responses (over TCP, failing with the parse error)
+      debug:
+        msg: "{{ query('community.general.dig', item, s, port=p, tcp=True, fail_on_error=True) }}"
+      loop:
+        - bad.test./TLSA
+        - bad.test./SMIMEA
+        - bad.test./SSHFP
+        - bad.test./HTTPS
+        - bad.test./SVCB
+        - bad.test./ZONEMD
+        - bad.test./NSEC
+        - bad.test./NSEC3
+        - bad.test./LOC
+        - bad.test./APL
+        - bad.test./KX
+        - bad.test./DNAME
+        - bad.test./RRSIG
+        - ecs.test.
+        - filter.test.
+        - ede.test.
       ignore_errors: true
     - name: yxdomain fails without fail_on_error
       debug:

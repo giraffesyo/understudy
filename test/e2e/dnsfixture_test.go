@@ -25,6 +25,9 @@ import (
 //	flaky.test.            SERVFAIL, then an answer, alternately
 //	tc.test.               truncated over UDP, answered over TCP
 //	loop1.test.            a CNAME loop with loop2.test.
+//	bad.test.              records dnspython rejects (malformed rdata)
+//	ecs.test., filter.test. answered with a malformed EDNS option
+//	ede.test.              answered with well-formed EDNS options
 type dnsFixture struct {
 	udp   net.PacketConn
 	tcp   net.Listener
@@ -120,6 +123,12 @@ const (
 	tURI        = 256
 	tCAA        = 257
 	tOPT        = 41
+	tSIG        = 24
+	tKEY        = 25
+	tAPL        = 42
+	tHIP        = 55
+	tHHIT       = 67
+	tBRID       = 68
 	classIN     = 1
 	classCH     = 3
 )
@@ -170,17 +179,48 @@ var dnsFixtureZone = []dnsRR{
 	{"a.test.", tOPENPGPKEY, classIN, 300, []dnsPiece{b64Bytes("mQINBFit2jsBEADrbl5vjVxYeAE0g0IDYCBpHirv1Sjlqxx5gjtPhb2YhvyDMXjq")}},
 	{"a.test.", tDHCID, classIN, 300, []dnsPiece{b64Bytes("AAIBY2/AuCccgoJbsaxcQc9TUapptP69lOjxfNuVAA2kjEA=")}},
 	{"a.test.", tCERT, classIN, 300, []dnsPiece{dnsU16(1), dnsU16(12345), dnsU8(8), b64Bytes("MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA")}},
-	{"a.test.", tSMIMEA, classIN, 300, []dnsPiece{dnsU8(3), dnsU8(0), dnsU8(1), hexBytes("abcdef0123")}},
+	{"a.test.", tSMIMEA, classIN, 300, []dnsPiece{dnsU8(3), dnsU8(0), dnsU8(0), hexBytes("abcdef0123")}},
 	{"a.test.", 65280, classIN, 300, []dnsPiece{[]byte{1, 2, 3, 4}}},
 	{"a.test.", 65281, classIN, 300, []dnsPiece{}},
 	{"a.test.", tNSEC3, classIN, 300, []dnsPiece{dnsU8(1), dnsU8(1), dnsU16(10), charStr("\xaa\xbb"), charStr("\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14"), []byte{0, 2, 0x62, 0x01}}},
 	{"a.test.", tSVCB, classIN, 300, []dnsPiece{dnsU16(1), dnsRawName("svc.test."), dnsU16(1), dnsU16(6), charStr("h2"), charStr("h3"), dnsU16(3), dnsU16(2), dnsU16(8443), dnsU16(4), dnsU16(8), ipv4("192.0.2.1"), ipv4("192.0.2.2")}},
 	{"a.test.", tHTTPS, classIN, 300, []dnsPiece{dnsU16(0), dnsRawName("www.test.")}},
-	{"a.test.", tHTTPS, classIN, 300, []dnsPiece{dnsU16(1), dnsRawName("."), dnsU16(0), dnsU16(2), dnsU16(1), dnsU16(1), dnsU16(3), charStr("h2"), dnsU16(2), dnsU16(0), dnsU16(5), dnsU16(3), []byte{1, 2, 3}, dnsU16(6), dnsU16(16), ipv6("2001:db8::1"), dnsU16(9), dnsU16(2), []byte("x,")}},
+	{"a.test.", tHTTPS, classIN, 300, []dnsPiece{dnsU16(1), dnsRawName("."), dnsU16(0), dnsU16(2), dnsU16(1), dnsU16(1), dnsU16(3), charStr("h2"), dnsU16(2), dnsU16(0), dnsU16(5), dnsU16(6), []byte{0, 4, 1, 2, 3, 4}, dnsU16(6), dnsU16(16), ipv6("2001:db8::1"), dnsU16(9), dnsU16(2), []byte("x,")}},
+
+	{"a.test.", tHHIT, classIN, 300, []dnsPiece{b64Bytes("IAEAEAAEAAEBAQIDBAUGBw==")}},
+	{"a.test.", tBRID, classIN, 300, []dnsPiece{[]byte{0, 1, 2, 0xfb, 0xff}}},
+	{"a.test.", tKEY, classIN, 300, []dnsPiece{dnsU16(256), dnsU8(3), dnsU8(13), b64Bytes("mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==")}},
+	{"a.test.", tSIG, classIN, 300, []dnsPiece{dnsU16(tA), dnsU8(13), dnsU8(2), dnsU32(300), dnsU32(1735689600), dnsU32(1704067200), dnsU16(12345), dnsName("a.test."), b64Bytes("oJB1W6WNGv+ldvQ3WDG0MQ==")}},
+	{"a.test.", tHIP, classIN, 300, []dnsPiece{dnsU8(2), dnsU8(2), dnsU16(3), []byte{0xab, 0xcd}, []byte{1, 0, 1}, dnsRawName("xn--bcher-kva.test."), dnsRawName("rvs.test.")}},
+	{"a.test.", tAPL, classIN, 300, []dnsPiece{dnsU16(1), dnsU8(24), dnsU8(3), []byte{192, 0, 2}, dnsU16(3), dnsU8(4), dnsU8(0x81), []byte{0xe0}}},
+	{"svc.test.", tSVCB, classIN, 300, []dnsPiece{dnsU16(1), dnsRawName("."), dnsU16(1), dnsU16(9), charStr("h2,x"), charStr(`a"b`), dnsU16(7), dnsU16(8), []byte("/q{?dns}"), dnsU16(10), dnsU16(7), charStr("a,b"), charStr("\\x")}},
+	{"long.test.", 65282, classIN, 300, []dnsPiece{[]byte(strings.Repeat("0123456789", 7))}},
+	{"bin.test.", tURI, classIN, 60, []dnsPiece{dnsU16(1), dnsU16(1), []byte("https://x/\"q\\\xff")}},
+	{"ecs.test.", tA, classIN, 300, []dnsPiece{ipv4("192.0.2.10")}},
+	{"filter.test.", tA, classIN, 300, []dnsPiece{ipv4("192.0.2.11")}},
+	{"ede.test.", tA, classIN, 300, []dnsPiece{ipv4("192.0.2.12")}},
+
+	// Records dnspython 2.9.1 rejects: wrong digest lengths, a bad ECH,
+	// a repeated SVCB key, trailing zero octets, an empty NSEC3 hash, a
+	// non-canonical LOC size, and names compressed where they may not be.
+	{"bad.test.", tTLSA, classIN, 300, []dnsPiece{dnsU8(3), dnsU8(1), dnsU8(1), hexBytes("abcdef0123")}},
+	{"bad.test.", tSMIMEA, classIN, 300, []dnsPiece{dnsU8(3), dnsU8(0), dnsU8(2), hexBytes("0d6fce3397de4b9a3f4e0a0e8c22f1e4e3a5d9a1a7d7a6e3d0e1f2a3b4c5d6e7")}},
+	{"bad.test.", tSSHFP, classIN, 300, []dnsPiece{dnsU8(1), dnsU8(2), hexBytes("dd465c09cfa51fb45020cc83316fff21b9ec74ac")}},
+	{"bad.test.", tHTTPS, classIN, 300, []dnsPiece{dnsU16(1), dnsRawName("."), dnsU16(5), dnsU16(3), []byte{1, 2, 3}}},
+	{"bad.test.", tSVCB, classIN, 300, []dnsPiece{dnsU16(1), dnsRawName("."), dnsU16(3), dnsU16(2), dnsU16(443), dnsU16(3), dnsU16(2), dnsU16(8443)}},
+	{"bad.test.", tZONEMD, classIN, 300, []dnsPiece{dnsU32(1), dnsU8(1), dnsU8(240), hexBytes("aabbccddeeff00112233")}},
+	{"bad.test.", tNSEC, classIN, 300, []dnsPiece{dnsRawName("a.test."), []byte{0, 2, 0x40, 0}}},
+	{"bad.test.", tNSEC3, classIN, 300, []dnsPiece{dnsU8(1), dnsU8(0), dnsU16(0), charStr(""), charStr(""), []byte{0, 1, 0x40}}},
+	{"bad.test.", tLOC, classIN, 300, []dnsPiece{dnsU8(0), dnsU8(0x02), dnsU8(0x16), dnsU8(0x13), dnsU32(0x80000000), dnsU32(0x80000000), dnsU32(10000000)}},
+	{"bad.test.", tAPL, classIN, 300, []dnsPiece{dnsU16(1), dnsU8(24), dnsU8(4), []byte{192, 0, 2, 0}}},
+	{"bad.test.", tKX, classIN, 300, []dnsPiece{dnsU16(10), dnsName("bad.test.")}},
+	{"bad.test.", tDNAME, classIN, 300, []dnsPiece{dnsName("bad.test.")}},
+	{"bad.test.", tRRSIG, classIN, 300, []dnsPiece{dnsU16(tA), dnsU8(13), dnsU8(2), dnsU32(300), dnsU32(1735689600), dnsU32(1704067200), dnsU16(12345), dnsName("bad.test."), b64Bytes("oJB1W6WNGv+ldvQ3WDG0MQ==")}},
 
 	{"_sip._tcp.test.", tSRV, classIN, 300, []dnsPiece{dnsU16(10), dnsU16(60), dnsU16(5060), dnsRawName("sip.test.")}},
 	{"_sip._tcp.test.", tSRV, classIN, 300, []dnsPiece{dnsU16(20), dnsU16(0), dnsU16(5061), dnsRawName(".")}},
-	{"_443._tcp.a.test.", tTLSA, classIN, 300, []dnsPiece{dnsU8(3), dnsU8(1), dnsU8(1), hexBytes("0d6fce3397de4b9a3f4e0a0e8c22f1e4e3a5d9a1a7d7a6e3d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d")}},
+	{"_443._tcp.a.test.", tTLSA, classIN, 300, []dnsPiece{dnsU8(3), dnsU8(1), dnsU8(1), hexBytes("0d6fce3397de4b9a3f4e0a0e8c22f1e4e3a5d9a1a7d7a6e3d0e1f2a3b4c5d6e7")}},
+	{"_443._tcp.a.test.", tTLSA, classIN, 300, []dnsPiece{dnsU8(2), dnsU8(0), dnsU8(2), hexBytes("a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf")}},
 	{"naptr.test.", tNAPTR, classIN, 300, []dnsPiece{dnsU16(100), dnsU16(10), charStr("U"), charStr("E2U+sip"), charStr(`!^.*$!sip:info@test!`), dnsRawName(".")}},
 	{"naptr.test.", tNAPTR, classIN, 300, []dnsPiece{dnsU16(102), dnsU16(10), charStr("S"), charStr("SIP+D2U"), charStr(""), dnsRawName("_sip._udp.test.")}},
 	{"south.test.", tLOC, classIN, 300, []dnsPiece{dnsU8(0), dnsU8(0x12), dnsU8(0x16), dnsU8(0x13), dnsU32(0x80000000 - (33*3600000 + 51*60000 + 35*1000 + 999)), dnsU32(0x80000000 - (151*3600000 + 12*60000 + 40*1000 + 1)), dnsU32(10000000 + 4200)}},
@@ -212,6 +252,17 @@ var dnsFixtureZone = []dnsRR{
 	{"1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.", tPTR, classIN, 300, []dnsPiece{dnsName("a.test.")}},
 
 	{"version.bind.", tTXT, classCH, 0, []dnsPiece{charStr("understudy-fixture")}},
+}
+
+// dnsFixtureOptions are the EDNS options (code, data) of the OPT record
+// answering a name.
+var dnsFixtureOptions = map[string][][2][]byte{
+	// ECS 192.0.2.0/23 with the address's 24th bit set.
+	"ecs.test.": {{{0, 8}, {0, 1, 23, 0, 192, 0, 3}}},
+	// FILTERING-CONTACT that is not UTF-8.
+	"filter.test.": {{{0, 23}, []byte("abuse@\xc3")}},
+	// EDE 18 (Prohibited) with null-terminated text, and a cookie.
+	"ede.test.": {{{0, 15}, []byte("\x00\x12blocked\x00")}, {{0, 10}, []byte("0123456789abcdef")}},
 }
 
 // startDNSFixture serves the fixture on a free loopback port until the
@@ -444,7 +495,13 @@ func (f *dnsFixture) answer(q []byte, tcp bool) []byte {
 		msg = binary.BigEndian.AppendUint16(msg, tOPT)
 		msg = binary.BigEndian.AppendUint16(msg, 1232)
 		msg = binary.BigEndian.AppendUint32(msg, ttl)
-		msg = binary.BigEndian.AppendUint16(msg, 0)
+		var opts []byte
+		for _, o := range dnsFixtureOptions[lower] {
+			opts = append(append(opts, o[0]...), byte(len(o[1])>>8), byte(len(o[1])))
+			opts = append(opts, o[1]...)
+		}
+		msg = binary.BigEndian.AppendUint16(msg, uint16(len(opts)))
+		msg = append(msg, opts...)
 	}
 	return msg
 }

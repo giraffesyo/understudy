@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 )
 
 // Rdata is one parsed record: its presentation form (to_text()) and,
@@ -18,7 +17,6 @@ import (
 type Rdata struct {
 	Class, Type uint16
 	text        string
-	textErr     error
 	attrs       map[string]any
 	rdclass     string // the dnspython class, for attribute errors
 	covers      uint16
@@ -26,8 +24,9 @@ type Rdata struct {
 	key         string
 }
 
-// Text is rdata.to_text().
-func (r *Rdata) Text() (string, error) { return r.text, r.textErr }
+// Text is rdata.to_text() (which cannot fail since 2.9: URI escapes
+// its target).
+func (r *Rdata) Text() string { return r.text }
 
 // Attr is getattr(rdata, name): a str (names, text), int64, float64,
 // Bytes, Enum or []any (a tuple).
@@ -81,7 +80,8 @@ var anyTypes = map[string]bool{
 	"NID": true, "NINFO": true, "NS": true, "NSEC": true, "NSEC3": true, "NSEC3PARAM": true,
 	"OPENPGPKEY": true, "PTR": true, "RESINFO": true, "RP": true, "RRSIG": true, "RT": true,
 	"SMIMEA": true, "SOA": true, "SPF": true, "SSHFP": true, "TLSA": true, "TXT": true,
-	"URI": true, "WALLET": true, "X25": true, "ZONEMD": true,
+	"URI": true, "WALLET": true, "X25": true, "ZONEMD": true, "HHIT": true, "BRID": true,
+	"KEY": true, "SIG": true, "TKEY": true,
 }
 
 // escapify is dns.rdata._escapify.
@@ -119,11 +119,15 @@ func base64ify(b []byte, chunk int) string {
 	return wordbreak(base64.StdEncoding.EncodeToString(b), chunk, " ")
 }
 
-// bitmapText is dns.rdtypes.util.Bitmap: read from the rest of p,
-// validated, and in its text form (each type with a leading space).
+// bitmapText is dns.rdtypes.util.Bitmap: read from the rest of p, then
+// validated (a window's last octet may not be zero since 2.9), and in its
+// text form (each type with a leading space).
 func bitmapText(p *parser, typeName string) (string, error) {
-	var b strings.Builder
-	last := -1
+	type win struct {
+		window int
+		bitmap []byte
+	}
+	var wins []win
 	for p.remaining() > 0 {
 		window, err := p.u8()
 		if err != nil {
@@ -133,13 +137,24 @@ func bitmapText(p *parser, typeName string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if window <= last {
+		wins = append(wins, win{window, bitmap})
+	}
+	last := -1
+	for _, w := range wins {
+		if w.window <= last {
 			return "", valueError("bad %s window order", typeName)
 		}
-		last = window
-		if len(bitmap) == 0 || len(bitmap) > 32 {
+		last = w.window
+		if len(w.bitmap) == 0 || len(w.bitmap) > 32 {
 			return "", valueError("bad %s octets", typeName)
 		}
+		if w.bitmap[len(w.bitmap)-1] == 0 {
+			return "", valueError("bad %s octets: trailing zero octet", typeName)
+		}
+	}
+	var b strings.Builder
+	for _, w := range wins {
+		window, bitmap := w.window, w.bitmap
 		var bits []string
 		for i, by := range bitmap {
 			for j := 0; j < 8; j++ {
@@ -170,12 +185,18 @@ func parseRdata(class, typ uint16, p *parser) (*Rdata, error) {
 	if py == "" {
 		rd.rdclass = "GenericRdata"
 		data := p.rest()
-		rd.text = `\# ` + strconv.Itoa(len(data)) + " " + hexify(data, 32)
+		// The hex is broken every 128 digits (RdataStyle.hex_chunk_size).
+		rd.text = `\# ` + strconv.Itoa(len(data)) + " " + hexify(data, 128)
 		rd.key = string(data)
 		return rd, nil
 	}
 	b := &rdataBuilder{rd: rd, p: p}
 	if err := b.parse(py); err != nil {
+		// dns.rdata.from_wire_parser's ExceptionWrapper: anything but a
+		// FormError becomes one, with the same text.
+		if e, ok := err.(*Error); ok && !e.Form {
+			return nil, formError(e.Msg)
+		}
 		return nil, err
 	}
 	if rd.key == "" {
@@ -184,7 +205,9 @@ func parseRdata(class, typ uint16, p *parser) (*Rdata, error) {
 	return rd, nil
 }
 
-func (b *rdataBuilder) name() (Name, error) { return b.p.name() }
+// name is parser.get_name(origin, decompress): since dnspython 2.9 only
+// the RFC 3597 well-known types (and SIG) may compress their names.
+func (b *rdataBuilder) name(decompress bool) (Name, error) { return b.p.name(decompress) }
 
 // nameKey adds a name, lowercased, to the rdata's identity.
 func (b *rdataBuilder) keyName(n Name) {
@@ -196,7 +219,7 @@ func (b *rdataBuilder) parse(py string) error {
 	switch py {
 	case "A":
 		if rd.Class == ClassCH {
-			domain, err := b.name()
+			domain, err := b.name(false)
 			if err != nil {
 				return err
 			}
@@ -225,7 +248,7 @@ func (b *rdataBuilder) parse(py string) error {
 		rd.text = ipv6Ntoa(data)
 		b.attr("address", rd.text)
 	case "NS", "CNAME", "PTR", "DNAME", "NSAP_PTR":
-		n, err := b.name()
+		n, err := b.name(py != "DNAME" && py != "NSAP_PTR")
 		if err != nil {
 			return err
 		}
@@ -238,7 +261,7 @@ func (b *rdataBuilder) parse(py string) error {
 		if err != nil {
 			return err
 		}
-		n, err := b.name()
+		n, err := b.name(py != "KX")
 		if err != nil {
 			return err
 		}
@@ -248,11 +271,11 @@ func (b *rdataBuilder) parse(py string) error {
 		rd.key = strconv.Itoa(pref) + " "
 		b.keyName(n)
 	case "SOA":
-		mname, err := b.name()
+		mname, err := b.name(true)
 		if err != nil {
 			return err
 		}
-		rname, err := b.name()
+		rname, err := b.name(true)
 		if err != nil {
 			return err
 		}
@@ -298,11 +321,11 @@ func (b *rdataBuilder) parse(py string) error {
 		b.attr("cpu", Bytes(cpu))
 		b.attr("os", Bytes(os))
 	case "RP":
-		mbox, err := b.name()
+		mbox, err := b.name(true)
 		if err != nil {
 			return err
 		}
-		txt, err := b.name()
+		txt, err := b.name(true)
 		if err != nil {
 			return err
 		}
@@ -319,7 +342,7 @@ func (b *rdataBuilder) parse(py string) error {
 				return err
 			}
 		}
-		n, err := b.name()
+		n, err := b.name(true)
 		if err != nil {
 			return err
 		}
@@ -345,7 +368,7 @@ func (b *rdataBuilder) parse(py string) error {
 				return err
 			}
 		}
-		n, err := b.name()
+		n, err := b.name(true)
 		if err != nil {
 			return err
 		}
@@ -374,7 +397,7 @@ func (b *rdataBuilder) parse(py string) error {
 		b.attr("flags", int64(flags))
 		b.attr("tag", Bytes(tag))
 		b.attr("value", Bytes(value))
-	case "DNSKEY", "CDNSKEY":
+	case "DNSKEY", "CDNSKEY", "KEY":
 		flags, err := p.u16()
 		if err != nil {
 			return err
@@ -433,6 +456,10 @@ func (b *rdataBuilder) parse(py string) error {
 			return err
 		}
 		fp := p.rest()
+		// The fingerprint's length must match SHA-1 or SHA-256 (2.9.1).
+		if want, ok := map[int]int{1: 20, 2: 32}[fpt]; ok && len(fp) != want {
+			return valueError("fingerprint length inconsistent with fingerprint type")
+		}
 		rd.text = fmt.Sprintf("%d %d %s", alg, fpt, hexify(fp, 128))
 		b.attr("algorithm", int64(alg))
 		b.attr("fp_type", int64(fpt))
@@ -446,6 +473,10 @@ func (b *rdataBuilder) parse(py string) error {
 			}
 		}
 		cert := p.rest()
+		// The data's length must match SHA-256 or SHA-512 (2.9.1).
+		if want, ok := map[int]int{1: 32, 2: 64}[v[2]]; ok && len(cert) != want {
+			return valueError("certificate association data length inconsistent with matching type")
+		}
 		rd.text = fmt.Sprintf("%d %d %d %s", v[0], v[1], v[2], hexify(cert, 128))
 		b.attr("usage", int64(v[0]))
 		b.attr("selector", int64(v[1]))
@@ -502,6 +533,11 @@ func (b *rdataBuilder) parse(py string) error {
 		if err != nil {
 			return err
 		}
+		// The constructor rejects an empty next hashed owner name (2.9.1),
+		// after the bitmap's own checks.
+		if len(next) == 0 {
+			return valueError("empty bytes not allowed")
+		}
 		s := "-"
 		if len(salt) > 0 {
 			s = hex.EncodeToString(salt)
@@ -509,7 +545,7 @@ func (b *rdataBuilder) parse(py string) error {
 		nt := strings.ToLower(strings.TrimRight(base32.HexEncoding.EncodeToString(next), "="))
 		rd.text = fmt.Sprintf("%d %d %d %s %s%s", alg, flags, iter, s, nt, bits)
 	case "NSEC":
-		next, err := b.name()
+		next, err := b.name(false)
 		if err != nil {
 			return err
 		}
@@ -553,13 +589,16 @@ func (b *rdataBuilder) parse(py string) error {
 		if alg == 0 {
 			return valueError("hash_algorithm 0 is reserved")
 		}
+		if len(digest) < 12 {
+			return valueError("digest must be at least 12 octets")
+		}
 		if size, ok := map[int]int{1: 48, 2: 64}[alg]; ok && size != len(digest) {
 			return valueError("digest length inconsistent with hash algorithm")
 		}
 		rd.text = fmt.Sprintf("%d %d %d %s", serial, scheme, alg, hexify(digest, 128))
 	case "LOC":
 		return b.parseLOC()
-	case "RRSIG":
+	case "RRSIG", "SIG":
 		var hdr [7]uint32
 		widths := []int{2, 1, 1, 4, 4, 4, 2}
 		for i, w := range widths {
@@ -573,7 +612,7 @@ func (b *rdataBuilder) parse(py string) error {
 			}
 			hdr[i] = v
 		}
-		signer, err := b.name()
+		signer, err := b.name(py == "SIG")
 		if err != nil {
 			return err
 		}
@@ -594,10 +633,7 @@ func (b *rdataBuilder) parse(py string) error {
 		if len(target) == 0 {
 			return formError("URI target may not be empty")
 		}
-		if !utf8.Valid(target) {
-			rd.textErr = &Error{Class: "UnicodeDecodeError", Msg: "'utf-8' codec can't decode bytes", Python: true}
-		}
-		rd.text = fmt.Sprintf(`%d %d "%s"`, prio, weight, target)
+		rd.text = fmt.Sprintf(`%d %d "%s"`, prio, weight, escapify(target))
 	case "EUI48", "EUI64":
 		n := 6
 		if py == "EUI64" {
@@ -608,7 +644,7 @@ func (b *rdataBuilder) parse(py string) error {
 			return err
 		}
 		rd.text = wordbreak(hex.EncodeToString(eui), 2, "-")
-	case "OPENPGPKEY":
+	case "OPENPGPKEY", "HHIT", "BRID":
 		rd.text = base64ify(p.rest(), 0)
 	case "DHCID":
 		rd.text = base64ify(p.rest(), 32)
@@ -713,6 +749,9 @@ func (b *rdataBuilder) parse(py string) error {
 			if err != nil {
 				return err
 			}
+			if len(addr) > 0 && addr[len(addr)-1] == 0 {
+				return formError("APL address has trailing zero octet")
+			}
 			var text string
 			switch family {
 			case 1:
@@ -732,7 +771,7 @@ func (b *rdataBuilder) parse(py string) error {
 				}
 				text = ipv6Ntoa(append(append([]byte{}, addr...), make([]byte, 16-len(addr))...))
 			default:
-				text = "b'" + hex.EncodeToString(addr) + "'"
+				text = hex.EncodeToString(addr)
 			}
 			items = append(items, fmt.Sprintf("%s%d:%s/%d", neg, family, text, prefix))
 		}
@@ -778,7 +817,7 @@ func (b *rdataBuilder) parse(py string) error {
 			}
 			gw = ipv6Ntoa(a)
 		case 3:
-			n, err := b.name()
+			n, err := b.name(false)
 			if err != nil {
 				return err
 			}
@@ -815,7 +854,7 @@ func (b *rdataBuilder) parse(py string) error {
 		text := fmt.Sprintf("%d %s %s", alg, hex.EncodeToString(hit), base64.StdEncoding.EncodeToString(key))
 		var servers []string
 		for p.remaining() > 0 {
-			n, err := b.name()
+			n, err := b.name(false)
 			if err != nil {
 				return err
 			}
@@ -850,7 +889,7 @@ func (b *rdataBuilder) parse(py string) error {
 		if err != nil {
 			return err
 		}
-		n, err := b.name()
+		n, err := b.name(false)
 		if err != nil {
 			return err
 		}
@@ -868,7 +907,7 @@ func (b *rdataBuilder) parse(py string) error {
 		if err != nil {
 			return err
 		}
-		n, err := b.name()
+		n, err := b.name(false)
 		if err != nil {
 			return err
 		}
@@ -884,17 +923,51 @@ func (b *rdataBuilder) parse(py string) error {
 		if err != nil {
 			return err
 		}
-		m822, err := b.name()
+		m822, err := b.name(true)
 		if err != nil {
 			return err
 		}
-		x400, err := b.name()
+		x400, err := b.name(true)
 		if err != nil {
 			return err
 		}
 		rd.text = fmt.Sprintf("%d %s %s", pref, m822, x400)
 	case "SVCB", "HTTPS":
 		return b.parseSVCB()
+	case "TKEY":
+		alg, err := b.name(false)
+		if err != nil {
+			return err
+		}
+		var v [4]uint32
+		for i, w := range []int{4, 4, 2, 2} {
+			raw, err := p.bytes(w)
+			if err != nil {
+				return err
+			}
+			for _, c := range raw {
+				v[i] = v[i]<<8 | uint32(c)
+			}
+		}
+		var data [2][]byte
+		for i := range data {
+			n, err := p.u16()
+			if err != nil {
+				return err
+			}
+			if data[i], err = p.bytes(n); err != nil {
+				return err
+			}
+		}
+		key := base64ify(data[0], 0)
+		if key == "" {
+			key = `""`
+		}
+		other := ""
+		if len(data[1]) > 0 {
+			other = " " + base64ify(data[1], 0)
+		}
+		rd.text = fmt.Sprintf("%s %d %d %d %d %s%s", alg, v[0], v[1], v[2], v[3], key, other)
 	default:
 		return fmt.Errorf("dnspy: no parser for %s", py)
 	}
@@ -1004,6 +1077,11 @@ func (b *rdataBuilder) parseLOC() error {
 		if mant > 9 {
 			return formError("bad " + what + " base")
 		}
+		// A zero base with a non-zero exponent is a second encoding of 0
+		// (2.9.1).
+		if mant == 0 && exp != 0 {
+			return formError("bad " + what + ": non-canonical zero")
+		}
 		sizes[i] = float64(mant) * math.Pow10(exp)
 	}
 	latT, longT := floatToTuple(lat), floatToTuple(long)
@@ -1054,28 +1132,30 @@ func pyFixed2(f float64) string { return strconv.FormatFloat(f, 'f', 2, 64) }
 
 // svcbKeyText is SVCB's key_to_text.
 func svcbKeyText(k int) string {
-	names := []string{"mandatory", "alpn", "no-default-alpn", "port", "ipv4hint", "ech", "ipv6hint", "dohpath", "ohttp"}
-	if k < len(names) {
-		return names[k]
+	names := map[int]string{0: "mandatory", 1: "alpn", 2: "no-default-alpn", 3: "port", 4: "ipv4hint",
+		5: "ech", 6: "ipv6hint", 7: "dohpath", 8: "ohttp", 10: "docpath"}
+	if s, ok := names[k]; ok {
+		return s
 	}
 	return "key" + strconv.Itoa(k)
 }
 
-func svcbEscapify(b []byte) string {
-	var s strings.Builder
+// svcbEscapify is svcbbase._escapify: only the list separator and the
+// backslash (the character-string escaping is applied on top).
+func svcbEscapify(b []byte) []byte {
+	var out []byte
 	for _, c := range b {
-		switch {
-		case c == '"' || c == ',' || c == '\\':
-			s.WriteByte('\\')
-			s.WriteByte(c)
-		case c >= 0x20 && c < 0x7f:
-			s.WriteByte(c)
-		default:
-			fmt.Fprintf(&s, "\\%03d", c)
+		if c == ',' || c == '\\' {
+			out = append(out, '\\')
 		}
+		out = append(out, c)
 	}
-	return s.String()
+	return out
 }
+
+// svcbNeverEmpty are the keys whose Param class has Emptiness.NEVER:
+// mandatory, alpn, port, ipv4hint, ech and ipv6hint.
+var svcbNeverEmpty = map[int]bool{0: true, 1: true, 3: true, 4: true, 5: true, 6: true}
 
 func (b *rdataBuilder) parseSVCB() error {
 	p, rd := b.p, b.rd
@@ -1083,7 +1163,7 @@ func (b *rdataBuilder) parseSVCB() error {
 	if err != nil {
 		return err
 	}
-	target, err := b.name()
+	target, err := b.name(false)
 	if err != nil {
 		return err
 	}
@@ -1098,13 +1178,16 @@ func (b *rdataBuilder) parseSVCB() error {
 		if err != nil {
 			return err
 		}
-		if key < prior {
-			return formError("keys not in order")
+		if key <= prior {
+			return formError("keys not in strictly increasing order")
 		}
 		prior = key
 		vlen, err := p.u16()
 		if err != nil {
 			return err
+		}
+		if vlen == 0 && svcbNeverEmpty[key] {
+			return formError(fmt.Sprintf("key %d cannot be empty", key))
 		}
 		val, err := p.bytes(vlen)
 		if err != nil {
@@ -1122,18 +1205,14 @@ func (b *rdataBuilder) parseSVCB() error {
 				if err != nil {
 					return err
 				}
-				if k < last {
-					return formError("manadatory keys not ascending")
+				if k <= last {
+					return formError("mandatory keys not in strictly increasing order")
 				}
 				last = k
 				keys = append(keys, k)
 			}
-			sort.Ints(keys)
 			var names []string
-			for i, k := range keys {
-				if i > 0 && keys[i-1] == k {
-					return valueError("duplicate key %d", k)
-				}
+			for _, k := range keys {
 				if k == 0 {
 					return valueError("listed the mandatory key as mandatory")
 				}
@@ -1141,19 +1220,30 @@ func (b *rdataBuilder) parseSVCB() error {
 			}
 			mandatory = keys
 			set(`"` + strings.Join(names, ",") + `"`)
-		case 1:
-			var ids []string
+		case 1, 10:
+			// alpn and docpath (_StringList; an empty docpath is None).
+			if len(val) == 0 {
+				break
+			}
+			var ids [][]byte
 			for vp.remaining() > 0 {
 				id, err := vp.counted()
 				if err != nil {
 					return err
 				}
+				ids = append(ids, id)
+			}
+			var joined []byte
+			for i, id := range ids {
 				if len(id) == 0 {
 					return valueError("empty bytes not allowed")
 				}
-				ids = append(ids, svcbEscapify(id))
+				if i > 0 {
+					joined = append(joined, ',')
+				}
+				joined = append(joined, svcbEscapify(id)...)
 			}
-			set(`"` + escapify([]byte(strings.Join(ids, ","))) + `"`)
+			set(`"` + escapify(joined) + `"`)
 		case 2, 8:
 			if len(val) != 0 {
 				return errFormError
@@ -1186,6 +1276,11 @@ func (b *rdataBuilder) parseSVCB() error {
 			}
 			set(`"` + strings.Join(addrs, ",") + `"`)
 		case 5:
+			// An ECHConfigList: a length prefix matching the rest, and at
+			// least 4 octets of content (2.9).
+			if len(val) < 6 || int(val[0])<<8|int(val[1]) != len(val)-2 {
+				return valueError("invalid ECHConfigList")
+			}
 			set(`"` + base64.StdEncoding.EncodeToString(val) + `"`)
 		default:
 			if len(val) > 0 {
